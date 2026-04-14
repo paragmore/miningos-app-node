@@ -1,6 +1,7 @@
 'use strict'
 
 const { parseJsonQueryParam } = require('../../utils')
+const { ACTIONS_MAX_QUERIES } = require('../../constants')
 
 async function queryActionsBatch (ctx, req) {
   const payload = {
@@ -21,6 +22,12 @@ async function queryActions (ctx, req, rep) {
 
   if (req.query.queries) {
     payload.queries = parseJsonQueryParam(req.query.queries, 'ERR_QUERIES_INVALID_JSON')
+    if (!Array.isArray(payload.queries)) {
+      throw new Error('ERR_QUERIES_INVALID')
+    }
+    if (payload.queries.length > ACTIONS_MAX_QUERIES) {
+      throw new Error('ERR_QUERIES_LIMIT_EXCEEDED')
+    }
   }
   if (req.query.groupBatch) {
     payload.groupBatch = req.query.groupBatch

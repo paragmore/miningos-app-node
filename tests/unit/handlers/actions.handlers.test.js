@@ -60,7 +60,7 @@ test('queryActions - with queries parameter', async (t) => {
     }
   )
 
-  const mockReq = createMockReq({ queries: '{"status": "pending"}' })
+  const mockReq = createMockReq({ queries: '[{"type": "voting", "query": {"status": "pending"}}]' })
 
   const result = await queryActions(mockCtx, mockReq)
 

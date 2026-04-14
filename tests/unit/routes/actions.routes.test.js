@@ -62,6 +62,23 @@ test('actions routes - schema validation', (t) => {
   t.pass()
 })
 
+test('actions routes - schema constraints for security', (t) => {
+  const routes = createRoutesForTest('../../../workers/lib/server/routes/actions.routes.js')
+
+  const actionsRoute = routes.find(r => r.url === '/auth/actions')
+  const queriesProp = actionsRoute.schema.querystring.properties.queries
+  t.is(queriesProp.maxLength, 1000, 'queries should have maxLength 1000')
+
+  const suffixProp = actionsRoute.schema.querystring.properties.suffix
+  t.is(suffixProp.maxLength, 200, 'GET suffix should have maxLength 200')
+
+  const batchRoute = routes.find(r => r.url === '/auth/actions/voting/batch')
+  const batchSuffix = batchRoute.schema.body.properties.suffix
+  t.is(batchSuffix.maxLength, 200, 'POST suffix should have maxLength 200')
+
+  t.pass()
+})
+
 test('actions routes - handler functions', (t) => {
   const routes = createRoutesForTest('../../../workers/lib/server/routes/actions.routes.js')
   testHandlerFunctions(t, routes, 'actions')
