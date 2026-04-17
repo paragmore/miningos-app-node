@@ -131,6 +131,8 @@ test('AuthLib - start adds OAuth handlers', async (t) => {
   t.ok(handlersAdded, 'should call addHandlers')
   t.ok(handlersAdded.google, 'should add google handler')
   t.ok(typeof handlersAdded.google === 'function', 'google handler should be function')
+  t.ok(handlersAdded.microsoft, 'should add microsoft handler')
+  t.ok(typeof handlersAdded.microsoft === 'function', 'microsoft handler should be function')
 
   t.pass()
 })
@@ -445,6 +447,133 @@ test('AuthLib - _resolveOAuthGoogle with null info', async (t) => {
   const result = await authLib._resolveOAuthGoogle({}, {})
 
   t.is(result, null, 'should return null when info is null')
+
+  t.pass()
+})
+
+test('AuthLib - _resolveOAuthMicrosoft with valid profile mail', async (t) => {
+  const originalFetch = global.fetch
+  global.fetch = async (url, opts) => {
+    t.is(url, 'https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,otherMails', 'should call graph /me endpoint')
+    t.is(opts.headers.authorization, 'Bearer ms-token-123', 'should pass bearer token')
+    return {
+      ok: true,
+      json: async () => ({ mail: 'microsoft.user@example.com' })
+    }
+  }
+
+  const authLib = new AuthLib({
+    httpc: {},
+    httpd: {
+      server: {
+        microsoftOAuth2: {
+          getAccessTokenFromAuthorizationCodeFlow: async () => ({ token: { access_token: 'ms-token-123' } })
+        }
+      }
+    },
+    userService: {},
+    auth: {}
+  })
+
+  try {
+    const result = await authLib._resolveOAuthMicrosoft({}, {})
+    t.alike(result, { email: 'microsoft.user@example.com' }, 'should return email from profile mail')
+  } finally {
+    global.fetch = originalFetch
+  }
+
+  t.pass()
+})
+
+test('AuthLib - _resolveOAuthMicrosoft prefers otherMails for guest mail', async (t) => {
+  const originalFetch = global.fetch
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      mail: 'guest_user_example.com#EXT#@tenant.onmicrosoft.com',
+      userPrincipalName: 'guest_user_example.com#EXT#@tenant.onmicrosoft.com',
+      otherMails: ['primary.user@example.com']
+    })
+  })
+
+  const authLib = new AuthLib({
+    httpc: {},
+    httpd: {
+      server: {
+        microsoftOAuth2: {
+          getAccessTokenFromAuthorizationCodeFlow: async () => ({ token: { access_token: 'ms-token-123' } })
+        }
+      }
+    },
+    userService: {},
+    auth: {}
+  })
+
+  try {
+    const result = await authLib._resolveOAuthMicrosoft({}, {})
+    t.alike(result, { email: 'primary.user@example.com' }, 'should prefer non-guest email from otherMails')
+  } finally {
+    global.fetch = originalFetch
+  }
+
+  t.pass()
+})
+
+test('AuthLib - _resolveOAuthMicrosoft throws when token exchange fails', async (t) => {
+  const authLib = new AuthLib({
+    httpc: {},
+    httpd: {
+      server: {
+        microsoftOAuth2: {
+          getAccessTokenFromAuthorizationCodeFlow: async () => {
+            throw new Error('token exchange failed')
+          }
+        }
+      }
+    },
+    userService: {},
+    auth: {}
+  })
+
+  try {
+    await authLib._resolveOAuthMicrosoft({}, {})
+    t.fail('should throw on token exchange failure')
+  } catch (err) {
+    t.is(err.message, 'token exchange failed', 'should bubble token exchange error message')
+  }
+
+  t.pass()
+})
+
+test('AuthLib - _resolveOAuthMicrosoft throws when graph request fails', async (t) => {
+  const originalFetch = global.fetch
+  global.fetch = async () => ({
+    ok: false,
+    status: 401,
+    text: async () => 'unauthorized'
+  })
+
+  const authLib = new AuthLib({
+    httpc: {},
+    httpd: {
+      server: {
+        microsoftOAuth2: {
+          getAccessTokenFromAuthorizationCodeFlow: async () => ({ token: { access_token: 'ms-token-123' } })
+        }
+      }
+    },
+    userService: {},
+    auth: {}
+  })
+
+  try {
+    await authLib._resolveOAuthMicrosoft({}, {})
+    t.fail('should throw on graph failure')
+  } catch (err) {
+    t.is(err.message, 'ERR_MICROSOFT_GRAPH_401: unauthorized', 'should include graph status and body')
+  } finally {
+    global.fetch = originalFetch
+  }
 
   t.pass()
 })

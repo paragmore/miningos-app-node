@@ -38,6 +38,11 @@ test('Api', { timeout: 90000 }, async (main) => {
   })
 
   const createConfig = () => {
+    fs.rmSync(`./${baseDir}/store`, { recursive: true, force: true })
+    fs.rmSync(`./${baseDir}/status`, { recursive: true, force: true })
+    fs.rmSync(`./${baseDir}/config`, { recursive: true, force: true })
+    fs.rmSync(`./${baseDir}/db`, { recursive: true, force: true })
+
     if (!fs.existsSync(`./${baseDir}/config/facs`)) {
       if (!fs.existsSync(`./${baseDir}/config`)) fs.mkdirSync(`./${baseDir}/config`)
       fs.mkdirSync(`./${baseDir}/config/facs`)
@@ -47,7 +52,10 @@ test('Api', { timeout: 90000 }, async (main) => {
     const commonConf = { dir_log: 'logs', debug: 0, orks: { 'cluster-1': { rpcPublicKey: '' } }, cacheTiming: {}, featureConfig: {} }
     const netConf = { r0: {} }
     const httpdConf = { h0: {} }
-    const httpdOauthConf = { h0: { method: 'google', credentials: { client: { id: 'i', secret: 's' } }, users: [{ email: readonlyUser }, { email: tokenExpiredUser }, { email: siteOperatorUser, write: true }] } }
+    const httpdOauthConf = {
+      h0: { method: 'google', credentials: { client: { id: 'i', secret: 's' } }, users: [{ email: readonlyUser }, { email: tokenExpiredUser }, { email: siteOperatorUser, write: true }] },
+      h1: { method: 'microsoft', credentials: { client: { id: 'i', secret: 's' }, tenant: 'test-tenant' }, users: [] }
+    }
     const authConf = require('../../config/facs/auth.config.json')
     superadminUser = authConf.a0.superAdmin
 
@@ -94,6 +102,14 @@ test('Api', { timeout: 90000 }, async (main) => {
       google: () => { return { email } }
     })
     const token = await worker.worker.auth_a0.authCallbackHandler('google', { ip })
+    return token
+  }
+
+  const getTestTokenMicrosoft = async (email) => {
+    worker.worker.authLib._auth.addHandlers({
+      microsoft: () => { return { email } }
+    })
+    const token = await worker.worker.auth_a0.authCallbackHandler('microsoft', { ip })
     return token
   }
 
@@ -928,6 +944,17 @@ test('Api', { timeout: 90000 }, async (main) => {
   await main.test('Api: get userinfo', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.USERINFO}`
     await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+  })
+
+  await main.test('Api: microsoft auth callback handler', async (n) => {
+    await n.test('should generate valid token from microsoft provider callback', async (t) => {
+      try {
+        const token = await getTestTokenMicrosoft(readonlyUser)
+        t.ok(typeof token === 'string' && token.length > 10, 'should return a non-empty auth token string')
+      } catch (e) {
+        t.fail(`Expected microsoft callback token generation to succeed: ${e.message || e}`)
+      }
+    })
   })
 
   await main.test('Api: get finance/ebitda', async (n) => {

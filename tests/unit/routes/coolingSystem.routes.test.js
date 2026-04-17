@@ -3,6 +3,7 @@
 const test = require('brittle')
 const { testModuleStructure, testHandlerFunctions } = require('../helpers/routeTestHelpers')
 const { createRoutesForTest } = require('../helpers/mockHelpers')
+const { ENDPOINTS } = require('../../../workers/lib/constants')
 
 test('coolingSystem routes - module structure', (t) => {
   testModuleStructure(t, '../../../workers/lib/server/routes/coolingSystem.routes.js', 'coolingSystem')
@@ -13,7 +14,7 @@ test('coolingSystem routes - route definitions', (t) => {
   const routes = createRoutesForTest('../../../workers/lib/server/routes/coolingSystem.routes.js')
 
   const routeUrls = routes.map(route => route.url)
-  t.ok(routeUrls.includes('/auth/cooling-system'), 'should have cooling-system route')
+  t.ok(routeUrls.includes(ENDPOINTS.COOLING_SYSTEM), 'should have cooling-system route')
 
   t.pass()
 })
@@ -21,7 +22,8 @@ test('coolingSystem routes - route definitions', (t) => {
 test('coolingSystem routes - HTTP methods', (t) => {
   const routes = createRoutesForTest('../../../workers/lib/server/routes/coolingSystem.routes.js')
 
-  const coolingSystemRoute = routes.find(r => r.url === '/auth/cooling-system')
+  const coolingSystemRoute = routes.find(r => r.url === ENDPOINTS.COOLING_SYSTEM)
+  t.ok(coolingSystemRoute, 'cooling-system route should exist')
   t.is(coolingSystemRoute.method, 'GET', 'cooling-system route should be GET')
 
   t.pass()
@@ -30,7 +32,8 @@ test('coolingSystem routes - HTTP methods', (t) => {
 test('coolingSystem routes - schema validation', (t) => {
   const routes = createRoutesForTest('../../../workers/lib/server/routes/coolingSystem.routes.js')
 
-  const coolingSystemRoute = routes.find(r => r.url === '/auth/cooling-system')
+  const coolingSystemRoute = routes.find(r => r.url === ENDPOINTS.COOLING_SYSTEM)
+  t.ok(coolingSystemRoute, 'cooling-system route should exist')
   t.ok(coolingSystemRoute.schema, 'cooling-system route should have schema')
   t.ok(coolingSystemRoute.schema.querystring, 'should have querystring schema')
   t.ok(coolingSystemRoute.schema.querystring.required.includes('type'), 'type should be required')

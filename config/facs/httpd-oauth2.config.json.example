@@ -9,7 +9,21 @@
     },
     "startRedirectPath": "/oauth/google",
     "callbackUri": "http://localhost:3000/oauth/google/callback",
-    "callbackUriUI": "http://localhost:3030",
+    "callbackUriUI": "http://localhost:3000",
+     "users": []
+  },
+  "h1": {
+    "method": "microsoft",
+    "credentials": {
+      "client": {
+        "id": "<CLIENT_ID>",
+        "secret": "<CLIENT_SECRET>"
+      },
+      "tenant":""
+    },
+    "startRedirectPath": "/oauth/microsoft",
+    "callbackUri": "http://localhost:3000/oauth/microsoft/callback",
+    "callbackUriUI": "http://localhost:3000",
     "users": []
   }
 }

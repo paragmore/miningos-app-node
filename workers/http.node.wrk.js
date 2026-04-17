@@ -56,6 +56,7 @@ class WrkServerHttp extends TetherWrkBase {
         trustProxy: true
       }, 0],
       ['fac', 'svc-facs-httpd-oauth2', 'h0', 'h0', {}, 0],
+      ['fac', 'svc-facs-httpd-oauth2', 'h1', 'h1', {}, 0],
       ['fac', 'svc-facs-auth', 'a0', 'a0', () => ({
         sqlite: this.dbSqlite_auth,
         lru: this.lru_15m
@@ -88,9 +89,11 @@ class WrkServerHttp extends TetherWrkBase {
 
         const httpd = this.httpd_h0
         const httpdAuth = this.httpdOauth2_h0
+        const httpdAuthMicrosoft = this.httpdOauth2_h1
 
         if (!this.noAuth) {
           httpd.addPlugin(httpdAuth.injection())
+          httpd.addPlugin(httpdAuthMicrosoft.injection())
         }
 
         httpd.addPlugin([WebsocketPlugin, {}])

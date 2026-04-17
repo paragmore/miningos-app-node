@@ -67,6 +67,7 @@ const COMMENT_ACTION = {
 const ENDPOINTS = {
   // OAuth endpoints
   OAUTH_GOOGLE_CALLBACK: '/oauth/google/callback',
+  OAUTH_MICROSOFT_CALLBACK: '/oauth/microsoft/callback',
 
   // Auth endpoints
   USERINFO: '/auth/userinfo',

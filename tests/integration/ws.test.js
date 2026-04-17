@@ -101,6 +101,11 @@ test('WebSocket endpoint', { timeout: 90000 }, async (main) => {
   })
 
   const createConfig = () => {
+    fs.rmSync(`./${baseDir}/store`, { recursive: true, force: true })
+    fs.rmSync(`./${baseDir}/status`, { recursive: true, force: true })
+    fs.rmSync(`./${baseDir}/config`, { recursive: true, force: true })
+    fs.rmSync(`./${baseDir}/db`, { recursive: true, force: true })
+
     if (!fs.existsSync(`./${baseDir}/config/facs`)) {
       if (!fs.existsSync(`./${baseDir}/config`)) fs.mkdirSync(`./${baseDir}/config`)
       fs.mkdirSync(`./${baseDir}/config/facs`)
@@ -110,7 +115,10 @@ test('WebSocket endpoint', { timeout: 90000 }, async (main) => {
     const commonConf = { dir_log: 'logs', debug: 0, orks: { 'cluster-1': { rpcPublicKey: '' } }, cacheTiming: {}, featureConfig: {} }
     const netConf = { r0: {} }
     const httpdConf = { h0: {} }
-    const httpdOauthConf = { h0: { method: 'google', credentials: { client: { id: 'i', secret: 's' } }, users: [{ email: readonlyUser }, { email: siteOperatorUser, write: true }] } }
+    const httpdOauthConf = {
+      h0: { method: 'google', credentials: { client: { id: 'i', secret: 's' } }, users: [{ email: readonlyUser }, { email: siteOperatorUser, write: true }] },
+      h1: { method: 'microsoft', credentials: { client: { id: 'i', secret: 's' }, tenant: 'test-tenant' }, users: [] }
+    }
     const authConf = require('../../config/facs/auth.config.json')
     superadminUser = authConf.a0.superAdmin
 
