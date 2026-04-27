@@ -196,7 +196,8 @@ const createMockConfig = () => ({
         return_temp_sensor: 'TS-7502',
         supply_flow_sensor: 'FIT-7501',
         return_flow_sensor: 'FIT-7502',
-        pressure_sensor: 'PIT-7501'
+        pressure_sensor: 'PIT-7501',
+        flow_switches: ['FS-7501', 'FS-7502']
       },
       buffer_tank: {
         tank: 'TQ-7502',

@@ -238,6 +238,142 @@ test('filterBySearch - returns all on empty match', (t) => {
   t.pass()
 })
 
+test('filterBySearch - matches group id case-insensitively', (t) => {
+  const racks = [
+    { id: 'group-1_rack-1', name: 'Rack 1', group: { id: 'group-1', name: 'Group 1' } },
+    { id: 'group-2_rack-1', name: 'Rack 3', group: { id: 'group-2', name: 'Group 2' } }
+  ]
+
+  const result = filterBySearch(racks, 'GROUP-1')
+  t.is(result.length, 1)
+  t.is(result[0].id, 'group-1_rack-1')
+  t.pass()
+})
+
+test('filterBySearch - matches group name case-insensitively', (t) => {
+  const racks = [
+    { id: 'group-1_rack-1', name: 'Rack 1', group: { id: 'group-1', name: 'Group 1' } },
+    { id: 'group-2_rack-1', name: 'Rack 3', group: { id: 'group-2', name: 'Group 2' } }
+  ]
+
+  const result = filterBySearch(racks, 'group 2')
+  t.is(result.length, 1)
+  t.is(result[0].group.name, 'Group 2')
+  t.pass()
+})
+
+test('filterBySearch - supports comma-separated terms as OR', (t) => {
+  const racks = [
+    { id: 'group-1_rack-1', name: 'Rack 1', group: { id: 'group-1', name: 'Group 1' } },
+    { id: 'group-1_rack-2', name: 'Rack 2', group: { id: 'group-1', name: 'Group 1' } },
+    { id: 'group-2_rack-1', name: 'Rack 3', group: { id: 'group-2', name: 'Group 2' } },
+    { id: 'group-3_rack-1', name: 'Rack 4', group: { id: 'group-3', name: 'Group 3' } }
+  ]
+
+  const result = filterBySearch(racks, 'Rack 1,Rack 3')
+  const ids = result.map(r => r.id).sort()
+  t.is(result.length, 2)
+  t.alike(ids, ['group-1_rack-1', 'group-2_rack-1'])
+  t.pass()
+})
+
+test('filterBySearch - trims whitespace around terms', (t) => {
+  const racks = [
+    { id: 'group-1_rack-1', name: 'Rack 1', group: { id: 'group-1', name: 'Group 1' } },
+    { id: 'group-2_rack-1', name: 'Rack 3', group: { id: 'group-2', name: 'Group 2' } }
+  ]
+
+  const result = filterBySearch(racks, '  rack 1  ,   group-2  ')
+  const ids = result.map(r => r.id).sort()
+  t.is(result.length, 2)
+  t.alike(ids, ['group-1_rack-1', 'group-2_rack-1'])
+  t.pass()
+})
+
+test('filterBySearch - ignores empty terms within comma-separated list', (t) => {
+  const racks = [
+    { id: 'group-1_rack-1', name: 'Rack 1', group: { id: 'group-1', name: 'Group 1' } },
+    { id: 'group-2_rack-1', name: 'Rack 3', group: { id: 'group-2', name: 'Group 2' } }
+  ]
+
+  const result = filterBySearch(racks, ',,rack 1,, ,')
+  t.is(result.length, 1)
+  t.is(result[0].id, 'group-1_rack-1')
+  t.pass()
+})
+
+test('filterBySearch - returns all racks when search is undefined', (t) => {
+  const racks = [
+    { id: 'group-1_rack-1', name: 'Rack 1', group: { id: 'group-1', name: 'Group 1' } },
+    { id: 'group-2_rack-1', name: 'Rack 3', group: { id: 'group-2', name: 'Group 2' } }
+  ]
+
+  const result = filterBySearch(racks, undefined)
+  t.is(result.length, 2)
+  t.alike(result, racks)
+  t.pass()
+})
+
+test('filterBySearch - returns all racks when search is null', (t) => {
+  const racks = [
+    { id: 'group-1_rack-1', name: 'Rack 1', group: { id: 'group-1', name: 'Group 1' } }
+  ]
+
+  const result = filterBySearch(racks, null)
+  t.is(result.length, 1)
+  t.alike(result, racks)
+  t.pass()
+})
+
+test('filterBySearch - returns all racks when search is empty string', (t) => {
+  const racks = [
+    { id: 'group-1_rack-1', name: 'Rack 1', group: { id: 'group-1', name: 'Group 1' } },
+    { id: 'group-2_rack-1', name: 'Rack 3', group: { id: 'group-2', name: 'Group 2' } }
+  ]
+
+  const result = filterBySearch(racks, '')
+  t.is(result.length, 2)
+  t.alike(result, racks)
+  t.pass()
+})
+
+test('filterBySearch - returns all racks when search contains only commas/whitespace', (t) => {
+  const racks = [
+    { id: 'group-1_rack-1', name: 'Rack 1', group: { id: 'group-1', name: 'Group 1' } }
+  ]
+
+  const result = filterBySearch(racks, '  ,, ,  ')
+  t.is(result.length, 1)
+  t.alike(result, racks)
+  t.pass()
+})
+
+test('filterBySearch - handles racks without group gracefully', (t) => {
+  const racks = [
+    { id: 'group-1_rack-1', name: 'Rack 1' },
+    { id: 'group-2_rack-1', name: 'Rack 3', group: { id: 'group-2', name: 'Group 2' } }
+  ]
+
+  const byName = filterBySearch(racks, 'Rack 1')
+  t.is(byName.length, 1)
+  t.is(byName[0].id, 'group-1_rack-1')
+
+  const byGroup = filterBySearch(racks, 'Group 2')
+  t.is(byGroup.length, 1)
+  t.is(byGroup[0].id, 'group-2_rack-1')
+  t.pass()
+})
+
+test('filterBySearch - does not match when field is missing and search is non-empty', (t) => {
+  const racks = [
+    { id: 'group-1_rack-1', name: 'Rack 1' }
+  ]
+
+  const result = filterBySearch(racks, 'Group 1')
+  t.is(result.length, 0)
+  t.pass()
+})
+
 // ==================== sortRacks Tests ====================
 
 test('sortRacks - sorts by efficiency descending', (t) => {
@@ -354,6 +490,62 @@ test('listExplorerRacks - applies search filter', async (t) => {
   result.data.forEach(rack => {
     t.ok(rack.name.toLowerCase().includes('rack 1') || rack.id.toLowerCase().includes('rack 1'))
   })
+  t.pass()
+})
+
+test('listExplorerRacks - supports comma-separated search terms', async (t) => {
+  const miningConfig = createMockMiningConfig({ total_groups: 4, racks_per_group: 2 })
+  const dcsThing = createMockDcsThing(miningConfig)
+  const ctx = createMockCtx([[{}]], dcsThing)
+  const req = { query: { search: 'group-1,group-3' } }
+
+  const result = await listExplorerRacks(ctx, req)
+
+  t.is(result.totalCount, 4, 'should return racks from both group-1 and group-3')
+  const groupIds = new Set(result.data.map(r => r.group.id))
+  t.ok(groupIds.has('group-1'))
+  t.ok(groupIds.has('group-3'))
+  t.ok(!groupIds.has('group-2'))
+  t.ok(!groupIds.has('group-4'))
+  t.pass()
+})
+
+test('listExplorerRacks - search by group name returns matching racks', async (t) => {
+  const miningConfig = createMockMiningConfig({ total_groups: 3, racks_per_group: 2 })
+  const dcsThing = createMockDcsThing(miningConfig)
+  const ctx = createMockCtx([[{}]], dcsThing)
+  const req = { query: { search: 'Group 2' } }
+
+  const result = await listExplorerRacks(ctx, req)
+
+  t.is(result.totalCount, 2)
+  result.data.forEach(rack => {
+    t.is(rack.group.id, 'group-2')
+  })
+  t.pass()
+})
+
+test('listExplorerRacks - returns all racks when search is missing', async (t) => {
+  const miningConfig = createMockMiningConfig({ total_groups: 2, racks_per_group: 2 })
+  const dcsThing = createMockDcsThing(miningConfig)
+  const ctx = createMockCtx([[{}]], dcsThing)
+  const req = { query: {} }
+
+  const result = await listExplorerRacks(ctx, req)
+
+  t.is(result.totalCount, 4, 'all racks returned when no search provided')
+  t.pass()
+})
+
+test('listExplorerRacks - returns all racks when search is empty string', async (t) => {
+  const miningConfig = createMockMiningConfig({ total_groups: 2, racks_per_group: 2 })
+  const dcsThing = createMockDcsThing(miningConfig)
+  const ctx = createMockCtx([[{}]], dcsThing)
+  const req = { query: { search: '' } }
+
+  const result = await listExplorerRacks(ctx, req)
+
+  t.is(result.totalCount, 4, 'empty search should not filter anything out')
   t.pass()
 })
 
