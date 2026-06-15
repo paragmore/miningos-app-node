@@ -901,20 +901,25 @@ test('Api', { timeout: 90000 }, async (main) => {
         t.ok(data.hashrate.value !== undefined, 'hashrate should have value')
         t.ok(data.hashrate.nominal !== undefined, 'hashrate should have nominal')
         t.ok(data.hashrate.utilization !== undefined, 'hashrate should have utilization')
+        t.is(data.hashrate.unit, 'MH/s', 'hashrate unit should be MH/s')
 
         // Verify power structure
         t.ok(data.power.value !== undefined, 'power should have value')
         t.ok(data.power.nominal !== undefined, 'power should have nominal')
         t.ok(data.power.utilization !== undefined, 'power should have utilization')
+        t.is(data.power.unit, 'W', 'power unit should be W')
+        t.ok(data.power.alert !== undefined, 'power should have alert')
+        t.ok(typeof data.power.error === 'boolean', 'power should have boolean error')
 
         // Verify efficiency structure
         t.ok(data.efficiency.value !== undefined, 'efficiency should have value')
+        t.is(data.efficiency.unit, 'W/TH/s', 'efficiency unit should be W/TH/s')
 
         // Verify miners structure
         t.ok(data.miners.online !== undefined, 'miners should have online')
         t.ok(data.miners.offline !== undefined, 'miners should have offline')
         t.ok(data.miners.error !== undefined, 'miners should have error')
-        t.ok(data.miners.sleep !== undefined, 'miners should have sleep')
+        t.is(data.miners.sleep, undefined, 'miners should not have a derived sleep field')
         t.ok(data.miners.total !== undefined, 'miners should have total')
         t.ok(data.miners.containerCapacity !== undefined, 'miners should have containerCapacity')
 
@@ -926,6 +931,8 @@ test('Api', { timeout: 90000 }, async (main) => {
 
         // Verify pools structure
         t.ok(data.pools.totalHashrate !== undefined, 'pools should have totalHashrate')
+        t.ok(data.pools.totalHashrate.value !== undefined, 'pools totalHashrate should have value')
+        t.is(data.pools.totalHashrate.unit, 'MH/s', 'pools totalHashrate unit should be MH/s')
         t.ok(data.pools.activeWorkers !== undefined, 'pools should have activeWorkers')
         t.ok(data.pools.totalWorkers !== undefined, 'pools should have totalWorkers')
 

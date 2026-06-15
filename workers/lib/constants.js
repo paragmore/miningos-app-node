@@ -510,6 +510,20 @@ const SITE_OVERVIEW_AGGR_FIELDS = {
   hashrate_mhs_5m_active_container_group_cnt: 1
 }
 
+const SITE_STATUS_LIVE_AGGR_FIELDS = {
+  hashrate_mhs_1m_sum_aggr: 1,
+  nominal_hashrate_mhs_sum_aggr: 1,
+  alerts_aggr: 1,
+  online_or_minor_error_miners_amount_aggr: 1,
+  not_mining_miners_amount_aggr: 1,
+  offline_or_sleeping_miners_amount_aggr: 1,
+  hashrate_mhs_1m_cnt_aggr: 1,
+  container_nominal_miner_capacity_sum_aggr: 1
+}
+
+// Ignore tail-log entries older than this (header UI uses start = now - 10min)
+const SITE_STATUS_LIVE_WINDOW_MS = 10 * 60 * 1000
+
 // DCS power meter field projections for site overview
 const DCS_POWER_METER_FIELDS = {
   'last.snap.stats.dcs_specific.equipment.power_meters': 1,
@@ -760,6 +774,8 @@ module.exports = {
   COOLING_SYSTEM_PROJECTIONS,
   ENERGY_SYSTEM_PROJECTIONS,
   SITE_OVERVIEW_AGGR_FIELDS,
+  SITE_STATUS_LIVE_AGGR_FIELDS,
+  SITE_STATUS_LIVE_WINDOW_MS,
   DCS_POWER_METER_FIELDS,
   DCS_EFFICIENCY_FIELDS,
   EXPLORER_RACK_AGGR_FIELDS,

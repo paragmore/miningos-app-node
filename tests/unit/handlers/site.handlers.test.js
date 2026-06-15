@@ -4,16 +4,18 @@ const test = require('brittle')
 const { getSiteLiveStatus, getSiteOverviewGroupsStats, getSiteEfficiency } = require('../../../workers/lib/server/handlers/site.handlers')
 const { withDataProxy } = require('../helpers/mockHelpers')
 
-function createMockCtx (tailLogMultiResponse, extDataResponse, globalConfigResponse) {
+function createMockCtx (tailLogMultiResponse, extDataResponse, globalConfigResponse, listThingsResponse = [], featureConfig = {}) {
   return withDataProxy({
     conf: {
-      orks: [{ rpcPublicKey: 'key1' }]
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig
     },
     net_r0: {
       jRequest: async (key, method) => {
         if (method === 'tailLogMulti') return tailLogMultiResponse
         if (method === 'getWrkExtData') return extDataResponse
         if (method === 'getGlobalConfig') return globalConfigResponse
+        if (method === 'listThings') return listThingsResponse
         return {}
       }
     }
@@ -25,13 +27,14 @@ test('getSiteLiveStatus - returns composed response with correct structure', asy
     // Key 0: miner stats
     [{ hashrate_mhs_1m_sum_aggr: 601432498437, nominal_hashrate_mhs_sum_aggr: 741423000000, online_or_minor_error_miners_amount_aggr: 1850, not_mining_miners_amount_aggr: 23, offline_or_sleeping_miners_amount_aggr: 45, hashrate_mhs_1m_cnt_aggr: 1930, alerts_aggr: { critical: 8, high: 12, medium: 39 } }],
     // Key 1: powermeter stats
-    [{ site_power_w: 16701560 }],
+    [{}],
     // Key 2: container stats
     [{ container_nominal_miner_capacity_sum_aggr: 2000 }]
   ]
 
+  // Real minerpool ext-data shape: entries with a stats ARRAY (one item per pool), hashrate in H/s
   const extDataResponse = [
-    { stats: { hashrate: 279670375560265, active_workers_count: 1823, worker_count: 1930 } }
+    { ts: '1769686500000', stats: [{ poolType: 'f2pool', hashrate: 279670375560265, active_workers_count: 1823, worker_count: 1930 }] }
   ]
 
   const globalConfigResponse = {
@@ -39,7 +42,12 @@ test('getSiteLiveStatus - returns composed response with correct structure', asy
     nominalPowerAvailability_MW: 22.5
   }
 
-  const ctx = createMockCtx(tailLogMultiResponse, extDataResponse, globalConfigResponse)
+  // Site power meter thing snapshot (consumption source, like the header UI)
+  const listThingsResponse = [
+    { id: 'pm-site', tags: ['t-powermeter'], last: { snap: { stats: { power_w: 16701560 } }, alerts: [] } }
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, extDataResponse, globalConfigResponse, listThingsResponse)
   const req = { query: {} }
 
   const result = await getSiteLiveStatus(ctx, req)
@@ -48,13 +56,19 @@ test('getSiteLiveStatus - returns composed response with correct structure', asy
   t.is(result.hashrate.value, 601432498437, 'hashrate value should match')
   t.is(result.hashrate.nominal, 741423000000, 'hashrate nominal should match')
   t.ok(result.hashrate.utilization > 0, 'hashrate utilization should be > 0')
+  t.is(result.hashrate.unit, 'MH/s', 'hashrate unit should be MH/s')
 
   t.ok(result.power, 'should have power')
-  t.is(result.power.value, 16701560, 'power value should match')
+  t.is(result.power.value, 16701560, 'power value should come from site meter snapshot')
   t.is(result.power.nominal, 22500000, 'power nominal should be MW * 1000000')
+  t.is(result.power.unit, 'W', 'power unit should be W')
+  t.is(result.power.alert, '', 'power alert should be empty without device alerts')
+  t.is(result.power.error, false, 'power error should be false without device alerts')
 
   t.ok(result.efficiency, 'should have efficiency')
-  t.ok(result.efficiency.value > 0, 'efficiency value should be > 0')
+  // 16701560 W / 601432.498437 TH/s, unrounded like the header UI
+  t.is(result.efficiency.value, 16701560 / (601432498437 / 1000000), 'efficiency should be consumption over THs, unrounded')
+  t.is(result.efficiency.unit, 'W/TH/s', 'efficiency unit should be W/TH/s')
 
   t.ok(result.miners, 'should have miners')
   t.is(result.miners.online, 1850, 'miners online should match')
@@ -70,7 +84,8 @@ test('getSiteLiveStatus - returns composed response with correct structure', asy
   t.is(result.alerts.total, 59, 'total alerts should be sum')
 
   t.ok(result.pools, 'should have pools')
-  t.is(result.pools.totalHashrate, 279670375560265, 'pool hashrate should match')
+  t.is(result.pools.totalHashrate.value, 279670375560265 / 1000000, 'pool hashrate should be converted H/s to MH/s')
+  t.is(result.pools.totalHashrate.unit, 'MH/s', 'pool hashrate unit should be MH/s')
   t.is(result.pools.activeWorkers, 1823, 'active workers should match')
   t.is(result.pools.totalWorkers, 1930, 'total workers should match')
 
@@ -89,18 +104,22 @@ test('getSiteLiveStatus - handles empty ork responses', async (t) => {
   t.is(result.efficiency.value, 0, 'efficiency should be 0')
   t.is(result.miners.total, 0, 'miners total should be 0')
   t.is(result.alerts.total, 0, 'alerts total should be 0')
-  t.is(result.pools.totalHashrate, 0, 'pool hashrate should be 0')
+  t.is(result.pools.totalHashrate.value, 0, 'pool hashrate should be 0')
   t.pass()
 })
 
 test('getSiteLiveStatus - computes utilization correctly', async (t) => {
   const tailLogMultiResponse = [
     [{ hashrate_mhs_1m_sum_aggr: 500, nominal_hashrate_mhs_sum_aggr: 1000, online_or_minor_error_miners_amount_aggr: 0, not_mining_miners_amount_aggr: 0, offline_or_sleeping_miners_amount_aggr: 0, hashrate_mhs_1m_cnt_aggr: 0, alerts_aggr: {} }],
-    [{ site_power_w: 750 }],
+    [{}],
     [{ container_nominal_miner_capacity_sum_aggr: 0 }]
   ]
 
-  const ctx = createMockCtx(tailLogMultiResponse, [], { nominalPowerAvailability_MW: 0.001 })
+  const listThingsResponse = [
+    { id: 'pm-site', tags: ['t-powermeter'], last: { snap: { stats: { power_w: 750 } } } }
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], { nominalPowerAvailability_MW: 0.001 }, listThingsResponse)
   const req = { query: {} }
 
   const result = await getSiteLiveStatus(ctx, req)
@@ -113,7 +132,7 @@ test('getSiteLiveStatus - computes utilization correctly', async (t) => {
 test('getSiteLiveStatus - handles zero nominal values gracefully', async (t) => {
   const tailLogMultiResponse = [
     [{ hashrate_mhs_1m_sum_aggr: 100 }],
-    [{ site_power_w: 200 }],
+    [{}],
     [{}]
   ]
 
@@ -127,16 +146,22 @@ test('getSiteLiveStatus - handles zero nominal values gracefully', async (t) => 
   t.pass()
 })
 
-test('getSiteLiveStatus - aggregates multiple pool accounts', async (t) => {
+test('getSiteLiveStatus - aggregates multiple pool accounts from stats arrays', async (t) => {
   const tailLogMultiResponse = [
     [{ hashrate_mhs_1m_sum_aggr: 0 }],
     [{}],
     [{}]
   ]
 
+  // One entry with two pools plus one extra entry, all stats arrays (H/s)
   const extDataResponse = [
-    { stats: { hashrate: 100, active_workers_count: 10, worker_count: 15 } },
-    { stats: { hashrate: 200, active_workers_count: 20, worker_count: 25 } }
+    {
+      stats: [
+        { poolType: 'f2pool', hashrate: 100000000, active_workers_count: 10, worker_count: 15 },
+        { poolType: 'ocean', hashrate: 150000000, active_workers_count: 15, worker_count: 20 }
+      ]
+    },
+    { stats: [{ poolType: 'luxor', hashrate: 50000000, active_workers_count: 5, worker_count: 5 }] }
   ]
 
   const ctx = createMockCtx(tailLogMultiResponse, extDataResponse, {})
@@ -144,13 +169,13 @@ test('getSiteLiveStatus - aggregates multiple pool accounts', async (t) => {
 
   const result = await getSiteLiveStatus(ctx, req)
 
-  t.is(result.pools.totalHashrate, 300, 'should sum pool hashrates')
+  t.is(result.pools.totalHashrate.value, 300, 'should sum pool hashrates and convert H/s to MH/s')
   t.is(result.pools.activeWorkers, 30, 'should sum active workers')
   t.is(result.pools.totalWorkers, 40, 'should sum total workers')
   t.pass()
 })
 
-test('getSiteLiveStatus - computes sleep miners from remainder', async (t) => {
+test('getSiteLiveStatus - does not expose a derived sleep field', async (t) => {
   const tailLogMultiResponse = [
     [{
       hashrate_mhs_1m_sum_aggr: 0,
@@ -170,9 +195,263 @@ test('getSiteLiveStatus - computes sleep miners from remainder', async (t) => {
 
   t.is(result.miners.online, 80, 'online should match')
   t.is(result.miners.error, 5, 'error should match')
-  t.is(result.miners.offline, 10, 'offline should match')
-  t.is(result.miners.sleep, 5, 'sleep should be total - online - error - offline')
+  t.is(result.miners.offline, 10, 'offline should match (includes sleeping)')
+  t.is(result.miners.sleep, undefined, 'sleep should not be present (UI has no sleep concept)')
   t.is(result.miners.total, 100, 'total should match')
+  t.pass()
+})
+
+test('getSiteLiveStatus - sums alerts across miner, powermeter and container entries', async (t) => {
+  const tailLogMultiResponse = [
+    [{ alerts_aggr: { critical: 1, high: 2, medium: 3 } }],
+    [{ alerts_aggr: { critical: 4, high: 5, medium: 6 } }],
+    [{ alerts_aggr: { critical: 7, high: 8, medium: 9 } }]
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {})
+  const req = { query: {} }
+
+  const result = await getSiteLiveStatus(ctx, req)
+
+  t.is(result.alerts.critical, 12, 'critical should sum across all three entry types')
+  t.is(result.alerts.high, 15, 'high should sum across all three entry types')
+  t.is(result.alerts.medium, 18, 'medium should sum across all three entry types')
+  t.is(result.alerts.total, 45, 'total should be the overall sum')
+  t.pass()
+})
+
+test('getSiteLiveStatus - queries tail-log with a 10 minute freshness window', async (t) => {
+  let tailLogParams = null
+  const ctx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }], featureConfig: {} },
+    net_r0: {
+      jRequest: async (key, method, params) => {
+        if (method === 'tailLogMulti') {
+          tailLogParams = params
+          return []
+        }
+        return []
+      }
+    }
+  })
+
+  const before = Date.now()
+  await getSiteLiveStatus(ctx, { query: {} })
+  const after = Date.now()
+
+  t.ok(tailLogParams, 'should call tailLogMulti')
+  t.ok(typeof tailLogParams.start === 'number', 'should pass start to tailLogMulti')
+  t.ok(tailLogParams.start >= before - 10 * 60 * 1000, 'start should be no earlier than now - 10min')
+  t.ok(tailLogParams.start <= after - 10 * 60 * 1000, 'start should be now - 10min')
+  t.pass()
+})
+
+test('getSiteLiveStatus - falls back to site container thing when no power meter is tagged', async (t) => {
+  const tailLogMultiResponse = [[{}], [{}], [{}]]
+
+  const listThingsResponse = [
+    { id: 'other', tags: ['t-sensor-temp'], last: { snap: { stats: { power_w: 999 } } } },
+    { id: 'container-site', tags: ['t-container'], last: { snap: { stats: { power_w: 1234 } } } }
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, listThingsResponse)
+  const req = { query: {} }
+
+  const result = await getSiteLiveStatus(ctx, req)
+
+  t.is(result.power.value, 1234, 'should fall back to the first t-container thing')
+  t.pass()
+})
+
+test('getSiteLiveStatus - exposes site meter alerts as power alert/error', async (t) => {
+  const tailLogMultiResponse = [[{}], [{}], [{}]]
+
+  const listThingsResponse = [
+    {
+      id: 'pm-site',
+      tags: ['t-powermeter'],
+      last: {
+        snap: { stats: { power_w: 500 } },
+        alerts: [
+          { severity: 'high', createdAt: 1769686500000, name: 'power-failure', description: 'Phase loss', message: 'L2 down' }
+        ]
+      }
+    }
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, listThingsResponse)
+  const req = { query: {} }
+
+  const result = await getSiteLiveStatus(ctx, req)
+
+  t.is(result.power.value, 500, 'power value should come from the site meter')
+  t.ok(result.power.alert.includes('(high)'), 'alert string should include severity')
+  t.ok(result.power.alert.includes('power-failure'), 'alert string should include alert name')
+  t.is(result.power.error, true, 'power error should be true when the meter has alerts')
+  t.pass()
+})
+
+test('getSiteLiveStatus - totalSystemConsumptionHeader feature returns zero consumption', async (t) => {
+  const tailLogMultiResponse = [
+    [{ hashrate_mhs_1m_sum_aggr: 1000000 }],
+    [{}],
+    [{}]
+  ]
+
+  // listThings would return a site meter, but the feature branch must ignore it
+  const listThingsResponse = [
+    { id: 'pm-site', tags: ['t-powermeter'], last: { snap: { stats: { power_w: 16701560 } } } }
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, listThingsResponse, { totalSystemConsumptionHeader: true })
+  const req = { query: {} }
+
+  const result = await getSiteLiveStatus(ctx, req)
+
+  t.is(result.power.value, 0, 'power should be 0 for the system consumption header feature')
+  t.is(result.power.alert, '', 'no alert for the system consumption branch')
+  t.is(result.efficiency.value, 0, 'efficiency should be 0 when consumption is 0')
+  t.pass()
+})
+
+test('getSiteLiveStatus - totalTransformerConsumptionHeader sums transformer power meters', async (t) => {
+  const tailLogMultiResponse = [
+    [{ hashrate_mhs_1m_sum_aggr: 2000000 }],
+    [{}],
+    [{}]
+  ]
+
+  const listThingsResponse = [
+    { id: 'pm-tr1', type: 'powermeter-x', info: { pos: 'tr1' }, last: { snap: { stats: { power_w: 1000 } } } },
+    { id: 'pm-tr2', type: 'powermeter-x', info: { pos: 'tr2' }, last: { snap: { stats: { power_w: 500 } } } },
+    // Not a transformer power meter (pos does not match ^tr\d+$) - must be skipped
+    { id: 'pm-other', type: 'powermeter-x', info: { pos: 'site' }, last: { snap: { stats: { power_w: 9999 } } } },
+    // Not a power meter type - must be skipped
+    { id: 'sensor-tr3', type: 'sensor-temp-x', info: { pos: 'tr3' }, last: { snap: { stats: { power_w: 7777 } } } }
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, listThingsResponse, { totalTransformerConsumptionHeader: true })
+  const req = { query: {} }
+
+  const result = await getSiteLiveStatus(ctx, req)
+
+  t.is(result.power.value, 1500, 'power should be the sum of transformer power meters only')
+  // 1500 W / 2 TH/s = 750 W/TH/s
+  t.is(result.efficiency.value, 750, 'efficiency should use the transformer consumption')
+  t.pass()
+})
+
+test('getSiteLiveStatus - central DCS reads consumption from the site main meter', async (t) => {
+  const tailLogMultiResponse = [
+    [{ hashrate_mhs_1m_sum_aggr: 2000000 }],
+    [{}],
+    [{}]
+  ]
+
+  // DCS thing with site_main meter reporting kW, like the energy layout view
+  const listThingsResponse = [
+    {
+      id: 'dcs-1',
+      type: 'dcs-central',
+      tags: ['t-dcs'],
+      last: {
+        snap: {
+          stats: {
+            dcs_specific: {
+              equipment: {
+                power_meters: [
+                  { equipment: 'PM-1', role: 'rack', power: { value: 4000, unit: 'kW' } },
+                  { equipment: 'PM-SITE', role: 'site_main', power: { value: 10.5, unit: 'kW' } }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, listThingsResponse, { centralDCSSetup: { enabled: true, tag: 't-dcs' } })
+  const req = { query: {} }
+
+  const result = await getSiteLiveStatus(ctx, req)
+
+  t.is(result.power.value, 10500, 'power should be the site_main meter reading converted kW to W')
+  t.is(result.power.alert, '', 'no device alert in the DCS branch')
+  // 10500 W / 2 TH/s = 5250 W/TH/s
+  t.is(result.efficiency.value, 5250, 'efficiency should use the DCS site meter consumption')
+  t.pass()
+})
+
+test('getSiteLiveStatus - central DCS takes precedence over other consumption branches', async (t) => {
+  const tailLogMultiResponse = [[{}], [{}], [{}]]
+
+  const listThingsResponse = [
+    {
+      id: 'dcs-1',
+      type: 'dcs-central',
+      tags: ['t-dcs'],
+      last: {
+        snap: {
+          stats: {
+            dcs_specific: {
+              equipment: {
+                power_meters: [
+                  { equipment: 'PM-SITE', role: 'site_main', power: { value: 2, unit: 'kW' } }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    // Transformer meter that the transformer branch would otherwise sum
+    { id: 'pm-tr1', type: 'powermeter-x', info: { pos: 'tr1' }, last: { snap: { stats: { power_w: 9999 } } } }
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, listThingsResponse, {
+    centralDCSSetup: { enabled: true, tag: 't-dcs' },
+    totalTransformerConsumptionHeader: true
+  })
+  const req = { query: {} }
+
+  const result = await getSiteLiveStatus(ctx, req)
+
+  t.is(result.power.value, 2000, 'DCS site meter should win over the transformer branch')
+  t.pass()
+})
+
+test('getSiteLiveStatus - central DCS without site_main meter yields zero consumption', async (t) => {
+  const tailLogMultiResponse = [[{}], [{}], [{}]]
+
+  const listThingsResponse = [
+    {
+      id: 'dcs-1',
+      type: 'dcs-central',
+      tags: ['t-dcs'],
+      last: {
+        snap: {
+          stats: {
+            dcs_specific: {
+              equipment: {
+                power_meters: [
+                  { equipment: 'PM-1', role: 'rack', power: { value: 4000, unit: 'kW' } }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, listThingsResponse, { centralDCSSetup: { enabled: true, tag: 't-dcs' } })
+  const req = { query: {} }
+
+  const result = await getSiteLiveStatus(ctx, req)
+
+  t.is(result.power.value, 0, 'power should be 0 when no site_main meter exists')
+  t.is(result.power.error, false, 'no error flag without a site meter alert source')
   t.pass()
 })
 
