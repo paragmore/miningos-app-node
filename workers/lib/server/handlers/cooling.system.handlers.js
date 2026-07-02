@@ -11,7 +11,8 @@ const {
   isCentralDCSEnabled,
   getDCSTag,
   extractDcsThing,
-  getSensorReading
+  getSensorReading,
+  sensorReading
 } = require('../../dcs.utils')
 const { aggregateRackStats } = require('./explorer.handlers')
 
@@ -384,7 +385,6 @@ function buildMinersCircuit2View (equipment, config) {
 
   // Tower level from config sensor
   const towerLevelSensor = towerConfig.tower_level_sensor
-  const towerLevel = getSensorReading(levels, towerLevelSensor)
 
   // Cooling towers with sensor tag references
   const towerFanId = towerConfig.tower_fan
@@ -457,14 +457,16 @@ function buildMinersCircuit2View (equipment, config) {
     description: towerConfig.description || viewConfig.description,
     water_type: towerConfig.water_type || viewConfig.water_type,
     summary: {
-      pre_hx_temp: preHxTemp != null ? { value: preHxTemp, unit: tempUnit } : null,
-      post_hx_temp: postHxTemp != null ? { value: postHxTemp, unit: tempUnit } : null,
+      pre_hx_temp: towerConfig.pre_hx_temp_sensor
+        ? { value: preHxTemp ?? null, unit: tempUnit || '°C', sensor: towerConfig.pre_hx_temp_sensor }
+        : (preHxTemp != null ? { value: preHxTemp, unit: tempUnit } : null),
+      post_hx_temp: towerConfig.post_hx_temp_sensor
+        ? { value: postHxTemp ?? null, unit: tempUnit || '°C', sensor: towerConfig.post_hx_temp_sensor }
+        : (postHxTemp != null ? { value: postHxTemp, unit: tempUnit } : null),
       delta_t: deltaT != null ? { value: deltaT, unit: tempUnit } : null,
       tower_capacity: towerConfig.defaults?.tower_capacity || null,
       tower_capacity_gcal: towerConfig.defaults?.tower_capacity_gcal || null,
-      tower_level: towerLevel
-        ? { ...towerLevel, sensor: towerLevelSensor }
-        : null
+      tower_level: sensorReading(levels, towerLevelSensor, '%')
     },
     pumps_config: towerConfig.defaults?.pumps_config || null,
     heat_exchangers: heatExchangerData,
@@ -731,9 +733,7 @@ function buildHvacCircuit1View (equipment, config) {
       delta_t: deltaT != null ? { value: deltaT, unit: tempUnit } : null,
       total_flow: totalFlow != null ? { value: totalFlow, unit: flowUnit } : null,
       rated_flow: chilledConfig.defaults?.rated_flow || null,
-      system_pressure: systemPressure
-        ? { ...systemPressure, sensor: supplyReturnConfig.pressure_sensor }
-        : null
+      system_pressure: sensorReading(pressures, supplyReturnConfig.pressure_sensor, 'bar')
     },
     chiller: chillerData,
     supply_return: supplyReturn,
@@ -795,7 +795,6 @@ function buildHvacCircuit2View (equipment, config) {
 
   const towerConfigRef = condenserConfig.tower || {}
   const towerLevelSensorId = towerConfigRef.level_sensor
-  const towerLevel = getSensorReading(levels, towerLevelSensorId)
   const towerFanId = towerConfigRef.fan
   const towerVibrationSwitch = buildVibrationSwitch(equipment.vibration_switches, towerConfigRef.vibration_switch)
 
@@ -827,9 +826,7 @@ function buildHvacCircuit2View (equipment, config) {
       delta_t: deltaT != null ? { value: deltaT, unit: tempUnit } : null,
       total_flow: totalFlow != null ? { value: totalFlow, unit: flowUnit } : null,
       rated_flow: condenserConfig.defaults?.pumps_config?.rated_flow || null,
-      tower_level: towerLevel
-        ? { ...towerLevel, sensor: towerLevelSensorId }
-        : null
+      tower_level: sensorReading(levels, towerLevelSensorId, '%')
     },
     pumps_config: condenserConfig.defaults?.pumps_config || null,
     supply_return: supplyReturn,

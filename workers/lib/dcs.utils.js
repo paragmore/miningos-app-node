@@ -41,6 +41,15 @@ function getSensorReading (sensors, sensorId, defaultConfig = null) {
   return defaultConfig
 }
 
+// Like getSensorReading, but always surfaces the configured sensor id even when
+// the tag isn't readable yet (value: null). Returns null only when no sensor is
+// configured — so the UI can render the sensor label without a value.
+function sensorReading (sensors, sensorId, unit = null) {
+  if (!sensorId) return null
+  const sensor = (sensors || []).find(s => s.equipment === sensorId)
+  return { value: sensor?.value ?? null, unit: sensor?.unit || unit, sensor: sensorId }
+}
+
 function findEquipment (equipmentList, equipmentId) {
   if (!equipmentId || !Array.isArray(equipmentList)) return null
   return equipmentList.find(e => e.equipment === equipmentId)
@@ -71,6 +80,7 @@ module.exports = {
   extractDcsThing,
   extractSiteMainMeterPowerW,
   getSensorReading,
+  sensorReading,
   findEquipment,
   filterEquipmentBy,
   fetchDcsThing
