@@ -79,6 +79,9 @@ function buildVibrationSwitch (vibrationSwitches, switchTag) {
 
 function buildGroupDifferentialPressure (lineConfig, pressures) {
   const groupSensors = lineConfig.group_pressure_sensors || {}
+  // Absolute group number (line1 -> 1-8, line2 -> 9-16), parsed from the
+  // line's "Groups N-M" label so the UI labels each row correctly.
+  const groupStart = parseInt((String(lineConfig.groups || '').match(/\d+/) || ['1'])[0], 10) || 1
 
   if (Array.isArray(groupSensors)) {
     return groupSensors.map((sensorId, i) => {
@@ -86,7 +89,7 @@ function buildGroupDifferentialPressure (lineConfig, pressures) {
       const mkSlot = (val) => ({
         tag: sensorId,
         type: pt?.type || null,
-        reading: val != null ? { value: val, unit: pt?.unit || 'bar' } : null
+        reading: { value: val ?? null, unit: pt?.unit || 'bar' }
       })
       const supply = mkSlot(pt?.supply_pressure)
       const ret = mkSlot(pt?.return_pressure)
@@ -99,10 +102,10 @@ function buildGroupDifferentialPressure (lineConfig, pressures) {
             : null)
       const unit = supply.reading?.unit || ret.reading?.unit || pt?.unit || 'bar'
       return {
-        group: i + 1,
+        group: groupStart + i,
         supply,
         return: ret,
-        delta_p: deltaPVal != null ? { value: deltaPVal, unit } : null
+        delta_p: { value: deltaPVal ?? null, unit }
       }
     })
   }
@@ -169,6 +172,17 @@ function buildMinersCircuit1View (equipment, config) {
     const controlValveId = lineConfig.control_valve
     const controlValve = valves?.find(v => v.equipment === controlValveId)
 
+    // Per-group PTs feed three UI tables: their supply/return readings belong in
+    // the SUPPLY/RETURN sensor lists (below temp/flow), and the ΔP table reads
+    // differential_pressure. The FE renders each `type` verbatim as the row label.
+    const groupDp = buildGroupDifferentialPressure(lineConfig, pressures)
+    const supplyGroupSensors = groupDp
+      .filter(g => g.supply?.tag)
+      .map(g => ({ tag: g.supply.tag, type: `Pressure · Group ${g.group}`, reading: g.supply.reading }))
+    const returnGroupSensors = groupDp
+      .filter(g => g.return?.tag)
+      .map(g => ({ tag: g.return.tag, type: `Pressure · Group ${g.group}`, reading: g.return.reading }))
+
     lines.push({
       name: lineConfig.name,
       groups: lineConfig.groups,
@@ -176,14 +190,14 @@ function buildMinersCircuit1View (equipment, config) {
         temperature: supplyTempSensor?.reading || getSensorReading(temperatures, lineConfig.supply_temp_sensor, coolingConfig.defaults?.supply_temp),
         pressure: getSensorReading(pressures, lineConfig.supply_pressure_sensor),
         flow: getSensorReading(flows, lineConfig.supply_flow_sensor),
-        sensors: [supplyTempSensor, supplyPressureSensor, supplyFlowSensor].filter(Boolean)
+        sensors: [supplyTempSensor, supplyPressureSensor, supplyFlowSensor, ...supplyGroupSensors].filter(Boolean)
       },
       return: {
         temperature: getSensorReading(temperatures, lineConfig.return_temp_sensor, coolingConfig.defaults?.return_temp),
         pressure: getSensorReading(pressures, lineConfig.return_pressure_sensor),
-        sensors: [returnTempSensor, returnPressureSensor].filter(Boolean)
+        sensors: [returnTempSensor, returnPressureSensor, ...returnGroupSensors].filter(Boolean)
       },
-      differential_pressure: buildGroupDifferentialPressure(lineConfig, pressures),
+      differential_pressure: groupDp,
       heat_exchanger: hx
         ? {
             id: hx.equipment,
