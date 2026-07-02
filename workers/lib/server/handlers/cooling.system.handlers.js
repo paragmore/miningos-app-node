@@ -63,8 +63,10 @@ function getSensorWithTag (sensors, sensorId, defaultConfig) {
   return {
     tag: sensorId,
     type: sensor?.type || null,
-    reading: sensor?.value != null
-      ? { value: sensor.value, unit: sensor.unit }
+    // Keep the unit and surface value: null when a configured sensor is
+    // present but its tag isn't readable; fall back only when absent entirely.
+    reading: sensor
+      ? { value: sensor.value ?? null, unit: sensor.unit ?? null }
       : (defaultConfig || null)
   }
 }
@@ -435,12 +437,14 @@ function buildMinersCircuit2View (equipment, config) {
       level: getSensorReading(levels, makeupConfig.level_sensor),
       level_sensor: makeupConfig.level_sensor
     },
-    pump: makeupPump
+    pump: makeupPumpId
       ? {
-          id: makeupPump.equipment,
-          name: makeupPump.equipment,
-          status: makeupPump.status,
-          is_running: makeupPump.fbk_run_out || false,
+          id: makeupPumpId,
+          name: makeupPumpId,
+          status: makeupPump?.status ?? null,
+          is_running: makeupPump?.fbk_run_out || false,
+          speed: makeupPump?.speed ?? null,
+          current: makeupPump?.current ?? null,
           rated_head: makeupGlobalConfig.defaults?.pump_head || null,
           rated_flow: makeupGlobalConfig.defaults?.pump_flow || null
         }
