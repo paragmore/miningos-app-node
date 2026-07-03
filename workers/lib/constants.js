@@ -461,8 +461,10 @@ const COOLING_SYSTEM_PROJECTIONS = {
       'last.snap.stats.dcs_specific.equipment.temperatures': 1,
       'last.snap.stats.dcs_specific.equipment.pressures': 1,
       'last.snap.stats.dcs_specific.equipment.flows': 1,
+      'last.snap.stats.dcs_specific.equipment.levels': 1,
       'last.snap.stats.dcs_specific.equipment.heat_exchangers': 1,
       'last.snap.stats.dcs_specific.equipment.valves': 1,
+      'last.snap.stats.dcs_specific.equipment.tanks': 1,
       'last.snap.config.cooling_system': 1
     },
     circuit2: {
