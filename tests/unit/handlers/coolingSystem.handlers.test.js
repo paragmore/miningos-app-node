@@ -403,7 +403,8 @@ test('buildMinersCircuit1View - builds view from enriched equipment', (t) => {
   t.ok(view.lines, 'should have lines')
   t.is(view.lines.length, 2, 'should have 2 lines')
   t.ok(view.pumps, 'should have pumps')
-  t.is(view.pumps.length, 3, 'should have 3 miner loop pumps')
+  t.is(view.pumps.length, 2, 'should have 2 miner loop pumps (makeup pump excluded)')
+  t.absent(view.pumps.find(p => p.id === 'B-7515'), 'makeup pump not in pumps array')
   // Check enriched data with units
   t.ok(view.pumps[0].speed.unit, 'pump speed should have unit')
   t.ok(view.pumps[0].current.unit, 'pump current should have unit')
@@ -685,6 +686,50 @@ test('buildMinersCircuit1View - control_valves null when config has none', (t) =
   const view = buildMinersCircuit1View(equipment, config)
 
   t.is(view.control_valves, null, 'should be null when no control_valves configured')
+  t.pass()
+})
+
+test('buildMinersCircuit1View - makeup system from global config', (t) => {
+  const equipment = createMockEquipment()
+  const config = createMockConfig()
+  config.cooling_system.makeup = {
+    tank: 'TQ-7501',
+    level_sensor: 'LIT-7503',
+    level_control_valve: 'LCV-7501',
+    on_off_valves: ['LCV-7501', 'LCV-7502'],
+    pump: 'B-7515',
+    defaults: {
+      tank_volume: { value: 0.5, unit: 'm³' },
+      pump_head: { value: 40, unit: 'm.c.a' },
+      pump_flow: { value: 2, unit: 'm³/h' }
+    }
+  }
+  const view = buildMinersCircuit1View(equipment, config)
+
+  t.ok(view.makeup, 'should have makeup system')
+  t.is(view.makeup.tank.id, 'TQ-7501', 'tank id from config')
+  t.is(view.makeup.tank.description, 'Make-Up Tank (0.5 m³)', 'tank description carries volume')
+  t.alike(view.makeup.tank.volume, { value: 0.5, unit: 'm³' }, 'tank volume from defaults')
+  t.is(view.makeup.tank.level.value, 76, 'tank level from level sensor')
+  t.is(view.makeup.pump.id, 'B-7515', 'makeup pump id from config')
+  t.is(view.makeup.pump.description, 'Make-Up Pump', 'pump description')
+  t.is(view.makeup.pump.status, 'Standby', 'pump status from equipment')
+  t.alike(view.makeup.pump.rated_head, { value: 40, unit: 'm.c.a' }, 'pump rated head from defaults')
+  t.alike(view.makeup.pump.rated_flow, { value: 2, unit: 'm³/h' }, 'pump rated flow from defaults')
+  t.is(view.makeup.level_control_valve.id, 'LCV-7501', 'level control valve id')
+  t.is(view.makeup.on_off_valves.length, 2, 'on/off valves from config')
+  t.absent(view.pumps.find(p => p.id === 'B-7515'), 'makeup pump excluded from pumps array')
+  t.pass()
+})
+
+test('buildMinersCircuit1View - makeup tank description without volume', (t) => {
+  const equipment = createMockEquipment()
+  const config = createMockConfig()
+  config.cooling_system.makeup = { tank: 'TQ-7501', level_sensor: 'LIT-7503' }
+  const view = buildMinersCircuit1View(equipment, config)
+
+  t.is(view.makeup.tank.description, 'Make-Up Tank', 'description without volume suffix')
+  t.is(view.makeup.pump, null, 'no pump when not configured')
   t.pass()
 })
 

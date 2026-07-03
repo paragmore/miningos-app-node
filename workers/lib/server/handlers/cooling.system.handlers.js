@@ -77,6 +77,61 @@ function buildVibrationSwitch (vibrationSwitches, switchTag) {
   return { tag: switchTag, state: sw?.state ?? null }
 }
 
+function buildMakeupSystem (equipment, config, circuitMakeupConfig) {
+  const { pumps, levels, valves, tanks } = equipment
+  const makeupConfig = { ...(config?.cooling_system?.makeup || {}), ...(circuitMakeupConfig || {}) }
+
+  const makeupTankId = makeupConfig.tank || tanks?.[0]?.equipment
+  const makeupLevelValve = valves?.find(v => v.equipment === makeupConfig.level_control_valve)
+  const makeupOnOffValves = makeupConfig.on_off_valves || []
+  const makeupPumpId = makeupConfig.pump || null
+  const makeupPump = makeupPumpId ? (pumps || []).find(p => p.equipment === makeupPumpId) : null
+  const tankVolume = makeupConfig.defaults?.tank_volume || null
+
+  return {
+    tank: {
+      id: makeupTankId,
+      name: makeupTankId,
+      description: tankVolume?.value != null
+        ? `Make-Up Tank (${tankVolume.value} ${tankVolume.unit})`
+        : 'Make-Up Tank',
+      volume: tankVolume,
+      level: getSensorReading(levels, makeupConfig.level_sensor),
+      level_sensor: makeupConfig.level_sensor
+    },
+    pump: makeupPumpId
+      ? {
+          id: makeupPumpId,
+          name: makeupPumpId,
+          description: 'Make-Up Pump',
+          status: makeupPump?.status ?? null,
+          is_running: makeupPump?.fbk_run_out || false,
+          speed: makeupPump?.speed ?? null,
+          current: makeupPump?.current ?? null,
+          rated_head: makeupConfig.defaults?.pump_head || null,
+          rated_flow: makeupConfig.defaults?.pump_flow || null
+        }
+      : null,
+    level_control_valve: makeupConfig.level_control_valve
+      ? {
+          id: makeupConfig.level_control_valve,
+          type: makeupLevelValve?.type || null,
+          description: makeupLevelValve?.description || null,
+          position: makeupLevelValve?.position
+        }
+      : null,
+    on_off_valves: makeupOnOffValves.map(vid => {
+      const valve = valves?.find(v => v.equipment === vid)
+      return {
+        id: vid,
+        type: valve?.type || null,
+        position: valve?.position,
+        is_open: valve?.is_open ?? valve?.position?.value > 50
+      }
+    })
+  }
+}
+
 function buildGroupDifferentialPressure (lineConfig, pressures) {
   const groupSensors = lineConfig.group_pressure_sensors || {}
   // Absolute group number (line1 -> 1-8, line2 -> 9-16), parsed from the
@@ -289,7 +344,11 @@ function buildMinersCircuit1View (equipment, config) {
     }
   }
 
-  const formattedPumps = filterPumpsByCircuit(pumps, 'MINER_LOOP').map(formatPump)
+  const makeupSystem = buildMakeupSystem(equipment, config, coolingConfig.makeup)
+
+  const formattedPumps = filterPumpsByCircuit(pumps, 'MINER_LOOP')
+    .filter(p => p.equipment !== makeupSystem.pump?.id)
+    .map(formatPump)
 
   return {
     title: coolingConfig.name || viewConfig.title,
@@ -311,6 +370,7 @@ function buildMinersCircuit1View (equipment, config) {
     pumps_config: coolingConfig.defaults?.pumps_config || null,
     lines,
     control_valves: Object.keys(controlValves).length > 0 ? controlValves : null,
+    makeup: makeupSystem,
     pumps: formattedPumps
   }
 }
@@ -323,10 +383,8 @@ function buildMinersCircuit2View (equipment, config) {
   const coolingTowers = (equipment.cooling_towers || []).filter(ct => ct.circuit === 'COOLING_TOWER')
   const vibrationSwitches = equipment.vibration_switches
   const valves = equipment.valves
-  const tanks = equipment.tanks
   const towerConfig = config?.cooling_system?.cooling_tower_loop || {}
   const minerLoopConfig = config?.cooling_system?.miner_loop || {}
-  const makeupGlobalConfig = config?.cooling_system?.makeup || {}
   const viewConfig = config?.cooling_system?.view_metadata?.miners?.circuit2 || {}
 
   // Build HX → groups mapping from miner_loop line configs
@@ -422,53 +480,11 @@ function buildMinersCircuit2View (equipment, config) {
   }))
 
   // Makeup water system
-  const makeupConfig = towerConfig.makeup || {}
-  const makeupTankId = makeupConfig.tank || tanks?.[0]?.equipment
-  const makeupLevelValve = valves?.find(v => v.equipment === makeupConfig.level_control_valve)
-  const makeupOnOffValves = makeupConfig.on_off_valves || []
-  const makeupPumpId = makeupGlobalConfig.pump || null
-  const makeupPump = makeupPumpId ? (pumps || []).find(p => p.equipment === makeupPumpId) : null
+  const makeupSystem = buildMakeupSystem(equipment, config, towerConfig.makeup)
 
-  const makeupSystem = {
-    tank: {
-      id: makeupTankId,
-      name: makeupTankId,
-      volume: makeupGlobalConfig.defaults?.tank_volume || null,
-      level: getSensorReading(levels, makeupConfig.level_sensor),
-      level_sensor: makeupConfig.level_sensor
-    },
-    pump: makeupPumpId
-      ? {
-          id: makeupPumpId,
-          name: makeupPumpId,
-          status: makeupPump?.status ?? null,
-          is_running: makeupPump?.fbk_run_out || false,
-          speed: makeupPump?.speed ?? null,
-          current: makeupPump?.current ?? null,
-          rated_head: makeupGlobalConfig.defaults?.pump_head || null,
-          rated_flow: makeupGlobalConfig.defaults?.pump_flow || null
-        }
-      : null,
-    level_control_valve: makeupConfig.level_control_valve
-      ? {
-          id: makeupConfig.level_control_valve,
-          type: makeupLevelValve?.type || null,
-          description: makeupLevelValve?.description || null,
-          position: makeupLevelValve?.position
-        }
-      : null,
-    on_off_valves: makeupOnOffValves.map(vid => {
-      const valve = valves?.find(v => v.equipment === vid)
-      return {
-        id: vid,
-        type: valve?.type || null,
-        position: valve?.position,
-        is_open: valve?.position?.value > 50
-      }
-    })
-  }
-
-  const towerPumps = filterPumpsByCircuit(pumps, 'COOLING_TOWER').map(formatPump)
+  const towerPumps = filterPumpsByCircuit(pumps, 'COOLING_TOWER')
+    .filter(p => p.equipment !== makeupSystem.pump?.id)
+    .map(formatPump)
 
   return {
     title: towerConfig.name || viewConfig.title,
@@ -557,6 +573,7 @@ function buildMinersLayoutView (equipment, config, stats, rackPowerByRack) {
       pumps_config: circuit1.pumps_config,
       lines: circuit1.lines,
       control_valves: circuit1.control_valves,
+      makeup: circuit1.makeup,
       pumps: circuit1.pumps
     },
     circuit2: {
