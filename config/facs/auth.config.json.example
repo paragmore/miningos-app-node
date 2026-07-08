@@ -1,9 +1,7 @@
 {
   "a0": {
     "superAdmin": "test@localhost",
-    "ttl": 900,
-    "jwtSecret": "REPLACE_WITH_LONG_RANDOM_HEX_SECRET",
-    "saltRounds": 10,
+    "ttl": 86400,
     "superAdminPerms": [
       "miner:rw",
       "container:rw",
@@ -22,6 +20,7 @@
       "explorer:rw",
       "inventory:rw",
       "reporting:rw",
+      "forecast:rw",
       "settings:rw",
       "ticket:rw",
       "power_spot_forecast:rw",
@@ -48,6 +47,7 @@
         "explorer:rw",
         "inventory:rw",
         "reporting:rw",
+        "forecast:rw",
         "settings:rw",
         "ticket:rw",
         "power_spot_forecast:rw",
@@ -55,10 +55,36 @@
         "pool_config_approve:rw",
         "work_order:rw"
       ],
+      "admin_external": [
+        "miner:r",
+        "container:r",
+        "minerpool:r",
+        "powermeter:r",
+        "temp:r",
+        "electricity:r",
+        "features:r",
+        "revenue:r",
+        "users:r",
+        "actions:r",
+        "production:r",
+        "alerts:r",
+        "cabinets:r",
+        "comments:r",
+        "explorer:r",
+        "inventory:r",
+        "reporting:r",
+        "forecast:r",
+        "settings:r",
+        "ticket:r",
+        "power_spot_forecast:r",
+        "pool_config:r",
+        "work_order:r"
+      ],      
       "reporting_tool_manager": [
         "revenue:rw",
         "production:rw",
         "reporting:rw",
+        "forecast:rw",
         "settings:r",
         "power_spot_forecast:r",
         "revenue:r"
@@ -77,6 +103,7 @@
         "explorer:rw",
         "inventory:rw",
         "reporting:rw",
+        "forecast:rw",
         "settings:rw",
         "ticket:rw",
         "work_order:rw"
@@ -91,13 +118,13 @@
         "electricity:rw",
         "explorer:rw",
         "inventory:rw",
-        "reporting:rw",
         "cabinets:rw",
         "comments:rw",
         "settings:rw",
         "ticket:rw",
         "alerts:rw",
-        "work_order:rw"
+        "work_order:rw",
+        "pool_config:rw"
       ],
       "field_operator": [
         "miner:r",
@@ -108,7 +135,6 @@
         "electricity:r",
         "explorer:r",
         "inventory:r",
-        "reporting:r",
         "cabinets:r",
         "comments:rw",
         "settings:r",
@@ -142,7 +168,6 @@
         "electricity:r",
         "explorer:r",
         "inventory:r",
-        "reporting:r",
         "cabinets:r",
         "comments:r",
         "settings:r",
@@ -158,6 +183,16 @@
     },
     "roleManagement": {
       "admin": [
+        "site_manager",
+        "site_operator",
+        "reporting_tool_manager",
+        "field_operator",
+        "repair_technician",
+        "read_only_user",
+        "pool_manager",
+        "admin_external"
+      ],
+      "admin_external": [
         "site_manager",
         "site_operator",
         "reporting_tool_manager",

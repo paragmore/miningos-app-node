@@ -376,6 +376,82 @@ test('AuthLib - tokenHasPerms auto-qualifies bare perm names', async (t) => {
   t.pass()
 })
 
+test('AuthLib - admin_external role can read the users list (users:r, write=false)', async (t) => {
+  const { a0: { roles } } = require('../../../config/facs/auth.config.json')
+
+  const mockAuth = {
+    getTokenPerms: function () {
+      return { superadmin: false, perms: roles.admin_external }
+    },
+    conf: {
+      superAdminPerms: []
+    }
+  }
+  const authLib = new AuthLib({
+    httpc: {},
+    httpd: {},
+    userService: {},
+    auth: mockAuth
+  })
+
+  const result = await authLib.tokenHasPerms('token', false, ['users:r'])
+  t.is(result, true, 'admin_external should be allowed to read users list via users:r with write=false')
+
+  t.pass()
+})
+
+test('AuthLib - admin_external role is denied write-gated users check (users:r, write=true)', async (t) => {
+  const { a0: { roles } } = require('../../../config/facs/auth.config.json')
+
+  const mockAuth = {
+    getTokenPerms: function () {
+      return { superadmin: false, perms: roles.admin_external }
+    },
+    conf: {
+      superAdminPerms: []
+    }
+  }
+  const authLib = new AuthLib({
+    httpc: {},
+    httpd: {},
+    userService: {},
+    auth: mockAuth
+  })
+
+  const result = await authLib.tokenHasPerms('token', true, ['users:r'])
+  t.is(result, false, 'admin_external lacks actions:w so write-gated checks must still be denied')
+
+  t.pass()
+})
+
+test('AuthLib - roles without the users capability cannot read the users list', async (t) => {
+  const { a0: { roles } } = require('../../../config/facs/auth.config.json')
+
+  const rolesWithoutUsers = Object.keys(roles).filter(name => name !== 'admin' && name !== 'admin_external')
+
+  for (const roleName of rolesWithoutUsers) {
+    const mockAuth = {
+      getTokenPerms: function () {
+        return { superadmin: false, perms: roles[roleName] }
+      },
+      conf: {
+        superAdminPerms: []
+      }
+    }
+    const authLib = new AuthLib({
+      httpc: {},
+      httpd: {},
+      userService: {},
+      auth: mockAuth
+    })
+
+    const result = await authLib.tokenHasPerms('token', false, ['users:r'])
+    t.is(result, false, `${roleName} should not be able to read the users list`)
+  }
+
+  t.pass()
+})
+
 test('AuthLib - cleanupTokens', async (t) => {
   let cleanupTokensCalled = false
   const mockAuth = {
