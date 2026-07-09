@@ -213,6 +213,17 @@
         "pool_manager",
         "admin_external",
         "admin"
+      ],
+      "site_manager": [
+        "site_manager",
+        "site_operator",
+        "reporting_tool_manager",
+        "field_operator",
+        "repair_technician",
+        "read_only_user",
+        "pool_manager",
+        "admin_external",
+        "admin"
       ]
     }
   }
