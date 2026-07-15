@@ -5,6 +5,8 @@ const { send200 } = require('./send200')
 const { cachedRoute } = require('./cachedRoute')
 const { capCheck } = require('./capCheck')
 
+const READ_METHODS = ['GET', 'HEAD']
+
 /**
  * Creates a standard authenticated route handler
  * @param {Function} handler - The handler function (ctx, req, rep)
@@ -18,7 +20,8 @@ function createAuthHandler (ctx, handler) {
 }
 
 /**
- * Creates an authenticated route
+ * Creates an authenticated route.
+ * GET/HEAD requests are checked at read level, all other methods at write level.
  * @param {Object} ctx - Context object
  * @param {Array} perms - Optional permissions
  * @returns {Function} onRequest handler
@@ -27,7 +30,8 @@ function createAuthOnRequest (ctx, perms = null) {
   return async (req, rep) => {
     await authCheck(ctx, req, rep)
     if (perms && !ctx.noAuth) {
-      await capCheck(ctx, req, rep, perms)
+      const write = !READ_METHODS.includes(req.method)
+      await capCheck(ctx, req, rep, perms, write)
     }
   }
 }
