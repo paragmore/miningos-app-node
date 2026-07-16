@@ -133,8 +133,7 @@
         "settings:rw",
         "ticket:rw",
         "alerts:rw",
-        "work_order:rw",
-        "pool_config:rw"
+        "work_order:rw"
       ],
       "field_operator": [
         "miner:r",
