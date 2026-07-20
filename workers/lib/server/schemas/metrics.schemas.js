@@ -7,6 +7,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
+        interval: { type: 'string', enum: ['1h', '1d', '1w'] },
         groupBy: { type: 'string', enum: ['miner', 'container', 'rack'] },
         racks: { type: 'string' },
         overwriteCache: { type: 'boolean' }
@@ -18,6 +19,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
+        interval: { type: 'string', enum: ['1h', '1d', '1w'] },
         groupBy: { type: 'string', enum: ['miner', 'container', 'rack'] },
         racks: { type: 'string' },
         overwriteCache: { type: 'boolean' }
@@ -29,6 +31,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
+        interval: { type: 'string', enum: ['1h', '1d', '1w'] },
         overwriteCache: { type: 'boolean' }
       },
       required: ['start', 'end']
