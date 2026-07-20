@@ -622,6 +622,9 @@ const DCS_EFFICIENCY_FIELDS = {
 }
 
 const LOG_FIELDS = {
+  HASHRATE_SUM: 'hashrate_mhs_5m_sum',
+  SITE_POWER: 'site_power_w',
+  EFFICIENCY: 'efficiency_w_ths_avg',
   HASHRATE_SUM_TYPE_GROUP: 'hashrate_mhs_5m_type_group_sum',
   HASHRATE_SUM_CONTAINER_GROUP: 'hashrate_mhs_5m_container_group_sum',
   HASHRATE_SUM_RACK_GROUP: 'hashrate_mhs_5m_pdu_rack_group_sum',

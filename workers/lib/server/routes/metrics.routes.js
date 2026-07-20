@@ -34,6 +34,7 @@ module.exports = (ctx) => {
           'metrics/hashrate',
           req.query.start,
           req.query.end,
+          req.query.interval,
           req.query.groupBy,
           req.query.racks
         ],
@@ -53,6 +54,7 @@ module.exports = (ctx) => {
           'metrics/consumption',
           req.query.start,
           req.query.end,
+          req.query.interval,
           req.query.groupBy,
           req.query.racks
         ],
@@ -71,7 +73,8 @@ module.exports = (ctx) => {
         (req) => [
           'metrics/efficiency',
           req.query.start,
-          req.query.end
+          req.query.end,
+          req.query.interval
         ],
         ENDPOINTS.METRICS_EFFICIENCY,
         getEfficiency

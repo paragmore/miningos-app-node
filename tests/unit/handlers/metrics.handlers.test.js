@@ -3,14 +3,11 @@
 const test = require('brittle')
 const {
   getHashrate,
-  processHashrateData,
   calculateHashrateSummary,
   getConsumption,
-  processConsumptionData,
   calculateConsumptionSummary,
   calculateGroupedConsumptionSummary,
   getEfficiency,
-  processEfficiencyData,
   calculateEfficiencySummary,
   getMinerStatus,
   processMinerStatusData,
@@ -47,7 +44,7 @@ test('getHashrate - happy path', async (t) => {
     },
     net_r0: {
       jRequest: async () => {
-        return [{ type: 'miner', data: [{ ts: dayTs, val: { hashrate_mhs_5m_sum_aggr: 100000 } }], error: null }]
+        return [{ ts: dayTs, hashrate_mhs_5m_sum_aggr: 100000 }]
       }
     }
   })
@@ -262,47 +259,52 @@ test('getHashrate - empty ork results', async (t) => {
   t.pass()
 })
 
-test('processHashrateData - processes array data from ORK', (t) => {
-  const results = [
-    [{ type: 'miner', data: [{ ts: 1700006400000, val: { hashrate_mhs_5m_sum_aggr: 100000 } }], error: null }]
-  ]
+test('getHashrate - returns one entry per bucket without summing samples', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [
+          { ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 100000 },
+          { ts: 1700092800000, hashrate_mhs_5m_sum_aggr: 120000 }
+        ]
+      }
+    }
+  })
 
-  const daily = processHashrateData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  const key = Object.keys(daily)[0]
-  t.is(daily[key], 100000, 'should extract hashrate from val')
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is(capturedPayload.shouldCalculateAvg, true, 'should ask the rack to average samples in the bucket')
+  t.is(result.log.length, 2, 'should emit one entry per bucket')
+  t.is(result.log[0].hashrateMhs, 100000, 'should read the bucket value as-is')
+  t.is(result.log[1].hashrateMhs, 120000, 'should read the bucket value as-is')
   t.pass()
 })
 
-test('processHashrateData - processes object-keyed data', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { hashrate_mhs_5m_sum_aggr: 100000 } } }]
-  ]
+test('getHashrate - interval selects the bucket range', async (t) => {
+  const captured = []
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        captured.push(payload)
+        return []
+      }
+    }
+  })
 
-  const daily = processHashrateData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  t.pass()
-})
+  const query = { start: 1700000000000, end: 1700100000000 }
+  await getHashrate(mockCtx, { query: { ...query, interval: '1h' } })
+  await getHashrate(mockCtx, { query: { ...query, interval: '1d' } })
+  await getHashrate(mockCtx, { query: { ...query, interval: '1w' } })
 
-test('processHashrateData - handles error results', (t) => {
-  const results = [{ error: 'timeout' }]
-  const daily = processHashrateData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.is(Object.keys(daily).length, 0, 'should be empty for error results')
-  t.pass()
-})
-
-test('processHashrateData - aggregates multiple orks', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { hashrate_mhs_5m_sum_aggr: 50000 } } }],
-    [{ data: { 1700006400000: { hashrate_mhs_5m_sum_aggr: 30000 } } }]
-  ]
-
-  const daily = processHashrateData(results)
-  const key = Object.keys(daily)[0]
-  t.is(daily[key], 80000, 'should sum hashrate from multiple orks')
+  t.is(captured[0].groupRange, null, '1h should not bucket')
+  t.is(captured[1].groupRange, '1D', '1d should bucket daily')
+  t.is(captured[2].groupRange, '1W', '1w should bucket weekly')
   t.pass()
 })
 
@@ -335,7 +337,7 @@ test('getConsumption - happy path', async (t) => {
     },
     net_r0: {
       jRequest: async () => {
-        return [{ type: 'powermeter', data: [{ ts: dayTs, val: { site_power_w: 5000000 } }], error: null }]
+        return [{ ts: dayTs, site_power_w: 5000000 }]
       }
     }
   })
@@ -350,7 +352,7 @@ test('getConsumption - happy path', async (t) => {
   t.ok(Array.isArray(result.log), 'log should be array')
   t.ok(result.log.length > 0, 'log should have entries')
   t.is(result.log[0].powerW, 5000000, 'should have power value')
-  t.is(result.log[0].consumptionMWh, (5000000 * 24) / 1000000, 'should convert to MWh')
+  t.is(result.log[0].consumptionMWh, (5000000 * 3) / 1000000, 'should convert to MWh over the bucket span')
   t.ok(result.summary.avgPowerW !== null, 'should have avg power')
   t.ok(result.summary.totalConsumptionMWh > 0, 'should have total consumption')
   t.pass()
@@ -400,47 +402,21 @@ test('getConsumption - empty ork results', async (t) => {
   t.pass()
 })
 
-test('processConsumptionData - processes array data from ORK', (t) => {
-  const results = [
-    [{ type: 'powermeter', data: [{ ts: 1700006400000, val: { site_power_w: 5000 } }], error: null }]
-  ]
+test('getConsumption - MWh scales with the bucket span', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: 1700006400000, site_power_w: 5000000 }]
+    }
+  })
 
-  const daily = processConsumptionData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  const key = Object.keys(daily)[0]
-  t.is(daily[key], 5000, 'should extract power from val')
-  t.pass()
-})
+  const query = { start: 1700000000000, end: 1700100000000 }
+  const hourly = await getConsumption(mockCtx, { query: { ...query, interval: '1h' } })
+  const daily = await getConsumption(mockCtx, { query: { ...query, interval: '1d' } })
 
-test('processConsumptionData - processes object-keyed data', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { site_power_w: 5000 } } }]
-  ]
-
-  const daily = processConsumptionData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  t.pass()
-})
-
-test('processConsumptionData - handles error results', (t) => {
-  const results = [{ error: 'timeout' }]
-  const daily = processConsumptionData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.is(Object.keys(daily).length, 0, 'should be empty for error results')
-  t.pass()
-})
-
-test('processConsumptionData - aggregates multiple orks', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { site_power_w: 3000 } } }],
-    [{ data: { 1700006400000: { site_power_w: 2000 } } }]
-  ]
-
-  const daily = processConsumptionData(results)
-  const key = Object.keys(daily)[0]
-  t.is(daily[key], 5000, 'should sum power from multiple orks')
+  t.is(hourly.log[0].consumptionMWh, 15, '3h bucket at 5 MW is 15 MWh')
+  t.is(daily.log[0].consumptionMWh, 120, '24h bucket at 5 MW is 120 MWh')
+  t.is(hourly.log[0].powerW, daily.log[0].powerW, 'average power is unaffected by bucket span')
   t.pass()
 })
 
@@ -631,7 +607,7 @@ test('getEfficiency - happy path', async (t) => {
     },
     net_r0: {
       jRequest: async () => {
-        return [{ type: 'miner', data: [{ ts: dayTs, val: { efficiency_w_ths_avg_aggr: 25.5 } }], error: null }]
+        return [{ ts: dayTs, efficiency_w_ths_avg_aggr: 25.5 }]
       }
     }
   })
@@ -690,52 +666,6 @@ test('getEfficiency - empty ork results', async (t) => {
   t.ok(result.log, 'should return log array')
   t.is(result.log.length, 0, 'log should be empty with no data')
   t.is(result.summary.avgEfficiencyWThs, null, 'avg should be null')
-  t.pass()
-})
-
-test('processEfficiencyData - processes array data from ORK', (t) => {
-  const results = [
-    [{ type: 'miner', data: [{ ts: 1700006400000, val: { efficiency_w_ths_avg_aggr: 25.5 } }], error: null }]
-  ]
-
-  const daily = processEfficiencyData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  const key = Object.keys(daily)[0]
-  t.is(daily[key].total, 25.5, 'should extract efficiency total')
-  t.is(daily[key].count, 1, 'should track count')
-  t.pass()
-})
-
-test('processEfficiencyData - processes object-keyed data', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { efficiency_w_ths_avg_aggr: 25.5 } } }]
-  ]
-
-  const daily = processEfficiencyData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  t.pass()
-})
-
-test('processEfficiencyData - handles error results', (t) => {
-  const results = [{ error: 'timeout' }]
-  const daily = processEfficiencyData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.is(Object.keys(daily).length, 0, 'should be empty for error results')
-  t.pass()
-})
-
-test('processEfficiencyData - averages across multiple orks', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { efficiency_w_ths_avg_aggr: 20 } } }],
-    [{ data: { 1700006400000: { efficiency_w_ths_avg_aggr: 30 } } }]
-  ]
-
-  const daily = processEfficiencyData(results)
-  const key = Object.keys(daily)[0]
-  t.is(daily[key].total, 50, 'should sum efficiency totals')
-  t.is(daily[key].count, 2, 'should track count from multiple orks')
   t.pass()
 })
 

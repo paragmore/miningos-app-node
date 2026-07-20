@@ -25,7 +25,6 @@ const {
   parseEntryTs,
   validateStartEnd,
   iterateRpcEntries,
-  forEachRangeAggrItem,
   sumObjectValues,
   extractContainerFromMinerKey,
   resolveInterval,
@@ -33,28 +32,32 @@ const {
 } = require('../../metrics.utils')
 const { parseRacks } = require('../lib/queryUtils')
 
+function firstOrkEntries (res) {
+  return Array.isArray(res?.[0]) ? res[0] : []
+}
+
 async function getHashrate (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
-  const startDate = new Date(start).toISOString()
-  const endDate = new Date(end).toISOString()
-
   if (req.query.groupBy) return getGoupedHashrate(ctx, req)
 
-  const results = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG_RANGE_AGGR, {
-    keys: [{
-      type: WORKER_TYPES.MINER,
-      startDate,
-      endDate,
-      fields: { [AGGR_FIELDS.HASHRATE_SUM]: 1 },
-      shouldReturnDailyData: 1
-    }]
+  const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
+
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    type: WORKER_TYPES.MINER,
+    tag: WORKER_TAGS.MINER,
+    key,
+    groupRange,
+    shouldCalculateAvg: true,
+    start,
+    end,
+    fields: { [LOG_FIELDS.HASHRATE_SUM]: 1 },
+    aggrFields: { [AGGR_FIELDS.HASHRATE_SUM]: 1 }
   })
 
-  const daily = processHashrateData(results)
-  const log = Object.keys(daily).sort().map(dayTs => ({
-    ts: Number(dayTs),
-    hashrateMhs: daily[dayTs]
+  const log = firstOrkEntries(res).map(val => ({
+    ts: val.ts,
+    hashrateMhs: Number(val[AGGR_FIELDS.HASHRATE_SUM]) || 0
   }))
 
   const summary = calculateHashrateSummary(log)
@@ -98,17 +101,6 @@ async function getGoupedHashrate (ctx, req) {
   const summary = calculateGroupedHashrateSummary(log, groupBy)
 
   return { log, summary }
-}
-
-function processHashrateData (results) {
-  const daily = {}
-  for (const entry of iterateRpcEntries(results)) {
-    forEachRangeAggrItem(entry, (ts, val) => {
-      const v = typeof val === 'object' ? (val[AGGR_FIELDS.HASHRATE_SUM] || 0) : (Number(val) || 0)
-      daily[ts] = (daily[ts] || 0) + v
-    })
-  }
-  return daily
 }
 
 function calculateHashrateSummary (log) {
@@ -166,49 +158,45 @@ function calculateGroupedHashrateSummary (log, groupBy) {
   }
 }
 
+// getIntervalConfig always samples stat-3h, so an unbucketed entry spans 3 hours
+function bucketHours (groupRange) {
+  if (groupRange === '1D') return 24
+  if (groupRange === '1W') return 168
+  return 3
+}
+
 async function getConsumption (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
   if (req.query.groupBy) return getGroupedConsumption(ctx, req)
 
-  const startDate = new Date(start).toISOString()
-  const endDate = new Date(end).toISOString()
+  const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
 
-  const results = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG_RANGE_AGGR, {
-    keys: [{
-      type: WORKER_TYPES.POWERMETER,
-      startDate,
-      endDate,
-      fields: { [AGGR_FIELDS.SITE_POWER]: 1 },
-      shouldReturnDailyData: 1
-    }]
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    type: WORKER_TYPES.POWERMETER,
+    tag: WORKER_TAGS.POWERMETER,
+    key,
+    groupRange,
+    shouldCalculateAvg: true,
+    start,
+    end,
+    fields: { [LOG_FIELDS.SITE_POWER]: 1 },
+    aggrFields: { [AGGR_FIELDS.SITE_POWER]: 1 }
   })
 
-  const daily = processConsumptionData(results)
-  const log = Object.keys(daily).sort().map(dayTs => {
-    const powerW = daily[dayTs]
+  const hours = bucketHours(groupRange)
+  const log = firstOrkEntries(res).map(val => {
+    const powerW = Number(val[AGGR_FIELDS.SITE_POWER]) || 0
     return {
-      ts: Number(dayTs),
+      ts: val.ts,
       powerW,
-      // powerW is avg watts for the day; W * 24h / 1,000,000 converts to daily MWh
-      consumptionMWh: (powerW * 24) / 1000000
+      consumptionMWh: (powerW * hours) / 1000000
     }
   })
 
   const summary = calculateConsumptionSummary(log)
 
   return { log, summary }
-}
-
-function processConsumptionData (results) {
-  const daily = {}
-  for (const entry of iterateRpcEntries(results)) {
-    forEachRangeAggrItem(entry, (ts, val) => {
-      const v = typeof val === 'object' ? (val[AGGR_FIELDS.SITE_POWER] || 0) : (Number(val) || 0)
-      daily[ts] = (daily[ts] || 0) + v
-    })
-  }
-  return daily
 }
 
 function calculateConsumptionSummary (log) {
@@ -317,42 +305,28 @@ function calculateGroupedConsumptionSummary (log, groupBy) {
 async function getEfficiency (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
-  const startDate = new Date(start).toISOString()
-  const endDate = new Date(end).toISOString()
+  const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
 
-  const results = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG_RANGE_AGGR, {
-    keys: [{
-      type: WORKER_TYPES.MINER,
-      startDate,
-      endDate,
-      fields: { [AGGR_FIELDS.EFFICIENCY]: 1 },
-      shouldReturnDailyData: 1
-    }]
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    type: WORKER_TYPES.MINER,
+    tag: WORKER_TAGS.MINER,
+    key,
+    groupRange,
+    shouldCalculateAvg: true,
+    start,
+    end,
+    fields: { [LOG_FIELDS.EFFICIENCY]: 1 },
+    aggrFields: { [AGGR_FIELDS.EFFICIENCY]: 1 }
   })
 
-  const daily = processEfficiencyData(results)
-  const log = Object.keys(daily).sort().map(dayTs => ({
-    ts: Number(dayTs),
-    efficiencyWThs: daily[dayTs].total / daily[dayTs].count
+  const log = firstOrkEntries(res).map(val => ({
+    ts: val.ts,
+    efficiencyWThs: Number(val[AGGR_FIELDS.EFFICIENCY]) || 0
   }))
 
   const summary = calculateEfficiencySummary(log)
 
   return { log, summary }
-}
-
-function processEfficiencyData (results) {
-  const daily = {}
-  for (const entry of iterateRpcEntries(results)) {
-    forEachRangeAggrItem(entry, (ts, val) => {
-      const eff = typeof val === 'object' ? (val[AGGR_FIELDS.EFFICIENCY] || 0) : (Number(val) || 0)
-      if (!eff) return
-      if (!daily[ts]) daily[ts] = { total: 0, count: 0 }
-      daily[ts].total += eff
-      daily[ts].count += 1
-    })
-  }
-  return daily
 }
 
 function calculateEfficiencySummary (log) {
@@ -953,15 +927,12 @@ function calculateCoolingSummary (log) {
 module.exports = {
   ...require('../../metrics.utils'),
   getHashrate,
-  processHashrateData,
   calculateHashrateSummary,
   calculateGroupedHashrateSummary,
   getConsumption,
-  processConsumptionData,
   calculateConsumptionSummary,
   calculateGroupedConsumptionSummary,
   getEfficiency,
-  processEfficiencyData,
   calculateEfficiencySummary,
   getMinerStatus,
   processMinerStatusData,
