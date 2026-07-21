@@ -32,6 +32,14 @@ function extractSiteMainMeterPowerW (dcsThing) {
   return (siteMeter?.power?.value || 0) * 1000
 }
 
+// Miner cooling system run-state for the site status header, published
+// ready-made by the DCS worker (Running/Off/Unavailable) — app-node only
+// passes it through, falling back to Unavailable when the DCS thing is
+// missing or the worker doesn't publish the status yet.
+function extractMinerCoolingStatus (dcsThing) {
+  return dcsThing?.last?.snap?.stats?.dcs_specific?.cooling_system?.status || 'Unavailable'
+}
+
 function getSensorReading (sensors, sensorId, defaultConfig = null) {
   if (!sensorId) return defaultConfig
   const sensor = sensors?.find(s => s.equipment === sensorId)
@@ -79,6 +87,7 @@ module.exports = {
   getDCSTag,
   extractDcsThing,
   extractSiteMainMeterPowerW,
+  extractMinerCoolingStatus,
   getSensorReading,
   sensorReading,
   findEquipment,

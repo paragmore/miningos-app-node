@@ -612,6 +612,13 @@ const DCS_POWER_METER_FIELDS = {
   'last.snap.config.energy_layout': 1
 }
 
+// DCS miner cooling system status for the site status header. The DCS worker
+// will publish the run-state tag under stats.dcs_specific.cooling_system once
+// controls provisions it — until then the header reports Unavailable.
+const DCS_MINER_COOLING_STATUS_FIELDS = {
+  'last.snap.stats.dcs_specific.cooling_system': 1
+}
+
 // DCS field projections for site efficiency
 const DCS_EFFICIENCY_FIELDS = {
   'last.snap.stats.dcs_specific.equipment.power_meters': 1,
@@ -868,6 +875,7 @@ module.exports = {
   SITE_STATUS_LIVE_AGGR_FIELDS,
   SITE_STATUS_LIVE_WINDOW_MS,
   DCS_POWER_METER_FIELDS,
+  DCS_MINER_COOLING_STATUS_FIELDS,
   DCS_EFFICIENCY_FIELDS,
   EXPLORER_RACK_AGGR_FIELDS,
   EXPLORER_RACK_DEFAULT_LIMIT,
