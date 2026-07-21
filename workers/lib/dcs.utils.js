@@ -32,6 +32,10 @@ function extractSiteMainMeterPowerW (dcsThing) {
   return (siteMeter?.power?.value || 0) * 1000
 }
 
+function extractMinerCoolingStatus (dcsThing) {
+  return dcsThing?.last?.snap?.stats?.dcs_specific?.cooling_system?.status || 'Unavailable'
+}
+
 function getSensorReading (sensors, sensorId, defaultConfig = null) {
   if (!sensorId) return defaultConfig
   const sensor = sensors?.find(s => s.equipment === sensorId)
@@ -79,6 +83,7 @@ module.exports = {
   getDCSTag,
   extractDcsThing,
   extractSiteMainMeterPowerW,
+  extractMinerCoolingStatus,
   getSensorReading,
   sensorReading,
   findEquipment,
