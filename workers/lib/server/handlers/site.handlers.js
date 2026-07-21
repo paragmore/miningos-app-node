@@ -17,13 +17,16 @@ const {
   SITE_STATUS_LIVE_AGGR_FIELDS,
   SITE_STATUS_LIVE_WINDOW_MS,
   DCS_POWER_METER_FIELDS,
+  DCS_MINER_COOLING_STATUS_FIELDS,
   DCS_EFFICIENCY_FIELDS
 } = require('../../constants')
 const {
   isCentralDCSEnabled,
   getDCSTag,
   extractDcsThing,
-  fetchDcsThing
+  fetchDcsThing,
+  extractSiteMainMeterPowerW,
+  extractMinerCoolingStatus
 } = require('../../dcs.utils')
 const {
   sumTransformerPowerW,
@@ -32,31 +35,10 @@ const {
   composeSiteStatus
 } = require('./site.utils')
 
-// DCS site main meter (role: site_main), same source as the energy layout view; reported in kW
-async function getDCSSiteConsumption (ctx) {
-  const dcsThing = await fetchDcsThing(ctx, {
-    id: 1,
-    code: 1,
-    type: 1,
-    tags: 1,
-    ...DCS_POWER_METER_FIELDS
-  })
-
-  const powerMeters = dcsThing?.last?.snap?.stats?.dcs_specific?.equipment?.power_meters || []
-  const siteMeter = powerMeters.find(pm => pm.role === 'site_main')
-  const siteMeterKw = siteMeter?.power?.value || 0
-
-  return { powerW: siteMeterKw * 1000, alert: '' }
-}
-
 // Resolves consumption by featureConfig, mirroring the header UI:
-// central DCS > totalSystemConsumptionHeader (0) > totalTransformerConsumptionHeader > site meter
+// totalSystemConsumptionHeader (0) > totalTransformerConsumptionHeader > site meter
 async function getSiteConsumption (ctx) {
   const featureConfig = ctx.conf.featureConfig || {}
-
-  if (isCentralDCSEnabled(ctx)) {
-    return getDCSSiteConsumption(ctx)
-  }
 
   if (featureConfig.totalSystemConsumptionHeader) {
     return { powerW: 0, alert: '' }
@@ -114,19 +96,34 @@ async function getSiteLiveStatus (ctx, req) {
     fields: { nominalHashrate: 1, nominalPowerAvailability_MW: 1 }
   }
 
-  const [tailLogResults, poolDataResults, globalConfigResults, consumption] =
+  const dcsEnabled = isCentralDCSEnabled(ctx)
+
+  const [tailLogResults, poolDataResults, globalConfigResults, dcsThing, consumption] =
     await Promise.all([
       ctx.dataProxy.requestDataMap('tailLogMulti', tailLogPayload),
       ctx.dataProxy.requestDataMap('getWrkExtData', poolPayload),
       ctx.dataProxy.requestDataMap('getGlobalConfig', globalConfigPayload),
-      getSiteConsumption(ctx)
+      dcsEnabled
+        ? fetchDcsThing(ctx, {
+          id: 1,
+          code: 1,
+          type: 1,
+          tags: 1,
+          ...DCS_POWER_METER_FIELDS,
+          ...DCS_MINER_COOLING_STATUS_FIELDS
+        })
+        : Promise.resolve(null),
+      dcsEnabled ? Promise.resolve(null) : getSiteConsumption(ctx)
     ])
 
   return composeSiteStatus(
     tailLogResults,
     poolDataResults,
     globalConfigResults,
-    consumption
+    dcsEnabled
+      ? { powerW: extractSiteMainMeterPowerW(dcsThing), alert: '' }
+      : consumption,
+    dcsEnabled ? extractMinerCoolingStatus(dcsThing) : null
   )
 }
 
