@@ -380,6 +380,80 @@ test('getSiteLiveStatus - central DCS reads consumption from the site main meter
   t.is(result.power.alert, '', 'no device alert in the DCS branch')
   // 10500 W / 2 TH/s = 5250 W/TH/s
   t.is(result.efficiency.value, 5250, 'efficiency should use the DCS site meter consumption')
+  t.ok(result.cooling, 'central DCS should expose the miner cooling system status')
+  t.is(result.cooling.status, 'Unavailable', 'cooling status should be Unavailable while the tag is not provisioned')
+  t.pass()
+})
+
+function createDcsThingWithCoolingStatus (status) {
+  return [
+    {
+      id: 'dcs-1',
+      type: 'dcs-central',
+      tags: ['t-dcs'],
+      last: {
+        snap: {
+          stats: {
+            dcs_specific: {
+              cooling_system: { status },
+              equipment: {
+                power_meters: [
+                  { equipment: 'PM-SITE', role: 'site_main', power: { value: 10, unit: 'kW' } }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
+
+test('getSiteLiveStatus - central DCS passes through the Running cooling status from the DCS worker', async (t) => {
+  const tailLogMultiResponse = [[{}], [{}], [{}]]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, createDcsThingWithCoolingStatus('Running'), { centralDCSSetup: { enabled: true, tag: 't-dcs' } })
+
+  const result = await getSiteLiveStatus(ctx, { query: {} })
+
+  t.is(result.cooling.status, 'Running', 'the worker-published Running status should pass through untouched')
+  t.pass()
+})
+
+test('getSiteLiveStatus - central DCS passes through the Off cooling status from the DCS worker', async (t) => {
+  const tailLogMultiResponse = [[{}], [{}], [{}]]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, createDcsThingWithCoolingStatus('Off'), { centralDCSSetup: { enabled: true, tag: 't-dcs' } })
+
+  const result = await getSiteLiveStatus(ctx, { query: {} })
+
+  t.is(result.cooling.status, 'Off', 'the worker-published Off status should pass through untouched')
+  t.pass()
+})
+
+test('getSiteLiveStatus - central DCS cooling status is Unavailable when the DCS thing is missing', async (t) => {
+  const tailLogMultiResponse = [[{}], [{}], [{}]]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, [], { centralDCSSetup: { enabled: true, tag: 't-dcs' } })
+
+  const result = await getSiteLiveStatus(ctx, { query: {} })
+
+  t.is(result.cooling.status, 'Unavailable', 'no DCS thing should map to Unavailable')
+  t.pass()
+})
+
+test('getSiteLiveStatus - no cooling status outside central DCS setups', async (t) => {
+  const tailLogMultiResponse = [[{}], [{}], [{}]]
+
+  const listThingsResponse = [
+    { id: 'pm-site', tags: ['t-powermeter'], last: { snap: { stats: { power_w: 500 } } } }
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, listThingsResponse)
+
+  const result = await getSiteLiveStatus(ctx, { query: {} })
+
+  t.is(result.cooling, undefined, 'cooling should not be present without central DCS')
   t.pass()
 })
 
