@@ -74,7 +74,9 @@ module.exports = (ctx) => {
           'metrics/efficiency',
           req.query.start,
           req.query.end,
-          req.query.interval
+          req.query.interval,
+          req.query.groupBy,
+          req.query.racks
         ],
         ENDPOINTS.METRICS_EFFICIENCY,
         getEfficiency

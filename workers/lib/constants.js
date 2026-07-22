@@ -634,7 +634,10 @@ const LOG_FIELDS = {
   HASHRATE_SUM_RACK_GROUP: 'hashrate_mhs_5m_pdu_rack_group_sum',
   POWER_W_TYPE_GROUP_SUM: 'power_w_type_group_sum',
   POWER_W_CONTAINER_GROUP_SUM: 'power_w_container_group_sum',
-  POWER_W_RACK_GROUP_SUM: 'power_w_pdu_rack_group_sum'
+  POWER_W_RACK_GROUP_SUM: 'power_w_pdu_rack_group_sum',
+  EFFICIENCY_TYPE_GROUP_AVG: 'efficiency_w_ths_type_group_avg',
+  EFFICIENCY_CONTAINER_GROUP_AVG: 'efficiency_w_ths_container_group_avg',
+  EFFICIENCY_RACK_GROUP_AVG: 'efficiency_w_ths_pdu_rack_group_avg'
 }
 
 const AGGR_FIELDS = {
@@ -647,6 +650,9 @@ const AGGR_FIELDS = {
   ACTIVE_ENERGY_IN: 'active_energy_in_aggr',
   UTE_ENERGY: 'ute_energy_aggr',
   EFFICIENCY: 'efficiency_w_ths_avg_aggr',
+  EFFICIENCY_TYPE_GROUP_AVG: 'efficiency_w_ths_type_group_avg_aggr',
+  EFFICIENCY_CONTAINER_GROUP_AVG: 'efficiency_w_ths_container_group_avg_aggr',
+  EFFICIENCY_RACK_GROUP_AVG: 'efficiency_w_ths_pdu_rack_group_avg_aggr',
   POWER_MODE_GROUP: 'power_mode_group_aggr',
   STATUS_GROUP: 'status_group_aggr',
   TEMP_MAX: 'temperature_c_group_max_aggr',

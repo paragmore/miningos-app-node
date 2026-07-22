@@ -288,6 +288,8 @@ function calculateGroupedConsumptionSummary (log, groupBy) {
 async function getEfficiency (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
+  if (req.query.groupBy) return getGroupedEfficiency(ctx, req)
+
   const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
 
   const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
@@ -323,6 +325,84 @@ function calculateEfficiencySummary (log) {
 
   return {
     avgEfficiencyWThs: safeDiv(total, log.length)
+  }
+}
+
+const EFFICIENCY_GROUP_FIELDS = {
+  miner: { field: LOG_FIELDS.EFFICIENCY_TYPE_GROUP_AVG, aggrField: AGGR_FIELDS.EFFICIENCY_TYPE_GROUP_AVG },
+  container: { field: LOG_FIELDS.EFFICIENCY_CONTAINER_GROUP_AVG, aggrField: AGGR_FIELDS.EFFICIENCY_CONTAINER_GROUP_AVG },
+  rack: { field: LOG_FIELDS.EFFICIENCY_RACK_GROUP_AVG, aggrField: AGGR_FIELDS.EFFICIENCY_RACK_GROUP_AVG }
+}
+
+async function getGroupedEfficiency (ctx, req) {
+  const { groupBy, start, end } = req.query
+
+  const { field, aggrField } = EFFICIENCY_GROUP_FIELDS[groupBy]
+
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    type: WORKER_TYPES.MINER,
+    tag: WORKER_TAGS.MINER,
+    key: LOG_KEYS.STAT_1D,
+    start,
+    end,
+    fields: { [field]: 1 },
+    aggrFields: { [aggrField]: 1 }
+  })
+
+  const racks = groupBy === 'rack' ? parseRacks(req) : null
+  const rackFilter = racks && racks.length ? new Set(racks) : null
+
+  const log = firstOrkEntries(res).map((val) => {
+    let efficiencyWThs = val[aggrField]
+    if (rackFilter && efficiencyWThs && typeof efficiencyWThs === 'object') {
+      efficiencyWThs = Object.fromEntries(Object.entries(efficiencyWThs).filter(([rack]) => rackFilter.has(rack)))
+    }
+    return { ts: val.ts, efficiencyWThs }
+  })
+
+  const summary = calculateGroupedEfficiencySummary(log, groupBy)
+
+  return { log, summary }
+}
+
+function calculateGroupedEfficiencySummary (log, groupBy) {
+  if (!log.length) {
+    return {
+      avgEfficiencyWThs: null
+    }
+  }
+
+  const groupTotals = {}
+  const groupCounts = {}
+
+  for (const entry of log) {
+    const efficiency = entry.efficiencyWThs
+    if (typeof efficiency === 'object' && efficiency !== null) {
+      for (const [name, val] of Object.entries(efficiency)) {
+        const v = Number(val) || 0
+        // efficiency is an average metric; skip empty readings so they
+        // don't drag the group/site averages towards zero
+        if (!v) continue
+        groupTotals[name] = (groupTotals[name] || 0) + v
+        groupCounts[name] = (groupCounts[name] || 0) + 1
+      }
+    }
+  }
+
+  const byGroup = {}
+  let siteTotal = 0
+  let siteCount = 0
+  for (const [name, total] of Object.entries(groupTotals)) {
+    byGroup[name] = {
+      avgEfficiencyWThs: safeDiv(total, groupCounts[name])
+    }
+    siteTotal += total
+    siteCount += groupCounts[name]
+  }
+
+  return {
+    avgEfficiencyWThs: safeDiv(siteTotal, siteCount),
+    groupedBy: byGroup
   }
 }
 
@@ -917,6 +997,8 @@ module.exports = {
   calculateGroupedConsumptionSummary,
   getEfficiency,
   calculateEfficiencySummary,
+  getGroupedEfficiency,
+  calculateGroupedEfficiencySummary,
   getMinerStatus,
   processMinerStatusData,
   calculateMinerStatusSummary,

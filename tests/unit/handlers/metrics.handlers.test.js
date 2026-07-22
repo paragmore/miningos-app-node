@@ -9,6 +9,7 @@ const {
   calculateGroupedConsumptionSummary,
   getEfficiency,
   calculateEfficiencySummary,
+  calculateGroupedEfficiencySummary,
   getMinerStatus,
   processMinerStatusData,
   calculateMinerStatusSummary,
@@ -677,6 +678,185 @@ test('calculateEfficiencySummary - calculates from log entries', (t) => {
 test('calculateEfficiencySummary - handles empty log', (t) => {
   const summary = calculateEfficiencySummary([])
   t.is(summary.avgEfficiencyWThs, null, 'should be null')
+  t.pass()
+})
+
+test('getEfficiency - grouped by miner uses type group aggregation', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{
+          ts: 1700006400000,
+          efficiency_w_ths_type_group_avg_aggr: { 'S19-Pro': 30, S21: 20 }
+        }]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, groupBy: 'miner' }
+  })
+
+  t.is(capturedPayload.fields.efficiency_w_ths_type_group_avg, 1, 'should request type-group source field')
+  t.is(capturedPayload.aggrFields.efficiency_w_ths_type_group_avg_aggr, 1, 'should request type-group aggregate field')
+  t.is(result.log.length, 1, 'should map one grouped row')
+  t.alike(result.log[0].efficiencyWThs, { 'S19-Pro': 30, S21: 20 }, 'should map grouped efficiency value')
+  t.is(result.summary.avgEfficiencyWThs, 25, 'should average across all group readings')
+  t.ok(result.summary.groupedBy, 'should have per-miner breakdown')
+  t.is(result.summary.groupedBy['S19-Pro'].avgEfficiencyWThs, 30, 'should have per-miner avg')
+  t.is(result.summary.groupedBy.S21.avgEfficiencyWThs, 20, 'should have per-miner avg')
+  t.pass()
+})
+
+test('getEfficiency - grouped by container uses container group aggregation', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{
+          ts: 1700006400000,
+          efficiency_w_ths_container_group_avg_aggr: { 'container-A': 24, 'container-B': 28 }
+        }]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, groupBy: 'container' }
+  })
+
+  t.is(capturedPayload.fields.efficiency_w_ths_container_group_avg, 1, 'should request container-group source field')
+  t.is(capturedPayload.aggrFields.efficiency_w_ths_container_group_avg_aggr, 1, 'should request container-group aggregate field')
+  t.is(result.log.length, 1, 'should map grouped row')
+  t.alike(result.log[0].efficiencyWThs, { 'container-A': 24, 'container-B': 28 }, 'should map container grouped efficiency value')
+  t.is(result.summary.avgEfficiencyWThs, 26, 'should average across all group readings')
+  t.ok(result.summary.groupedBy, 'should have per-container breakdown')
+  t.is(result.summary.groupedBy['container-A'].avgEfficiencyWThs, 24, 'should have per-container avg')
+  t.is(result.summary.groupedBy['container-B'].avgEfficiencyWThs, 28, 'should have per-container avg')
+  t.pass()
+})
+
+test('getEfficiency - grouped summary averages across multiple entries', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [
+        { ts: 1700006400000, efficiency_w_ths_container_group_avg_aggr: { 'container-A': 24, 'container-B': 28 } },
+        { ts: 1700092800000, efficiency_w_ths_container_group_avg_aggr: { 'container-A': 26, 'container-B': 30 } }
+      ]
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700200000000, groupBy: 'container' }
+  })
+
+  t.is(result.log.length, 2, 'should map both daily rows')
+  t.is(result.summary.avgEfficiencyWThs, 27, 'site avg should span both entries ((24+28+26+30)/4)')
+  t.is(result.summary.groupedBy['container-A'].avgEfficiencyWThs, 25, 'per-group avg should span both entries ((24+26)/2)')
+  t.is(result.summary.groupedBy['container-B'].avgEfficiencyWThs, 29, 'per-group avg should span both entries ((28+30)/2)')
+  t.pass()
+})
+
+test('getEfficiency - grouped by rack uses rack group aggregation', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{
+          ts: 1700006400000,
+          efficiency_w_ths_pdu_rack_group_avg_aggr: {
+            'group-1_rack-1': 22, 'group-1_rack-2': 24, 'group-2_rack-1': 26
+          }
+        }]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, groupBy: 'rack' }
+  })
+
+  t.is(capturedPayload.fields.efficiency_w_ths_pdu_rack_group_avg, 1, 'should request rack-group source field')
+  t.is(capturedPayload.aggrFields.efficiency_w_ths_pdu_rack_group_avg_aggr, 1, 'should request rack-group aggregate field')
+  t.alike(result.log[0].efficiencyWThs, { 'group-1_rack-1': 22, 'group-1_rack-2': 24, 'group-2_rack-1': 26 }, 'should map all racks when no filter given')
+  t.ok(result.summary.groupedBy['group-1_rack-1'], 'should have per-rack breakdown')
+  t.pass()
+})
+
+test('getEfficiency - grouped by rack filters to requested racks', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{
+        ts: 1700006400000,
+        efficiency_w_ths_pdu_rack_group_avg_aggr: {
+          'group-1_rack-1': 22, 'group-1_rack-2': 24, 'group-2_rack-1': 26
+        }
+      }]
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: {
+      start: 1700000000000,
+      end: 1700100000000,
+      groupBy: 'rack',
+      racks: 'group-1_rack-1, group-2_rack-1'
+    }
+  })
+
+  t.alike(result.log[0].efficiencyWThs, { 'group-1_rack-1': 22, 'group-2_rack-1': 26 }, 'should keep only requested racks')
+  t.is(result.summary.avgEfficiencyWThs, 24, 'summary should reflect filtered racks only')
+  t.absent(result.summary.groupedBy['group-1_rack-2'], 'filtered-out rack should be absent from summary')
+  t.pass()
+})
+
+test('getEfficiency - grouped mode handles empty results', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: { jRequest: async () => [] }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, groupBy: 'container' }
+  })
+
+  t.is(result.log.length, 0, 'grouped log should be empty when no data is returned')
+  t.is(result.summary.avgEfficiencyWThs, null, 'grouped empty summary should have null avg')
+  t.pass()
+})
+
+test('calculateGroupedEfficiencySummary - calculates per-group and site-wide stats', (t) => {
+  const log = [
+    { ts: 1700006400000, efficiencyWThs: { 'container-A': 24, 'container-B': 28 } },
+    { ts: 1700092800000, efficiencyWThs: { 'container-A': 26, 'container-B': 30 } }
+  ]
+
+  const summary = calculateGroupedEfficiencySummary(log, 'container')
+  t.is(summary.avgEfficiencyWThs, 27, 'should average across all group readings')
+  t.ok(summary.groupedBy, 'should have per-group breakdown')
+  t.is(summary.groupedBy['container-A'].avgEfficiencyWThs, 25, 'should average per-group efficiency')
+  t.is(summary.groupedBy['container-B'].avgEfficiencyWThs, 29, 'should average per-group efficiency')
+  t.pass()
+})
+
+test('calculateGroupedEfficiencySummary - skips zero readings and handles empty log', (t) => {
+  const summary = calculateGroupedEfficiencySummary([
+    { ts: 1700006400000, efficiencyWThs: { 'container-A': 24, 'container-B': 0 } }
+  ], 'container')
+  t.is(summary.groupedBy['container-A'].avgEfficiencyWThs, 24, 'should keep non-zero reading')
+  t.absent(summary.groupedBy['container-B'], 'zero-only group should be excluded')
+
+  const empty = calculateGroupedEfficiencySummary([], 'container')
+  t.is(empty.avgEfficiencyWThs, null, 'should be null for empty log')
   t.pass()
 })
 
