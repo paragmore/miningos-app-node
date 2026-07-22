@@ -906,6 +906,65 @@ test('getMinerStatus - happy path', async (t) => {
   t.pass()
 })
 
+test('getMinerStatus - emits error and excludes it from online', async (t) => {
+  let payload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, p) => {
+        payload = p
+        return [{
+          ts: 1700006400000,
+          type_cnt: { 'am-s19': 800, 'wm-m50': 481 },
+          offline_cnt: {},
+          power_mode_sleep_cnt: {},
+          maintenance_type_cnt: {},
+          error_cnt: { 'container-1a': 1 }
+        }]
+      }
+    }
+  })
+
+  const result = await getMinerStatus(mockCtx, { query: { start: 1700000000000, end: 1700100000000 } })
+
+  t.is(payload.aggrFields.error_cnt, 1, 'should request the error count field')
+  t.is(result.log[0].error, 1, 'should surface the errored miner')
+  t.is(result.log[0].online, 1280, 'online should exclude the errored miner (1281 - 1)')
+  t.is(result.summary.avgError, 1, 'summary should carry avgError')
+  t.pass()
+})
+
+test('getMinerStatus - groupBy=type returns per-type status counts', async (t) => {
+  let payload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, p) => {
+        payload = p
+        return [{
+          ts: 1700006400000,
+          type_cnt: { 'am-s19': 800, 'wm-m50': 481 },
+          offline_type_cnt: { 'wm-m50': 5 },
+          power_mode_sleep_type_cnt: {},
+          maintenance_type_cnt: { 'am-s19': 3 },
+          error_type_cnt: { 'am-s19': 1 }
+        }]
+      }
+    }
+  })
+
+  const result = await getMinerStatus(mockCtx, { query: { start: 1700000000000, end: 1700100000000, groupBy: 'type' } })
+
+  t.is(payload.aggrFields.type_cnt, 1, 'should request per-type total')
+  t.is(payload.aggrFields.offline_type_cnt, 1, 'should request per-type offline')
+  t.is(payload.aggrFields.error_type_cnt, 1, 'should request per-type error')
+  t.alike(result.log[0].total, { 'am-s19': 800, 'wm-m50': 481 }, 'should key total by type')
+  t.is(result.log[0].online['am-s19'], 796, 'per-type online = 800 - 3 maintenance - 1 error')
+  t.is(result.log[0].online['wm-m50'], 476, 'per-type online = 481 - 5 offline')
+  t.is(result.log[0].error['am-s19'], 1, 'should key error by type')
+  t.pass()
+})
+
 test('getMinerStatus - missing start throws', async (t) => {
   const mockCtx = withDataProxy({
     conf: { orks: [] },

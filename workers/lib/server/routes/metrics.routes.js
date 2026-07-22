@@ -93,7 +93,8 @@ module.exports = (ctx) => {
         (req) => [
           'metrics/miner-status',
           req.query.start,
-          req.query.end
+          req.query.end,
+          req.query.groupBy
         ],
         ENDPOINTS.METRICS_MINER_STATUS,
         getMinerStatus
