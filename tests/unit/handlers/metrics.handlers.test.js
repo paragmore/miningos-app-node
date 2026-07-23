@@ -11,6 +11,7 @@ const {
   calculateEfficiencySummary,
   calculateGroupedEfficiencySummary,
   getMinerStatus,
+  getMinersByContainer,
   processMinerStatusData,
   calculateMinerStatusSummary,
   sumObjectValues,
@@ -1186,6 +1187,87 @@ test('parseEntryTs - handles plain numeric string', (t) => {
 test('parseEntryTs - returns null for invalid input', (t) => {
   t.is(parseEntryTs(null), null, 'null returns null')
   t.is(parseEntryTs(undefined), null, 'undefined returns null')
+  t.pass()
+})
+
+// ==================== Miners By Container Tests ====================
+
+test('getMinersByContainer - rolls up counts and metrics per container', async (t) => {
+  let payload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, p) => {
+        payload = p
+        return [[{
+          ts: 1769630399999,
+          hashrate_mhs_5m_container_group_sum_aggr: { 'bitdeer-1a': 12000000, 'microbt-1': 8000000 },
+          power_w_container_group_sum_aggr: { 'bitdeer-1a': 700000 },
+          efficiency_w_ths_container_group_avg_aggr: { 'bitdeer-1a': 21.5 },
+          temperature_c_group_max_aggr: { 'bitdeer-1a': 78 },
+          temperature_c_group_avg_aggr: { 'bitdeer-1a': 61 },
+          hashrate_mhs_5m_active_container_group_cnt: { 'bitdeer-1a': 198 },
+          offline_cnt: { 'bitdeer-1a': 5 },
+          error_cnt: { 'bitdeer-1a': 2 },
+          not_mining_cnt: { 'microbt-1': 1 },
+          power_mode_sleep_cnt: { 'bitdeer-1a': 1 },
+          power_mode_low_cnt: {},
+          power_mode_normal_cnt: { 'bitdeer-1a': 190, 'microbt-1': 149 },
+          power_mode_high_cnt: { 'bitdeer-1a': 2 }
+        }]]
+      }
+    }
+  })
+
+  const result = await getMinersByContainer(mockCtx, { query: {} })
+
+  t.is(payload.keys[0].key, 'stat-rtd', 'should read the realtime snapshot')
+  t.is(payload.limit, 1, 'should take the latest snapshot only')
+  t.is(payload.aggrFields.offline_cnt, 1, 'should request container-keyed status counts')
+  t.is(payload.aggrFields.hashrate_mhs_5m_active_container_group_cnt, 1, 'should request active count')
+
+  const bd = result.containers['bitdeer-1a']
+  t.is(bd.minerCount, 200, 'minerCount sums the mutually exclusive statuses (5+2+0+1+0+190+2)')
+  t.is(bd.onlineCount, 198, 'onlineCount is the active (hashrate-producing) count')
+  t.is(bd.offlineCount, 5, 'should carry offline count')
+  t.is(bd.errorCount, 2, 'should carry error count')
+  t.is(bd.sleepCount, 1, 'should carry sleep count')
+  t.alike(bd.powerMode, { low: 0, normal: 190, high: 2 }, 'should break down power modes')
+  t.is(bd.hashrateMhs, 12000000, 'should carry container hashrate')
+  t.is(bd.powerW, 700000, 'should carry container power')
+  t.is(bd.efficiencyWThs, 21.5, 'should carry container efficiency')
+  t.alike(bd.temperatureC, { max: 78, avg: 61 }, 'should carry container temperature')
+
+  const mb = result.containers['microbt-1']
+  t.is(mb.minerCount, 150, 'container present in only some fields still totals (1 not-mining + 149 normal)')
+  t.is(mb.offlineCount, 0, 'missing status defaults to zero')
+  t.alike(mb.temperatureC, { max: null, avg: null }, 'missing temperature defaults to null')
+  t.pass()
+})
+
+test('getMinersByContainer - merges across orks and handles empty results', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'a' }, { rpcPublicKey: 'b' }] },
+    net_r0: {
+      jRequest: async (key) => key === 'a'
+        ? [[{ ts: 1, offline_cnt: { c1: 3 }, power_mode_normal_cnt: { c1: 10 } }]]
+        : [[]]
+    }
+  })
+
+  const result = await getMinersByContainer(mockCtx, { query: {} })
+  t.is(result.containers.c1.offlineCount, 3, 'should read the contributing ork')
+  t.is(result.containers.c1.minerCount, 13, 'should total across present fields')
+  t.pass()
+})
+
+test('getMinersByContainer - no data returns empty container map', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'a' }] },
+    net_r0: { jRequest: async () => [[]] }
+  })
+  const result = await getMinersByContainer(mockCtx, { query: {} })
+  t.alike(result.containers, {}, 'should return an empty container map')
   t.pass()
 })
 

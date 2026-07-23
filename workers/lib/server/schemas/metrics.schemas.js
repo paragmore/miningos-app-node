@@ -48,6 +48,12 @@ const schemas = {
       },
       required: ['start', 'end']
     },
+    minersByContainer: {
+      type: 'object',
+      properties: {
+        overwriteCache: { type: 'boolean' }
+      }
+    },
     powerMode: {
       type: 'object',
       properties: {

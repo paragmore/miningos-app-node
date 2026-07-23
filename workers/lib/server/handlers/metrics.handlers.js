@@ -29,7 +29,8 @@ const {
   extractContainerFromMinerKey,
   resolveInterval,
   getIntervalConfig,
-  mergeGroupedField
+  mergeGroupedField,
+  extractKeyEntry
 } = require('../../metrics.utils')
 const { parseRacks } = require('../lib/queryUtils')
 
@@ -557,6 +558,100 @@ function processGroupedMinerStatusData (results) {
   return daily
 }
 
+const MINERS_BY_CONTAINER_AGGR_FIELDS = {
+  [AGGR_FIELDS.HASHRATE_SUM_CONTAINER_GROUP_AGGR]: 1,
+  [AGGR_FIELDS.POWER_W_CONTAINER_GROUP_SUM]: 1,
+  [AGGR_FIELDS.EFFICIENCY_CONTAINER_GROUP_AVG]: 1,
+  [AGGR_FIELDS.TEMP_MAX]: 1,
+  [AGGR_FIELDS.TEMP_AVG]: 1,
+  [AGGR_FIELDS.ACTIVE_CONTAINER_CNT]: 1,
+  [AGGR_FIELDS.OFFLINE_CNT]: 1,
+  [AGGR_FIELDS.ERROR_CNT]: 1,
+  [AGGR_FIELDS.NOT_MINING_CNT]: 1,
+  [AGGR_FIELDS.SLEEP_CNT]: 1,
+  [AGGR_FIELDS.POWER_MODE_LOW_CNT]: 1,
+  [AGGR_FIELDS.POWER_MODE_NORMAL_CNT]: 1,
+  [AGGR_FIELDS.POWER_MODE_HIGH_CNT]: 1
+}
+
+async function getMinersByContainer (ctx, req) {
+  const results = await ctx.dataProxy.requestDataMap(RPC_METHODS.TAIL_LOG_MULTI, {
+    keys: [{ key: LOG_KEYS.STAT_RTD, type: WORKER_TYPES.MINER, tag: WORKER_TAGS.MINER }],
+    limit: 1,
+    aggrFields: MINERS_BY_CONTAINER_AGGR_FIELDS
+  })
+
+  return processMinersByContainer(results)
+}
+
+function processMinersByContainer (results) {
+  const f = {
+    hashrate: {},
+    power: {},
+    efficiency: {},
+    tempMax: {},
+    tempAvg: {},
+    active: {},
+    offline: {},
+    error: {},
+    notMining: {},
+    sleep: {},
+    low: {},
+    normal: {},
+    high: {}
+  }
+
+  for (const orkResult of results) {
+    const entry = extractKeyEntry(orkResult, 0)
+    if (!entry) continue
+    mergeGroupedField(f.hashrate, entry[AGGR_FIELDS.HASHRATE_SUM_CONTAINER_GROUP_AGGR])
+    mergeGroupedField(f.power, entry[AGGR_FIELDS.POWER_W_CONTAINER_GROUP_SUM])
+    mergeGroupedField(f.efficiency, entry[AGGR_FIELDS.EFFICIENCY_CONTAINER_GROUP_AVG], true)
+    mergeGroupedField(f.tempMax, entry[AGGR_FIELDS.TEMP_MAX], true)
+    mergeGroupedField(f.tempAvg, entry[AGGR_FIELDS.TEMP_AVG], true)
+    mergeGroupedField(f.active, entry[AGGR_FIELDS.ACTIVE_CONTAINER_CNT])
+    mergeGroupedField(f.offline, entry[AGGR_FIELDS.OFFLINE_CNT])
+    mergeGroupedField(f.error, entry[AGGR_FIELDS.ERROR_CNT])
+    mergeGroupedField(f.notMining, entry[AGGR_FIELDS.NOT_MINING_CNT])
+    mergeGroupedField(f.sleep, entry[AGGR_FIELDS.SLEEP_CNT])
+    mergeGroupedField(f.low, entry[AGGR_FIELDS.POWER_MODE_LOW_CNT])
+    mergeGroupedField(f.normal, entry[AGGR_FIELDS.POWER_MODE_NORMAL_CNT])
+    mergeGroupedField(f.high, entry[AGGR_FIELDS.POWER_MODE_HIGH_CNT])
+  }
+
+  const containerIds = new Set()
+  for (const field of Object.values(f)) {
+    for (const id of Object.keys(field)) containerIds.add(id)
+  }
+
+  const containers = {}
+  for (const id of containerIds) {
+    const offlineCount = f.offline[id] || 0
+    const errorCount = f.error[id] || 0
+    const notMiningCount = f.notMining[id] || 0
+    const sleepCount = f.sleep[id] || 0
+    const low = f.low[id] || 0
+    const normal = f.normal[id] || 0
+    const high = f.high[id] || 0
+
+    containers[id] = {
+      minerCount: offlineCount + errorCount + notMiningCount + sleepCount + low + normal + high,
+      onlineCount: f.active[id] || 0,
+      offlineCount,
+      errorCount,
+      notMiningCount,
+      sleepCount,
+      powerMode: { low, normal, high },
+      hashrateMhs: f.hashrate[id] || 0,
+      powerW: f.power[id] || 0,
+      efficiencyWThs: f.efficiency[id] || 0,
+      temperatureC: { max: f.tempMax[id] ?? null, avg: f.tempAvg[id] ?? null }
+    }
+  }
+
+  return { containers }
+}
+
 async function getPowerMode (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
@@ -1073,6 +1168,8 @@ module.exports = {
   calculateMinerStatusSummary,
   getGroupedMinerStatus,
   processGroupedMinerStatusData,
+  getMinersByContainer,
+  processMinersByContainer,
   getPowerMode,
   processPowerModeData,
   calculatePowerModeSummary,

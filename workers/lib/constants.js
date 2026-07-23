@@ -168,6 +168,7 @@ const ENDPOINTS = {
   METRICS_CONSUMPTION: '/auth/metrics/consumption',
   METRICS_EFFICIENCY: '/auth/metrics/efficiency',
   METRICS_MINER_STATUS: '/auth/metrics/miner-status',
+  METRICS_MINERS_BY_CONTAINER: '/auth/metrics/miners/by-container',
   METRICS_POWER_MODE: '/auth/metrics/power-mode',
   METRICS_POWER_MODE_TIMELINE: '/auth/metrics/power-mode/timeline',
   METRICS_TEMPERATURE: '/auth/metrics/temperature',
@@ -302,6 +303,7 @@ const RPC_METHODS = {
   LIST_THINGS: 'listThings',
   GET_HISTORICAL_LOGS: 'getHistoricalLogs',
   TAIL_LOG: 'tailLog',
+  TAIL_LOG_MULTI: 'tailLogMulti',
   GLOBAL_CONFIG: 'getGlobalConfig',
   GET_CONFIGS: 'getConfigs'
 }
@@ -673,7 +675,8 @@ const AGGR_FIELDS = {
   POWER_MODE_NORMAL_CNT: 'power_mode_normal_cnt',
   POWER_MODE_HIGH_CNT: 'power_mode_high_cnt',
   ERROR_CNT: 'error_cnt',
-  NOT_MINING_CNT: 'not_mining_cnt'
+  NOT_MINING_CNT: 'not_mining_cnt',
+  ACTIVE_CONTAINER_CNT: 'hashrate_mhs_5m_active_container_group_cnt'
 }
 
 const PERIOD_TYPES = {

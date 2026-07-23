@@ -9,6 +9,7 @@ const {
   getConsumption,
   getEfficiency,
   getMinerStatus,
+  getMinersByContainer,
   getPowerMode,
   getPowerModeTimeline,
   getTemperature,
@@ -98,6 +99,19 @@ module.exports = (ctx) => {
         ],
         ENDPOINTS.METRICS_MINER_STATUS,
         getMinerStatus
+      )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.METRICS_MINERS_BY_CONTAINER,
+      schema: {
+        querystring: schemas.query.minersByContainer
+      },
+      ...createCachedAuthRoute(
+        ctx,
+        () => ['metrics/miners/by-container'],
+        ENDPOINTS.METRICS_MINERS_BY_CONTAINER,
+        getMinersByContainer
       )
     },
     {
