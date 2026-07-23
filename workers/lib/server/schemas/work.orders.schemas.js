@@ -32,7 +32,11 @@ const create = {
           notes: { type: 'string', maxLength: 4000 },
           remarks: { type: 'string', maxLength: 4000 },
           site: { type: 'string', maxLength: 200 },
-          location: { type: 'string', maxLength: 200 }
+          location: { type: 'string', maxLength: 200 },
+          deviceStatus: { type: 'string', maxLength: 100 },
+          pos: { type: 'string', maxLength: 200 },
+          container: { type: 'string', maxLength: 200 },
+          subnet: { type: 'string', maxLength: 200 }
         }
       }
     },
@@ -60,7 +64,10 @@ const createBatch = {
           properties: {
             deviceType: { type: 'string', minLength: 1, maxLength: 100 },
             deviceModel: { type: 'string', minLength: 1, maxLength: 100 },
-            deviceIdentifier: { type: 'string', minLength: 1, maxLength: 200 }
+            deviceIdentifier: { type: 'string', minLength: 1, maxLength: 200 },
+            pos: { type: 'string', maxLength: 200 },
+            container: { type: 'string', maxLength: 200 },
+            subnet: { type: 'string', maxLength: 200 }
           }
         }
       },
@@ -74,7 +81,9 @@ const createBatch = {
           notes: { type: 'string', maxLength: 4000 },
           remarks: { type: 'string', maxLength: 4000 },
           site: { type: 'string', maxLength: 200 },
-          location: { type: 'string', maxLength: 200 }
+          location: { type: 'string', maxLength: 200 },
+          deviceStatus: { type: 'string', maxLength: 100 },
+          minerIdentifier: { type: 'string', maxLength: 200 }
         }
       }
     },
