@@ -49,6 +49,8 @@ const WORK_ORDER_TYPES = { REGISTER: 1, MOVE: 2, MICROBT_MINER: 3, MICROBT_NON_M
 const WORK_ORDER_TERMINAL_STATUSES = ['closed', 'cancelled']
 const WORK_ORDER_VALID_DEVICE_TYPES = ['miner', 'psu', 'hashboard', 'controller']
 const MINER_LOCATIONS = ['workshop.warehouse', 'workshop.lab', 'site.warehouse', 'site.lab', 'site.container', 'miner.room', 'vendor', 'acme.container', 'scrapped', 'disposed', 'unknown']
+const MINER_ROOM_LOCATION = 'miner.room'
+const MAINTENANCE_CONTAINER = 'maintenance'
 const SPARE_PART_INITIAL_LOCATION = 'site.warehouse'
 const FILE_TYPES = { WORK_ORDER: 'work_order' }
 const WORK_ORDER_FILE_MAX_BYTES_DEFAULT = 10 * 1024 * 1024
@@ -897,6 +899,8 @@ module.exports = {
   WORK_ORDER_TERMINAL_STATUSES,
   WORK_ORDER_VALID_DEVICE_TYPES,
   MINER_LOCATIONS,
+  MINER_ROOM_LOCATION,
+  MAINTENANCE_CONTAINER,
   SPARE_PART_INITIAL_LOCATION,
   FILE_TYPES,
   WORK_ORDER_FILE_MAX_BYTES_DEFAULT,
