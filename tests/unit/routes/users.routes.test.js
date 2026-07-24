@@ -119,8 +119,14 @@ test('users routes - GET /auth/users allows admin_external to read the users lis
   await route.handler(mockReq, mockRep)
   t.is(statusCode, 200, 'should respond with 200')
   t.ok(Array.isArray(responseBody.users), 'should return a users array')
-  t.ok(responseBody.users.every(u => u.role !== 'admin'), 'admin_external should not see admin users, per roleManagement filtering')
+
+  const allowedRoles = new Set(roleManagement.admin_external || [])
+  t.ok(
+    responseBody.users.every(u => allowedRoles.has(u.role)),
+    'admin_external should only see roles listed in roleManagement'
+  )
   t.ok(responseBody.users.some(u => u.role === 'site_manager'), 'admin_external should see roles it manages')
+  t.ok(responseBody.users.some(u => u.role === 'admin'), 'admin_external should see admin when listed in roleManagement')
 
   t.pass()
 })

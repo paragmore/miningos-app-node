@@ -7,13 +7,14 @@ class UserService {
   }
 
   parseUserRow (userRow) {
-    const { email, roles, name, id } = userRow
+    const { email, roles, name, id, lastActiveAt } = userRow
     const role = JSON.parse(roles)[0]
     return {
       id,
       email,
       name,
-      role
+      role,
+      lastActiveAt
     }
   }
 

@@ -37,7 +37,7 @@ const AUTH_PERMISSIONS = {
   REPORTING: 'reporting',
   SETTINGS: 'settings',
   TICKETS: 'tickets',
-  POWER_SPOT_FORECAST: 'power_spot_forecast',
+  FORECAST: 'forecast',
   POOL_CONFIG: 'pool_config',
   POOL_CONFIG_APPROVE: 'pool_config_approve',
   WORK_ORDER: 'work_order'

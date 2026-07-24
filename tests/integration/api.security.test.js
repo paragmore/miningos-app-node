@@ -503,38 +503,41 @@ test('Api security', { timeout: 90000 }, async (main) => {
       })
     })
 
-    await n.test('admin user should not access other admins or superadmin user data', async (t) => {
+    await n.test('admin user should not access superadmin user data', async (t) => {
       const headers = await createAuthHeaders(admin1)
       const { body: data } = await httpClient.get(api, { headers, encoding })
       t.is(data.users.length > 1, true)
-      data.users.forEach(user => {
-        if (user.role === 'superadmin' || user.role === 'admin') {
-          t.fail()
-        }
-      })
+      t.ok(data.users.every(u => u.role !== 'superadmin'), 'admin should not see superadmin')
+      t.ok(data.users.some(u => u.role === 'admin'), 'admin can see other admins per roleManagement')
     })
   })
 
   await main.test('Api: put users', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.USERS}`
+    const headers = await createAuthHeaders(superadminUser)
+    const { body: list } = await httpClient.get(api, { headers, encoding })
+    const target = list.users.find(u => u.email === 'dev@test.test')
 
     await n.test('api should fail due to invalid permissions', async (t) => {
+      t.ok(target, 'test user dev@test.test should exist')
       await testEndpointWithAuthAndError(t, httpClient, 'put', api, readonlyUser, 'ERR_AUTH_FAIL_NO_PERMS', {
-        body: { data: { id: 8, email: 'dev@test.test', role: 'admin' } },
+        body: { data: { id: target.id, email: 'dev@test.test', role: 'admin' } },
         encoding
       })
     })
 
     await n.test('api should succeed for valid permissions', async (t) => {
+      t.ok(target, 'test user dev@test.test should exist')
       await testEndpointWithAuth(t, httpClient, 'put', api, superadminUser, {
-        body: { data: { id: 2, email: readonlyUser, role: 'admin' } },
+        body: { data: { id: target.id, email: 'dev@test.test', role: 'admin' } },
         encoding
       })
     })
 
-    await n.test('api should fail for missing admin permissions', async (t) => {
-      await testEndpointWithAuthAndError(t, httpClient, 'put', api, newCreatedUser, 'ERR_AUTH_FAIL_NO_PERMS', {
-        body: { data: { id: 8, email: 'dev@test.test', role: 'admin' } },
+    await n.test('api should fail for missing users write permissions', async (t) => {
+      t.ok(target, 'test user dev@test.test should exist')
+      await testEndpointWithAuthAndError(t, httpClient, 'put', api, siteOperatorUser, 'ERR_AUTH_FAIL_NO_PERMS', {
+        body: { data: { id: target.id, email: 'dev@test.test', role: 'read_only_user' } },
         encoding
       })
     })
@@ -542,24 +545,32 @@ test('Api security', { timeout: 90000 }, async (main) => {
 
   await main.test('Api: post users/delete', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.USERS_DELETE}`
+    const usersApi = `${appNodeBaseUrl}${ENDPOINTS.USERS}`
+    const headers = await createAuthHeaders(superadminUser)
+    const { body: list } = await httpClient.get(usersApi, { headers, encoding })
+    const deleteTarget = list.users.find(u => u.email === 'dev@test.test')
+    const permTarget = list.users.find(u => u.email !== 'dev@test.test')
 
     await n.test('api should fail due to invalid permissions', async (t) => {
+      t.ok(deleteTarget, 'delete target user should exist')
       await testEndpointWithAuthAndError(t, httpClient, 'post', api, readonlyUser, 'ERR_AUTH_FAIL_NO_PERMS', {
-        body: { data: { id: 5 } },
+        body: { data: { id: deleteTarget.id } },
         encoding
       })
     })
 
     await n.test('api should succeed for valid permissions', async (t) => {
+      t.ok(deleteTarget, 'delete target user should exist')
       await testEndpointWithAuth(t, httpClient, 'post', api, superadminUser, {
-        body: { data: { id: 5 } },
+        body: { data: { id: deleteTarget.id } },
         encoding
       })
     })
 
     await n.test('api should fail for missing permissions', async (t) => {
+      t.ok(permTarget, 'permission target user should exist')
       await testEndpointWithAuthAndError(t, httpClient, 'post', api, siteOperatorUser, 'ERR_AUTH_FAIL_NO_PERMS', {
-        body: { data: { id: 2 } },
+        body: { data: { id: permTarget.id } },
         encoding
       })
     })

@@ -254,7 +254,7 @@ DEBUG="*" node worker.js --wtype wrk-node-http --env development --port 3000
       "reporting:rw",
       "settings:rw",
       "ticket:rw",
-      "power_spot_forecast:rw"
+      "forecast:rw"
     ],
     "roles": {
       "admin": [
@@ -277,14 +277,14 @@ DEBUG="*" node worker.js --wtype wrk-node-http --env development --port 3000
         "reporting:rw",
         "settings:rw",
         "ticket:rw",
-        "power_spot_forecast:rw"
+        "forecast:rw"
       ],
       "reporting_tool_manager": [
         "revenue:rw",
         "production:rw",
         "reporting:rw",
         "settings:r",
-        "power_spot_forecast:r"
+        "forecast:r"
       ],
       "site_manager": [
         "miner:rw",

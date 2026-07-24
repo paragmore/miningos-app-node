@@ -427,7 +427,10 @@ test('AuthLib - admin_external role is denied write-gated users check (users:r, 
 test('AuthLib - roles without the users capability cannot read the users list', async (t) => {
   const { a0: { roles } } = require('../../../config/facs/auth.config.json')
 
-  const rolesWithoutUsers = Object.keys(roles).filter(name => name !== 'admin' && name !== 'admin_external')
+  const hasUsersRead = (perms) => perms.some(p => p === 'users:r' || p === 'users:rw')
+  const rolesWithoutUsers = Object.keys(roles).filter(name => !hasUsersRead(roles[name]))
+
+  t.ok(rolesWithoutUsers.length > 0, 'should have at least one role without users:r')
 
   for (const roleName of rolesWithoutUsers) {
     const mockAuth = {

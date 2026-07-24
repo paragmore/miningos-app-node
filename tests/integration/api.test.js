@@ -326,17 +326,17 @@ test('Api', { timeout: 90000 }, async (main) => {
       }
     })
 
-    await n.test('should fail for readonly user (capCheck requires write)', async (t) => {
+    await n.test('should succeed for readonly user (GET checks miner:r)', async (t) => {
       const headers = await createAuthHeaders(readonlyUser)
       try {
         await httpClient.get(minersApi, { headers, encoding })
-        t.fail('Expected error for readonly user')
+        t.pass()
       } catch (e) {
-        t.is(e.response.message.includes('ERR_AUTH_FAIL'), true)
+        t.fail(`Expected success but got: ${e.message || e}`)
       }
     })
 
-    await n.test('should succeed for site operator user (has actions:rw)', async (t) => {
+    await n.test('should succeed for site operator user (has miner:rw)', async (t) => {
       const headers = await createAuthHeaders(siteOperatorUser)
       try {
         await httpClient.get(minersApi, { headers, encoding })
@@ -1063,45 +1063,41 @@ test('Api', { timeout: 90000 }, async (main) => {
       })
     })
 
-    await n.test('admin user should not access other admins or superadmin user data', async (t) => {
+    await n.test('admin user should not access superadmin user data', async (t) => {
       const headers = await createAuthHeaders(admin1)
       const { body: data } = await httpClient.get(api, { headers, encoding })
       t.is(data.users.length > 1, true)
-      data.users.forEach(user => {
-        if (user.role === 'superadmin' || user.role === 'admin') {
-          t.fail()
-        }
-      })
+      t.ok(data.users.every(u => u.role !== 'superadmin'), 'admin should not see superadmin')
+      t.ok(data.users.some(u => u.role === 'admin'), 'admin can see other admins per roleManagement')
     })
   })
 
   await main.test('Api: put users', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.USERS}`
+    const headers = await createAuthHeaders(superadminUser)
+    const { body: list } = await httpClient.get(api, { headers, encoding })
+    const target = list.users.find(u => u.email === 'dev@test.test')
 
     await n.test('api should fail due to invalid permissions', async (t) => {
+      t.ok(target, 'test user dev@test.test should exist')
       await testEndpointWithAuthAndError(t, httpClient, 'put', api, readonlyUser, 'ERR_AUTH_FAIL_NO_PERMS', {
-        body: { data: { id: 8, email: 'dev@test.test', role: 'admin' } },
+        body: { data: { id: target.id, email: 'dev@test.test', role: 'admin' } },
         encoding
       })
     })
 
     await n.test('api should succeed for valid permissions', async (t) => {
-      const headers = await createAuthHeaders(superadminUser)
-      const { body: list } = await httpClient.get(api, { headers, encoding })
-      const target = list.users.find(u => u.email === 'dev@test.test')
-      if (!target) {
-        t.fail('test user dev@test.test not found')
-        return
-      }
+      t.ok(target, 'test user dev@test.test should exist')
       await testEndpointWithAuth(t, httpClient, 'put', api, superadminUser, {
         body: { data: { id: target.id, email: 'dev@test.test', role: 'admin' } },
         encoding
       })
     })
 
-    await n.test('api should fail for missing admin permissions', async (t) => {
-      await testEndpointWithAuthAndError(t, httpClient, 'put', api, newCreatedUser, 'ERR_AUTH_FAIL_NO_PERMS', {
-        body: { data: { id: 8, email: 'dev@test.test', role: 'admin' } },
+    await n.test('api should fail for missing users write permissions', async (t) => {
+      t.ok(target, 'test user dev@test.test should exist')
+      await testEndpointWithAuthAndError(t, httpClient, 'put', api, siteOperatorUser, 'ERR_AUTH_FAIL_NO_PERMS', {
+        body: { data: { id: target.id, email: 'dev@test.test', role: 'read_only_user' } },
         encoding
       })
     })
