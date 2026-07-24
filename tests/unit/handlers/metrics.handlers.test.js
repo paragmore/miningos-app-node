@@ -12,6 +12,7 @@ const {
   calculateGroupedEfficiencySummary,
   getMinerStatus,
   getMinersByContainer,
+  getInventorySummary,
   processMinerStatusData,
   calculateMinerStatusSummary,
   sumObjectValues,
@@ -1268,6 +1269,64 @@ test('getMinersByContainer - no data returns empty container map', async (t) => 
   })
   const result = await getMinersByContainer(mockCtx, { query: {} })
   t.alike(result.containers, {}, 'should return an empty container map')
+  t.pass()
+})
+
+// ==================== Inventory Summary Tests ====================
+
+test('getInventorySummary - rolls up miner and spare-part counts by status/location', async (t) => {
+  let payload = null
+  // tailLogMulti returns, per ork, one result slot per key (miner, then the 3 spare-part types)
+  const orkResult = [
+    [{ miner_inventory_status_group_cnt_aggr: { ok_brand_new: 3, in_operation: 12, faulty: 1 }, miner_inventory_location_group_cnt_aggr: { 'site.warehouse': 13, 'miner.room': 2 } }],
+    [{ spare_parts_cnt_aggr: 45, spare_part_inventory_status_group_cnt_aggr: { ok_brand_new: 31, spare: 10, faulty: 1, ok_repaired: 2, ok_recovered: 1 }, spare_part_inventory_location_group_cnt_aggr: { 'site.warehouse': 45 } }],
+    [{ spare_parts_cnt_aggr: 50, spare_part_inventory_status_group_cnt_aggr: { ok_brand_new: 50 } }],
+    [{ spare_parts_cnt_aggr: 61, spare_part_inventory_status_group_cnt_aggr: { ok_brand_new: 61 } }]
+  ]
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: { jRequest: async (key, method, p) => { payload = p; return orkResult } }
+  })
+
+  const result = await getInventorySummary(mockCtx, { query: {} })
+
+  t.is(payload.keys.length, 4, 'should query the miner tag plus one per spare-part type')
+  t.is(payload.keys[0].tag, 't-miner', 'first key is all miners')
+  t.is(payload.keys[1].tag, 't-inventory-miner_part-controller', 'spare-part keys use the inventory tags')
+  t.is(payload.aggrFields.miner_inventory_status_group_cnt_aggr, 1, 'should request miner status counts')
+
+  t.alike(result.miners.byStatus, { ok_brand_new: 3, in_operation: 12, faulty: 1 }, 'passes miner status keys through untouched')
+  t.alike(result.miners.byLocation, { 'site.warehouse': 13, 'miner.room': 2 }, 'passes miner location keys through untouched')
+  t.is(result.spareParts.controller.total, 45, 'carries the spare-part total')
+  t.is(result.spareParts.controller.byStatus.spare, 10, 'passes non-enum spare-part statuses through')
+  t.is(result.spareParts.psu.total, 61, 'each spare-part type is keyed separately')
+  t.pass()
+})
+
+test('getInventorySummary - sums keyed counts across orks', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'a' }, { rpcPublicKey: 'b' }] },
+    net_r0: {
+      jRequest: async (key) => key === 'a'
+        ? [[{ miner_inventory_status_group_cnt_aggr: { faulty: 2 } }], [{ spare_parts_cnt_aggr: 5 }], [], []]
+        : [[{ miner_inventory_status_group_cnt_aggr: { faulty: 3 } }], [{ spare_parts_cnt_aggr: 7 }], [], []]
+    }
+  })
+
+  const result = await getInventorySummary(mockCtx, { query: {} })
+  t.is(result.miners.byStatus.faulty, 5, 'should sum status counts across orks')
+  t.is(result.spareParts.controller.total, 12, 'should sum spare-part totals across orks')
+  t.pass()
+})
+
+test('getInventorySummary - empty results yield zeroed shape', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'a' }] },
+    net_r0: { jRequest: async () => [[], [], [], []] }
+  })
+  const result = await getInventorySummary(mockCtx, { query: {} })
+  t.alike(result.miners, { byStatus: {}, byLocation: {} }, 'miners default to empty maps')
+  t.is(result.spareParts.hashboard.total, 0, 'spare-part totals default to zero')
   t.pass()
 })
 

@@ -54,6 +54,18 @@ const schemas = {
         overwriteCache: { type: 'boolean' }
       }
     },
+    siteSummary: {
+      type: 'object',
+      properties: {
+        overwriteCache: { type: 'boolean' }
+      }
+    },
+    inventorySummary: {
+      type: 'object',
+      properties: {
+        overwriteCache: { type: 'boolean' }
+      }
+    },
     powerMode: {
       type: 'object',
       properties: {

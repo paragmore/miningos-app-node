@@ -171,6 +171,8 @@ const ENDPOINTS = {
   METRICS_EFFICIENCY: '/auth/metrics/efficiency',
   METRICS_MINER_STATUS: '/auth/metrics/miner-status',
   METRICS_MINERS_BY_CONTAINER: '/auth/metrics/miners/by-container',
+  METRICS_SITE_SUMMARY: '/auth/metrics/site/summary',
+  METRICS_INVENTORY_SUMMARY: '/auth/metrics/inventory/summary',
   METRICS_POWER_MODE: '/auth/metrics/power-mode',
   METRICS_POWER_MODE_TIMELINE: '/auth/metrics/power-mode/timeline',
   METRICS_TEMPERATURE: '/auth/metrics/temperature',
@@ -317,10 +319,15 @@ const WORKER_TYPES = {
   MINERPOOL: 'minerpool',
   MEMPOOL: 'mempool',
   ELECTRICITY: 'electricity',
+  INVENTORY: 'inventory',
   // The Siemens DCS worker registers its thing type as 'dcs-siemens'
   // (WrkDCSBase 'dcs' + '-siemens'); the stat log is tailed by this type.
   DCS: 'dcs-siemens'
 }
+
+// Spare parts are inventory things tagged t-inventory-miner_part-<type>
+const SPARE_PART_TYPES = ['controller', 'hashboard', 'psu']
+const sparePartTag = (type) => `t-inventory-miner_part-${type}`
 
 // BE-10 — historical cooling metric fields produced by the DCS worker stat spec
 // (miningos-wrk-dcs-siemens/workers/lib/stats.js -> libStats.specs.dcs.ops). Each
@@ -678,7 +685,12 @@ const AGGR_FIELDS = {
   POWER_MODE_HIGH_CNT: 'power_mode_high_cnt',
   ERROR_CNT: 'error_cnt',
   NOT_MINING_CNT: 'not_mining_cnt',
-  ACTIVE_CONTAINER_CNT: 'hashrate_mhs_5m_active_container_group_cnt'
+  ACTIVE_CONTAINER_CNT: 'hashrate_mhs_5m_active_container_group_cnt',
+  MINER_INVENTORY_STATUS: 'miner_inventory_status_group_cnt_aggr',
+  MINER_INVENTORY_LOCATION: 'miner_inventory_location_group_cnt_aggr',
+  SPARE_PARTS_CNT: 'spare_parts_cnt_aggr',
+  SPARE_PART_INVENTORY_STATUS: 'spare_part_inventory_status_group_cnt_aggr',
+  SPARE_PART_INVENTORY_LOCATION: 'spare_part_inventory_location_group_cnt_aggr'
 }
 
 const PERIOD_TYPES = {
@@ -845,6 +857,8 @@ module.exports = {
   GET_HISTORICAL_LOGS,
   RPC_METHODS,
   WORKER_TYPES,
+  SPARE_PART_TYPES,
+  sparePartTag,
   POOL_ALERT_TYPES,
   MINER_POOL_STATUS,
   AGGR_FIELDS,

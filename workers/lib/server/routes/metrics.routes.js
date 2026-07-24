@@ -10,6 +10,7 @@ const {
   getEfficiency,
   getMinerStatus,
   getMinersByContainer,
+  getInventorySummary,
   getPowerMode,
   getPowerModeTimeline,
   getTemperature,
@@ -17,6 +18,7 @@ const {
   getContainerTelemetry,
   getContainerHistory
 } = require('../handlers/metrics.handlers')
+const { getSiteLiveStatus } = require('../handlers/site.handlers')
 const { createCachedAuthRoute } = require('../lib/routeHelpers')
 
 module.exports = (ctx) => {
@@ -112,6 +114,32 @@ module.exports = (ctx) => {
         () => ['metrics/miners/by-container'],
         ENDPOINTS.METRICS_MINERS_BY_CONTAINER,
         getMinersByContainer
+      )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.METRICS_SITE_SUMMARY,
+      schema: {
+        querystring: schemas.query.siteSummary
+      },
+      ...createCachedAuthRoute(
+        ctx,
+        () => ['metrics/site/summary'],
+        ENDPOINTS.METRICS_SITE_SUMMARY,
+        getSiteLiveStatus
+      )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.METRICS_INVENTORY_SUMMARY,
+      schema: {
+        querystring: schemas.query.inventorySummary
+      },
+      ...createCachedAuthRoute(
+        ctx,
+        () => ['metrics/inventory/summary'],
+        ENDPOINTS.METRICS_INVENTORY_SUMMARY,
+        getInventorySummary
       )
     },
     {

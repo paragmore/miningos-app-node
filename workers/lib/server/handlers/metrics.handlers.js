@@ -11,7 +11,10 @@ const {
   WORKER_TAGS,
   DEVICE_LIST_FIELDS,
   LOG_FIELDS,
-  COOLING_METRICS_AGGR_FIELDS
+  COOLING_METRICS_AGGR_FIELDS,
+  SPARE_PART_TYPES,
+  sparePartTag,
+  SITE_STATUS_LIVE_WINDOW_MS
 } = require('../../constants')
 const {
   getStartOfDay,
@@ -652,6 +655,54 @@ function processMinersByContainer (results) {
   return { containers }
 }
 
+const INVENTORY_AGGR_FIELDS = {
+  [AGGR_FIELDS.MINER_INVENTORY_STATUS]: 1,
+  [AGGR_FIELDS.MINER_INVENTORY_LOCATION]: 1,
+  [AGGR_FIELDS.SPARE_PARTS_CNT]: 1,
+  [AGGR_FIELDS.SPARE_PART_INVENTORY_STATUS]: 1,
+  [AGGR_FIELDS.SPARE_PART_INVENTORY_LOCATION]: 1
+}
+
+async function getInventorySummary (ctx, req) {
+  const keys = [
+    { key: LOG_KEYS.STAT_5M, type: WORKER_TYPES.MINER, tag: WORKER_TAGS.MINER },
+    ...SPARE_PART_TYPES.map(type => ({ key: LOG_KEYS.STAT_5M, type: WORKER_TYPES.INVENTORY, tag: sparePartTag(type) }))
+  ]
+
+  const results = await ctx.dataProxy.requestDataMap(RPC_METHODS.TAIL_LOG_MULTI, {
+    keys,
+    limit: 1,
+    start: Date.now() - SITE_STATUS_LIVE_WINDOW_MS,
+    aggrFields: INVENTORY_AGGR_FIELDS
+  })
+
+  return processInventorySummary(results)
+}
+
+function processInventorySummary (results) {
+  const miners = { byStatus: {}, byLocation: {} }
+  const spareParts = {}
+  for (const type of SPARE_PART_TYPES) spareParts[type] = { total: 0, byStatus: {}, byLocation: {} }
+
+  for (const orkResult of results) {
+    const minerEntry = extractKeyEntry(orkResult, 0)
+    if (minerEntry) {
+      mergeGroupedField(miners.byStatus, minerEntry[AGGR_FIELDS.MINER_INVENTORY_STATUS])
+      mergeGroupedField(miners.byLocation, minerEntry[AGGR_FIELDS.MINER_INVENTORY_LOCATION])
+    }
+
+    SPARE_PART_TYPES.forEach((type, i) => {
+      const entry = extractKeyEntry(orkResult, i + 1)
+      if (!entry) return
+      spareParts[type].total += Number(entry[AGGR_FIELDS.SPARE_PARTS_CNT]) || 0
+      mergeGroupedField(spareParts[type].byStatus, entry[AGGR_FIELDS.SPARE_PART_INVENTORY_STATUS])
+      mergeGroupedField(spareParts[type].byLocation, entry[AGGR_FIELDS.SPARE_PART_INVENTORY_LOCATION])
+    })
+  }
+
+  return { miners, spareParts }
+}
+
 async function getPowerMode (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
@@ -1170,6 +1221,8 @@ module.exports = {
   processGroupedMinerStatusData,
   getMinersByContainer,
   processMinersByContainer,
+  getInventorySummary,
+  processInventorySummary,
   getPowerMode,
   processPowerModeData,
   calculatePowerModeSummary,
