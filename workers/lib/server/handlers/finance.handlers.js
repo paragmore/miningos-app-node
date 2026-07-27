@@ -756,6 +756,53 @@ function calculateRevenueSummary (log) {
   }
 }
 
+// ==================== Revenue Hourly ====================
+
+// Hourly pool revenue estimates. The minerpool worker's _aggrTransactions
+// produces hourlyRevenues (BTC per hour) when queried with aggrHourly; this
+// exposes it directly rather than fanning the tail-log call out on the client.
+async function getRevenueHourly (ctx, req) {
+  const { start, end } = validateStartEnd(req)
+  const pool = req.query.pool || null
+
+  const type = pool ? WORKER_TYPES.MINERPOOL + '-' + pool : WORKER_TYPES.MINERPOOL
+
+  const results = await ctx.dataProxy.requestData(RPC_METHODS.GET_WRK_EXT_DATA, {
+    type,
+    query: { key: MINERPOOL_EXT_DATA_KEYS.TRANSACTIONS, start, end, aggrHourly: 1 }
+  })
+
+  const log = processHourlyRevenues(results)
+  const summary = calculateHourlyRevenueSummary(log)
+
+  return { log, summary }
+}
+
+function processHourlyRevenues (results) {
+  const byHour = {}
+  for (const res of results) {
+    if (!res || res.error) continue
+    const items = Array.isArray(res) ? res : [res]
+    for (const item of items) {
+      const hourly = item && item.hourlyRevenues
+      if (!Array.isArray(hourly)) continue
+      for (const bucket of hourly) {
+        if (!bucket || bucket.ts == null) continue
+        byHour[bucket.ts] = (byHour[bucket.ts] || 0) + (Number(bucket.revenue) || 0)
+      }
+    }
+  }
+
+  return Object.keys(byHour)
+    .sort((a, b) => a - b)
+    .map(ts => ({ ts: Number(ts), revenueBTC: byHour[ts] }))
+}
+
+function calculateHourlyRevenueSummary (log) {
+  const totalRevenueBTC = log.reduce((sum, entry) => sum + (entry.revenueBTC || 0), 0)
+  return { totalRevenueBTC }
+}
+
 // ==================== Revenue Summary ====================
 
 async function getRevenueSummary (ctx, req) {
@@ -1285,6 +1332,9 @@ module.exports = {
   getCostSummary,
   getSubsidyFees,
   getRevenue,
+  getRevenueHourly,
+  processHourlyRevenues,
+  calculateHourlyRevenueSummary,
   getRevenueSummary,
   getHashRevenue,
   getProductionCosts,

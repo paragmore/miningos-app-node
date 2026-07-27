@@ -173,6 +173,7 @@ const ENDPOINTS = {
   METRICS_MINERS_BY_CONTAINER: '/auth/metrics/miners/by-container',
   METRICS_SITE_SUMMARY: '/auth/metrics/site/summary',
   METRICS_INVENTORY_SUMMARY: '/auth/metrics/inventory/summary',
+  METRICS_REVENUE_HOURLY: '/auth/metrics/revenue/hourly',
   METRICS_POWER_MODE: '/auth/metrics/power-mode',
   METRICS_POWER_MODE_TIMELINE: '/auth/metrics/power-mode/timeline',
   METRICS_TEMPERATURE: '/auth/metrics/temperature',

@@ -19,6 +19,7 @@ const {
   getContainerHistory
 } = require('../handlers/metrics.handlers')
 const { getSiteLiveStatus } = require('../handlers/site.handlers')
+const { getRevenueHourly } = require('../handlers/finance.handlers')
 const { createCachedAuthRoute } = require('../lib/routeHelpers')
 
 module.exports = (ctx) => {
@@ -140,6 +141,19 @@ module.exports = (ctx) => {
         () => ['metrics/inventory/summary'],
         ENDPOINTS.METRICS_INVENTORY_SUMMARY,
         getInventorySummary
+      )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.METRICS_REVENUE_HOURLY,
+      schema: {
+        querystring: schemas.query.revenueHourly
+      },
+      ...createCachedAuthRoute(
+        ctx,
+        (req) => ['metrics/revenue/hourly', req.query.start, req.query.end, req.query.pool],
+        ENDPOINTS.METRICS_REVENUE_HOURLY,
+        getRevenueHourly
       )
     },
     {
