@@ -426,8 +426,11 @@ const MINER_CATEGORIES = {
 
 const LOG_KEYS = {
   STAT_RTD: 'stat-rtd',
+  STAT_20S: 'stat-20s',
+  STAT_1M: 'stat-1m',
   STAT_3H: 'stat-3h',
   STAT_5M: 'stat-5m',
+  STAT_30M: 'stat-30m',
   STAT_1D: 'stat-1D'
 }
 

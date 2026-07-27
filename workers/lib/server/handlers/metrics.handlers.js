@@ -41,12 +41,36 @@ function firstOrkEntries (res) {
   return Array.isArray(res?.[0]) ? res[0] : []
 }
 
+function readHashrate (val, container) {
+  if (container) return Number(val?.[container]) || 0
+  return Number(val) || 0
+}
+
+// Latest stat-rtd sample, for charts that pair a series with a live value.
+async function getCurrentHashrate (ctx, aggrField, container) {
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    type: WORKER_TYPES.MINER,
+    tag: WORKER_TAGS.MINER,
+    key: LOG_KEYS.STAT_RTD,
+    limit: 1,
+    start: Date.now() - SITE_STATUS_LIVE_WINDOW_MS,
+    aggrFields: { [aggrField]: 1 }
+  })
+
+  const entry = firstOrkEntries(res)[0]
+
+  return entry ? readHashrate(entry[aggrField], container) : null
+}
+
 async function getHashrate (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
   if (req.query.groupBy) return getGoupedHashrate(ctx, req)
 
   const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
+  const container = req.query.container || null
+  const field = container ? LOG_FIELDS.HASHRATE_SUM_CONTAINER_GROUP : LOG_FIELDS.HASHRATE_SUM
+  const aggrField = container ? AGGR_FIELDS.HASHRATE_SUM_CONTAINER_GROUP_AGGR : AGGR_FIELDS.HASHRATE_SUM
 
   const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
     type: WORKER_TYPES.MINER,
@@ -56,16 +80,20 @@ async function getHashrate (ctx, req) {
     shouldCalculateAvg: true,
     start,
     end,
-    fields: { [LOG_FIELDS.HASHRATE_SUM]: 1 },
-    aggrFields: { [AGGR_FIELDS.HASHRATE_SUM]: 1 }
+    fields: { [field]: 1 },
+    aggrFields: { [aggrField]: 1 }
   })
 
   const log = firstOrkEntries(res).map(val => ({
     ts: val.ts,
-    hashrateMhs: Number(val[AGGR_FIELDS.HASHRATE_SUM]) || 0
+    hashrateMhs: readHashrate(val[aggrField], container)
   }))
 
   const summary = calculateHashrateSummary(log)
+
+  if (req.query.current) {
+    summary.currentHashrateMhs = await getCurrentHashrate(ctx, aggrField, container)
+  }
 
   return { log, summary }
 }
@@ -1052,6 +1080,17 @@ function processContainerSensorSnapshot (results, containerId) {
   return null
 }
 
+// Container racks schedule these timeframes on top of the thing defaults
+// (rack.container.wrk.js: 20s, 1m, rtd).
+const CONTAINER_HISTORY_KEYS = {
+  '20s': LOG_KEYS.STAT_20S,
+  '1m': LOG_KEYS.STAT_1M,
+  '5m': LOG_KEYS.STAT_5M,
+  '30m': LOG_KEYS.STAT_30M,
+  '3h': LOG_KEYS.STAT_3H,
+  '1d': LOG_KEYS.STAT_1D
+}
+
 async function getContainerHistory (ctx, req) {
   const containerId = req.params.id
 
@@ -1069,7 +1108,7 @@ async function getContainerHistory (ctx, req) {
   }
 
   const results = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
-    key: LOG_KEYS.STAT_5M,
+    key: CONTAINER_HISTORY_KEYS[req.query.interval] || LOG_KEYS.STAT_5M,
     type: WORKER_TYPES.CONTAINER,
     tag: WORKER_TAGS.CONTAINER,
     aggrFields: {

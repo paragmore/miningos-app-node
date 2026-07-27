@@ -66,6 +66,112 @@ test('getHashrate - happy path', async (t) => {
   t.pass()
 })
 
+test('getHashrate - container filter reads that container from the group aggregate', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{
+          ts: 1700006400000,
+          hashrate_mhs_5m_container_group_sum_aggr: { 'container-A': 500, 'container-B': 277 }
+        }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, container: 'container-A' }
+  })
+
+  t.is(capturedPayload.aggrFields.hashrate_mhs_5m_container_group_sum_aggr, 1, 'should request the container-group aggregate')
+  t.is(result.log[0].hashrateMhs, 500, 'should read only the requested container')
+  t.is(result.summary.avgHashrateMhs, 500, 'summary should cover the requested container only')
+  t.absent('currentHashrateMhs' in result.summary, 'should not add current unless asked')
+  t.pass()
+})
+
+test('getHashrate - unknown container yields zeroes, not a crash', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: 1700006400000, hashrate_mhs_5m_container_group_sum_aggr: { 'container-A': 500 } }]
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, container: 'nope' }
+  })
+
+  t.is(result.log[0].hashrateMhs, 0, 'should fall back to 0')
+  t.pass()
+})
+
+test('getHashrate - current adds the latest stat-rtd value', async (t) => {
+  const calls = []
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        calls.push(payload)
+        if (payload.key === 'stat-rtd') return [{ hashrate_mhs_5m_sum_aggr: 987 }]
+        return [{ ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 100000 }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, current: true }
+  })
+
+  t.is(calls.length, 2, 'should make a second call for the live value')
+  t.is(calls[1].limit, 1, 'should read a single rtd sample')
+  t.is(result.log[0].hashrateMhs, 100000, 'series should be unchanged')
+  t.is(result.summary.currentHashrateMhs, 987, 'should expose the rtd value')
+  t.pass()
+})
+
+test('getHashrate - current with container reads that container rtd value', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload.key === 'stat-rtd') {
+          return [{ hashrate_mhs_5m_container_group_sum_aggr: { 'container-A': 42 } }]
+        }
+        return [{ ts: 1700006400000, hashrate_mhs_5m_container_group_sum_aggr: { 'container-A': 500 } }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, container: 'container-A', current: true }
+  })
+
+  t.is(result.summary.currentHashrateMhs, 42, 'should read the container rtd value')
+  t.pass()
+})
+
+test('getHashrate - current is null when no rtd sample is in the window', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload.key === 'stat-rtd') return []
+        return [{ ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 100000 }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, current: true }
+  })
+
+  t.is(result.summary.currentHashrateMhs, null, 'should be null rather than 0')
+  t.pass()
+})
+
 test('getHashrate - grouped by miner uses type group aggregation', async (t) => {
   let capturedPayload = null
   const mockCtx = withDataProxy({
@@ -2106,6 +2212,48 @@ test('getContainerHistory - happy path', async (t) => {
   t.is(result.log.length, 2, 'should have 2 entries')
   t.is(result.log[0].hot_temp_c_w_1_group, 35, 'should have sensor values')
   t.ok(result.log[0].ts < result.log[1].ts, 'should be sorted by ts')
+  t.pass()
+})
+
+test('getContainerHistory - interval selects the stat key', async (t) => {
+  const keys = []
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        keys.push(payload.key)
+        return []
+      }
+    }
+  })
+
+  const query = { start: 1700000000000, end: 1700100000000 }
+  for (const interval of ['20s', '1m', '5m', '30m', '3h', '1d']) {
+    await getContainerHistory(mockCtx, { params: { id: 'bitdeer-9a' }, query: { ...query, interval } })
+  }
+
+  t.alike(keys, ['stat-20s', 'stat-1m', 'stat-5m', 'stat-30m', 'stat-3h', 'stat-1D'], 'should map each interval to its stat key')
+  t.pass()
+})
+
+test('getContainerHistory - defaults to stat-5m without interval', async (t) => {
+  let capturedKey = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedKey = payload.key
+        return []
+      }
+    }
+  })
+
+  await getContainerHistory(mockCtx, {
+    params: { id: 'bitdeer-9a' },
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is(capturedKey, 'stat-5m', 'should keep the existing default')
   t.pass()
 })
 

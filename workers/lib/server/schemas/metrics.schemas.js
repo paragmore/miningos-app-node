@@ -9,6 +9,8 @@ const schemas = {
         end: { type: 'integer', minimum: 0 },
         interval: { type: 'string', enum: ['1h', '1d', '1w'] },
         groupBy: { type: 'string', enum: ['miner', 'container', 'rack'] },
+        container: { type: 'string' },
+        current: { type: 'boolean' },
         racks: { type: 'string' },
         overwriteCache: { type: 'boolean' }
       },
@@ -127,6 +129,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
+        interval: { type: 'string', enum: ['20s', '1m', '5m', '30m', '3h', '1d'] },
         limit: { type: 'integer', minimum: 1, maximum: 1000 },
         overwriteCache: { type: 'boolean' }
       }
