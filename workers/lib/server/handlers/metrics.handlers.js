@@ -33,7 +33,8 @@ const {
   resolveInterval,
   getIntervalConfig,
   mergeGroupedField,
-  extractKeyEntry
+  extractKeyEntry,
+  mhsToThs
 } = require('../../metrics.utils')
 const { parseRacks } = require('../lib/queryUtils')
 
@@ -192,13 +193,15 @@ async function getConsumption (ctx, req) {
   // (site_power_w), not a powermeter worker
   const dcsEnabled = isCentralDCSEnabled(ctx)
 
-  const requestParams = dcsEnabled ? {
-    type: WORKER_TYPES.DCS,
-    tag: getDCSTag(ctx),
-  } : {
-    type: WORKER_TYPES.POWERMETER,
-    tag: WORKER_TAGS.POWERMETER,
-  }
+  const requestParams = dcsEnabled
+    ? {
+        type: WORKER_TYPES.DCS,
+        tag: getDCSTag(ctx)
+      }
+    : {
+        type: WORKER_TYPES.POWERMETER,
+        tag: WORKER_TAGS.POWERMETER
+      }
 
   const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
     ...requestParams,
@@ -336,6 +339,12 @@ async function getEfficiency (ctx, req) {
 
   const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
 
+  // Central-DCS sites have no miner-reported site efficiency stat; derive it from
+  // the DCS site meter (site_power_w) over miner hashrate
+  if (isCentralDCSEnabled(ctx)) {
+    return getDCSEfficiency(ctx, { key, groupRange, start, end })
+  }
+
   const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
     type: WORKER_TYPES.MINER,
     tag: WORKER_TAGS.MINER,
@@ -352,6 +361,54 @@ async function getEfficiency (ctx, req) {
     ts: val.ts,
     efficiencyWThs: Number(val[AGGR_FIELDS.EFFICIENCY]) || 0
   }))
+
+  const summary = calculateEfficiencySummary(log)
+
+  return { log, summary }
+}
+
+// Site-meter efficiency (W/THs) per interval bucket: DCS site_power_w over total
+// miner hashrate for the same bucket. Both series share the interval/groupRange
+// so their timestamps align; we key hashrate by ts and divide per DCS power point.
+async function getDCSEfficiency (ctx, { key, groupRange, start, end }) {
+  const [powerRes, hashrateRes] = await Promise.all([
+    ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+      type: WORKER_TYPES.DCS,
+      tag: getDCSTag(ctx),
+      key,
+      groupRange,
+      shouldCalculateAvg: true,
+      start,
+      end,
+      fields: { [LOG_FIELDS.SITE_POWER]: 1 },
+      aggrFields: { [AGGR_FIELDS.SITE_POWER]: 1 }
+    }),
+    ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+      type: WORKER_TYPES.MINER,
+      tag: WORKER_TAGS.MINER,
+      key,
+      groupRange,
+      shouldCalculateAvg: true,
+      start,
+      end,
+      fields: { [LOG_FIELDS.HASHRATE_SUM]: 1 },
+      aggrFields: { [AGGR_FIELDS.HASHRATE_SUM]: 1 }
+    })
+  ])
+
+  const hashrateByTs = new Map()
+  for (const val of firstOrkEntries(hashrateRes)) {
+    hashrateByTs.set(val.ts, Number(val[AGGR_FIELDS.HASHRATE_SUM]) || 0)
+  }
+
+  const log = firstOrkEntries(powerRes).map(val => {
+    const powerW = Number(val[AGGR_FIELDS.SITE_POWER]) || 0
+    const hashrateThs = mhsToThs(hashrateByTs.get(val.ts) || 0)
+    return {
+      ts: val.ts,
+      efficiencyWThs: hashrateThs > 0 ? powerW / hashrateThs : 0
+    }
+  })
 
   const summary = calculateEfficiencySummary(log)
 
