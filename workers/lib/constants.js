@@ -347,6 +347,9 @@ const COOLING_METRICS_AGGR_FIELDS = {
 
 const SEVERITY_LEVELS = new Set(['critical', 'high', 'medium', 'low'])
 
+// Rank for severity-aware sorting; higher = more severe, unknown severities rank lowest.
+const SEVERITY_RANK = { critical: 4, high: 3, medium: 2, low: 1 }
+
 const ALERTS_DEFAULT_LIMIT = 100
 const ALERTS_MAX_SITE_LIMIT = 200
 const ALERTS_MAX_HISTORY_LIMIT = 1000
@@ -368,12 +371,6 @@ const ALERT_EXT_DATA_WORKER_TYPES = [WORKER_TYPES.MINERPOOL]
 
 // Matches the miner base type and its subtypes (e.g. 'miner-am-s19xp'), not 'minerals'.
 const MINER_TYPE_REGEX = '^miner(-|$)'
-
-// Maps site-alert filter fields to the thing-level path used by `listThings`,
-// so type/container/deviceId filtering is pushed down to each rack. Fields not
-// listed here (severity, message) live inside `last.alerts[]` and are matched
-// per-alert after extraction.
-const SITE_ALERTS_THING_QUERY_MAP = { type: 'type', container: 'info.container', deviceId: 'id' }
 
 // Maps history-alert filter fields to the transformed-entry path used by the
 // worker's `getHistoricalLogs` query (thing metadata is nested under `thing`).
@@ -878,6 +875,7 @@ module.exports = {
   LOG_KEYS,
   WORKER_TAGS,
   SEVERITY_LEVELS,
+  SEVERITY_RANK,
   ALERTS_DEFAULT_LIMIT,
   ALERTS_MAX_SITE_LIMIT,
   ALERTS_MAX_HISTORY_LIMIT,
@@ -889,7 +887,6 @@ module.exports = {
   ALERT_TYPE_CATEGORIES,
   ALERT_EXT_DATA_WORKER_TYPES,
   MINER_TYPE_REGEX,
-  SITE_ALERTS_THING_QUERY_MAP,
   HISTORY_ALERTS_QUERY_MAP,
   DEVICE_LIST_FIELDS,
   MINER_FIELD_MAP,

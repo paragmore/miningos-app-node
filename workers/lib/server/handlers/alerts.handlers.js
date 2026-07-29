@@ -3,6 +3,7 @@
 const {
   RPC_METHODS,
   SEVERITY_LEVELS,
+  SEVERITY_RANK,
   ALERTS_DEFAULT_LIMIT,
   ALERTS_MAX_SITE_LIMIT,
   ALERTS_MAX_HISTORY_LIMIT,
@@ -12,7 +13,6 @@ const {
   HISTORY_SEARCH_FIELDS,
   ALERTS_FILTER_OPERATORS,
   MINER_TYPE_REGEX,
-  SITE_ALERTS_THING_QUERY_MAP,
   HISTORY_ALERTS_QUERY_MAP,
   ALERT_EXT_DATA_WORKER_TYPES
 } = require('../../constants')
@@ -69,6 +69,12 @@ function matchesSearch (item, search, fields) {
   return false
 }
 
+// Severity compares by rank (critical > high > medium > low), not alphabetically.
+function sortValue (item, field) {
+  const val = item[field]
+  return field === 'severity' ? SEVERITY_RANK[val] ?? 0 : val
+}
+
 function applySort (items, sort) {
   if (!sort) return items
   const entries = Object.entries(sort)
@@ -76,8 +82,8 @@ function applySort (items, sort) {
 
   return items.slice().sort((a, b) => {
     for (const [field, dir] of entries) {
-      const aVal = a[field]
-      const bVal = b[field]
+      const aVal = sortValue(a, field)
+      const bVal = sortValue(b, field)
       if (aVal < bVal) return dir === 1 ? -1 : 1
       if (aVal > bVal) return dir === 1 ? 1 : -1
     }
@@ -93,6 +99,21 @@ function buildSeveritySummary (alerts) {
     }
   }
   return summary
+}
+
+const MINER_TYPE_RE = new RegExp(MINER_TYPE_REGEX)
+
+// Splits by thing type: miner family (incl. subtypes) vs everything else.
+function buildSiteAlertsSummary (alerts) {
+  const miner = []
+  const operational = []
+  for (const alert of alerts) {
+    (MINER_TYPE_RE.test(alert.type || '') ? miner : operational).push(alert)
+  }
+  return {
+    operational: buildSeveritySummary(operational),
+    miner: buildSeveritySummary(miner)
+  }
 }
 
 function flattenHistoryAlert (entry) {
@@ -111,20 +132,6 @@ function flattenHistoryAlert (entry) {
     position: thing.info?.pos,
     tags: thing.tags
   }
-}
-
-// Pushes thing-level fields (type/container/deviceId) to the rack query;
-// per-alert fields (severity/message) go in $elemMatch on last.alerts.
-function buildSiteAlertsQuery (filter) {
-  const query = {}
-  const elem = {}
-  for (const [field, cond] of Object.entries(filter)) {
-    const thingPath = SITE_ALERTS_THING_QUERY_MAP[field]
-    if (thingPath) query[thingPath] = cond
-    else elem[field] = cond
-  }
-  query['last.alerts'] = Object.keys(elem).length ? { $elemMatch: elem } : { $ne: null }
-  return query
 }
 
 // Maps filter fields to the worker's nested `thing.*` paths for getHistoricalLogs.
@@ -157,9 +164,11 @@ async function getSiteAlerts (ctx, req) {
   const typeCond = alertTypeCondition(req.query.type)
   const typeFilter = typeCond ? { type: typeCond } : null
 
+  // The summary needs the full alert set, so fetch every alerted thing and
+  // apply filter/type/search in memory on the merged result.
   const results = await ctx.dataProxy.requestDataMap(RPC_METHODS.LIST_THINGS, {
     status: 1,
-    query: combineAnd(buildSiteAlertsQuery(filter), typeFilter),
+    query: { 'last.alerts': { $ne: null } },
     fields: {
       'last.alerts': 1,
       'info.container': 1,
@@ -175,11 +184,10 @@ async function getSiteAlerts (ctx, req) {
 
   alerts = alerts.concat(await fetchWorkerExtAlerts(ctx, { key: 'alerts' }))
 
-  // Re-apply on the merged result for per-alert fields and multi-rack correctness.
+  const summary = buildSiteAlertsSummary(alerts)
+
   alerts = applyMongoFilter(alerts, combineAnd(filter, typeFilter))
   alerts = alerts.filter(a => matchesSearch(a, search, SITE_ALERTS_SEARCH_FIELDS))
-
-  const summary = buildSeveritySummary(alerts)
   alerts = applySort(alerts, sort)
   const total = alerts.length
   alerts = alerts.slice(offset, offset + limit)
@@ -240,5 +248,6 @@ module.exports = {
   matchesSearch,
   applySort,
   buildSeveritySummary,
+  buildSiteAlertsSummary,
   flattenHistoryAlert
 }

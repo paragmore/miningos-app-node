@@ -8,6 +8,7 @@ const {
   matchesSearch,
   applySort,
   buildSeveritySummary,
+  buildSiteAlertsSummary,
   flattenHistoryAlert
 } = require('../../../workers/lib/server/handlers/alerts.handlers')
 const { validateFilter, applyMongoFilter, combineAnd, deduplicateAlerts } = require('../../../workers/lib/utils')
@@ -292,9 +293,11 @@ test('getSiteAlerts - happy path', async (t) => {
   t.ok(result.summary, 'should return summary')
   t.ok(typeof result.total === 'number', 'should return total')
   t.is(result.total, 3, 'should have 3 total alerts')
-  t.is(result.summary.critical, 1, 'should count 1 critical')
-  t.is(result.summary.high, 1, 'should count 1 high')
-  t.is(result.summary.low, 1, 'should count 1 low')
+  t.is(result.summary.miner.critical, 1, 'should count 1 critical under miner')
+  t.is(result.summary.miner.high, 1, 'should count 1 high under miner')
+  t.is(result.summary.miner.low, 1, 'should count 1 low under miner')
+  t.is(result.summary.miner.total, 3, 'miner total covers all alerts')
+  t.alike(result.summary.operational, { critical: 0, high: 0, medium: 0, low: 0, total: 0 }, 'operational bucket present and empty')
 })
 
 test('getSiteAlerts - empty results', async (t) => {
@@ -308,7 +311,10 @@ test('getSiteAlerts - empty results', async (t) => {
 
   t.is(result.total, 0, 'should have 0 total')
   t.is(result.alerts.length, 0, 'should have empty alerts')
-  t.is(result.summary.total, 0, 'summary total should be 0')
+  t.alike(result.summary, {
+    operational: { critical: 0, high: 0, medium: 0, low: 0, total: 0 },
+    miner: { critical: 0, high: 0, medium: 0, low: 0, total: 0 }
+  }, 'both summary buckets present and zeroed')
 })
 
 test('getSiteAlerts - applies filter', async (t) => {
@@ -831,7 +837,7 @@ test('getSiteAlerts - type combines with existing filter (AND)', async (t) => {
   t.is(result.alerts[0].id, 'dcs-1', 'the critical operational alert')
 })
 
-test('getSiteAlerts - type pushes thing.type constraint to the worker query', async (t) => {
+test('getSiteAlerts - listThings always fetches the full alerted set (type applied post-merge)', async (t) => {
   let captured
   const mockCtx = createMockCtxWithOrks([{ rpcPublicKey: 'key1' }], async (_pk, method, params) => {
     // getSiteAlerts also reads worker ext data via getWrkExtData; only capture
@@ -839,9 +845,10 @@ test('getSiteAlerts - type pushes thing.type constraint to the worker query', as
     if (method === 'listThings') captured = params
     return typedThings()
   })
-  await getSiteAlerts(mockCtx, { query: { type: 'operational' } })
-  t.alike(captured.query, { $and: [{ 'last.alerts': { $ne: null } }, { type: { $not: { $regex: '^miner(-|$)' } } }] },
-    'operational constraint is pushed down to listThings')
+  const result = await getSiteAlerts(mockCtx, { query: { type: 'operational' } })
+  t.alike(captured.query, { 'last.alerts': { $ne: null } },
+    'query stays unfiltered so the summary covers the full set')
+  t.is(result.total, 2, 'type still narrows the returned list')
 })
 
 const typedHistory = () => [
@@ -910,8 +917,8 @@ test('getSiteAlerts - merges worker-level alerts from ext data', async (t) => {
   const result = await getSiteAlerts(mockCtx, { query: {} })
   t.ok(result.alerts.some(a => a.name === 'Datum_Offline'), 'worker alert merged into site alerts')
   t.ok(result.alerts.some(a => a.name === 'fan'), 'thing alert still present')
-  t.is(result.summary.critical, 1, 'critical worker alert counted in summary')
-  t.is(result.summary.high, 1, 'thing alert still counted')
+  t.is(result.summary.operational.critical, 1, 'critical worker alert counted under operational')
+  t.is(result.summary.miner.high, 1, 'thing alert counted under miner')
 })
 
 test('getSiteAlerts - worker alerts respect the type filter (minerpool is operational)', async (t) => {
@@ -945,4 +952,145 @@ test('getAlertsHistory - dedupes repeated worker alerts by uuid', async (t) => {
   })
   const result = await getAlertsHistory(mockCtx, { query: { start: 1, end: 9000 } })
   t.is(result.alerts.filter(a => a.uuid === 'dup').length, 1, 'duplicate uuid collapsed to one')
+})
+
+// ==================== structured DCS fields (deviceTag / metadata) ====================
+
+test('extractAlertsFromThings - preserves deviceTag and metadata', (t) => {
+  const things = [
+    {
+      id: 'dcs-1',
+      type: 'dcs-siemens',
+      code: 'PCS7',
+      info: { container: 'cont-A' },
+      last: {
+        alerts: [
+          {
+            severity: 'critical',
+            name: 'temperature_alarm',
+            message: 'PUMP_01',
+            deviceTag: 'PUMP_01',
+            metadata: { value: 45.5, threshold: 45, unit: '°C' }
+          }
+        ]
+      }
+    }
+  ]
+
+  const result = extractAlertsFromThings(things)
+  t.is(result[0].deviceTag, 'PUMP_01', 'should preserve deviceTag')
+  t.alike(result[0].metadata, { value: 45.5, threshold: 45, unit: '°C' }, 'should preserve metadata')
+})
+
+test('getSiteAlerts - DCS alerts expose deviceTag and metadata', async (t) => {
+  const mockCtx = createMockCtxWithOrks([{ rpcPublicKey: 'key1' }], async () => [
+    {
+      id: 'dcs-1',
+      type: 'dcs-siemens',
+      code: 'PCS7',
+      info: { container: 'cont-A' },
+      last: {
+        alerts: [
+          { severity: 'critical', name: 'flow_alarm', message: 'FIT-7514', deviceTag: 'FIT-7514', metadata: { value: 295, threshold: 300, unit: 'm³/h' } }
+        ]
+      }
+    }
+  ])
+  const result = await getSiteAlerts(mockCtx, { query: {} })
+  t.is(result.alerts[0].deviceTag, 'FIT-7514', 'deviceTag flows through to the response')
+  t.alike(result.alerts[0].metadata, { value: 295, threshold: 300, unit: 'm³/h' }, 'metadata flows through to the response')
+})
+
+// ==================== buildSiteAlertsSummary ====================
+
+test('buildSiteAlertsSummary - splits miner family from operational', (t) => {
+  const alerts = [
+    { type: 'miner', severity: 'high' },
+    { type: 'miner-am-s19xp', severity: 'critical' },
+    { type: 'dcs-siemens', severity: 'critical' },
+    { type: 'powermeter', severity: 'low' },
+    { type: 'minerpool', severity: 'medium' }
+  ]
+
+  const result = buildSiteAlertsSummary(alerts)
+  t.alike(result.miner, { critical: 1, high: 1, medium: 0, low: 0, total: 2 }, 'miner + subtype counted under miner')
+  t.alike(result.operational, { critical: 1, high: 0, medium: 1, low: 1, total: 3 }, 'non-miner types counted under operational')
+})
+
+test('buildSiteAlertsSummary - alert without type falls under operational', (t) => {
+  const result = buildSiteAlertsSummary([{ severity: 'high' }])
+  t.is(result.operational.total, 1, 'typeless alert lands in operational')
+  t.is(result.miner.total, 0, 'miner bucket untouched')
+})
+
+// ==================== summary over the full set (ignores filter/search/type) ====================
+
+test('getSiteAlerts - summary ignores filter, search and type params', async (t) => {
+  const fullSummary = {
+    operational: { critical: 1, high: 0, medium: 1, low: 0, total: 2 },
+    miner: { critical: 0, high: 1, medium: 0, low: 1, total: 2 }
+  }
+  const queries = [
+    {},
+    { filter: JSON.stringify({ severity: 'critical' }) },
+    { filter: JSON.stringify({ type: 'dcs-siemens' }) },
+    { search: 'a1' },
+    { type: 'miner' },
+    { type: 'operational' }
+  ]
+
+  for (const query of queries) {
+    const mockCtx = createMockCtxWithOrks([{ rpcPublicKey: 'key1' }], async () => typedThings())
+    const result = await getSiteAlerts(mockCtx, { query })
+    t.alike(result.summary, fullSummary, `summary stays global for ${JSON.stringify(query)}`)
+  }
+})
+
+test('getSiteAlerts - filter on type narrows alerts and total but not summary', async (t) => {
+  const mockCtx = createMockCtxWithOrks([{ rpcPublicKey: 'key1' }], async () => typedThings())
+  const result = await getSiteAlerts(mockCtx, { query: { filter: JSON.stringify({ type: 'dcs-siemens' }) } })
+
+  t.is(result.total, 1, 'total reflects the filtered list')
+  t.ok(result.alerts.every(a => a.type === 'dcs-siemens'), 'only dcs alerts returned')
+  t.is(result.summary.miner.total, 2, 'miner summary still covers filtered-out alerts')
+  t.is(result.summary.operational.total, 2, 'operational summary still covers the full set')
+})
+
+test('getSiteAlerts - miner alerts never counted under operational', async (t) => {
+  const mockCtx = createMockCtxWithOrks([{ rpcPublicKey: 'key1' }], async () => [
+    { id: 'miner-1', type: 'miner', code: 'S19', info: {}, last: { alerts: [{ severity: 'critical', name: 'a1' }] } },
+    { id: 'miner-2', type: 'miner-am-s19xp', code: 'S21', info: {}, last: { alerts: [{ severity: 'critical', name: 'a2' }] } }
+  ])
+  const result = await getSiteAlerts(mockCtx, { query: {} })
+  t.is(result.summary.miner.critical, 2, 'both miner-family alerts under miner')
+  t.is(result.summary.operational.total, 0, 'nothing leaks into operational')
+})
+
+// ==================== severity-rank sort ====================
+
+test('applySort - severity sorts by rank, not alphabetically', (t) => {
+  const items = [{ severity: 'medium' }, { severity: 'critical' }, { severity: 'low' }, { severity: 'high' }]
+
+  const desc = applySort(items, { severity: -1 })
+  t.alike(desc.map(a => a.severity), ['critical', 'high', 'medium', 'low'], '-1 orders most severe first')
+
+  const asc = applySort(items, { severity: 1 })
+  t.alike(asc.map(a => a.severity), ['low', 'medium', 'high', 'critical'], '1 reverses the order')
+})
+
+test('applySort - unknown severity ranks below low', (t) => {
+  const items = [{ severity: 'warning' }, { severity: 'low' }, { severity: 'critical' }]
+  const desc = applySort(items, { severity: -1 })
+  t.alike(desc.map(a => a.severity), ['critical', 'low', 'warning'], 'unrecognised severity sorts last on desc')
+})
+
+test('getSiteAlerts - sort by severity rank descending', async (t) => {
+  const mockCtx = createMockCtxWithOrks([{ rpcPublicKey: 'key1' }], async () => [
+    { id: 'm1', type: 'miner', code: 'S19', info: {}, last: { alerts: [{ severity: 'low', name: 'a1' }] } },
+    { id: 'm2', type: 'miner', code: 'S19', info: {}, last: { alerts: [{ severity: 'critical', name: 'a2' }] } },
+    { id: 'm3', type: 'miner', code: 'S19', info: {}, last: { alerts: [{ severity: 'medium', name: 'a3' }] } },
+    { id: 'm4', type: 'miner', code: 'S19', info: {}, last: { alerts: [{ severity: 'high', name: 'a4' }] } }
+  ])
+  const result = await getSiteAlerts(mockCtx, { query: { sort: JSON.stringify({ severity: -1 }) } })
+  t.alike(result.alerts.map(a => a.severity), ['critical', 'high', 'medium', 'low'], 'critical first with severity:-1')
 })
