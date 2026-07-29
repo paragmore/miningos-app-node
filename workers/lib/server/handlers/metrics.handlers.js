@@ -188,9 +188,20 @@ async function getConsumption (ctx, req) {
 
   const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
 
-  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+  // Central-DCS sites report site power through the Siemens DCS worker's stat log
+  // (site_power_w), not a powermeter worker
+  const dcsEnabled = isCentralDCSEnabled(ctx)
+
+  const requestParams = dcsEnabled ? {
+    type: WORKER_TYPES.DCS,
+    tag: getDCSTag(ctx),
+  } : {
     type: WORKER_TYPES.POWERMETER,
     tag: WORKER_TAGS.POWERMETER,
+  }
+
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    ...requestParams,
     key,
     groupRange,
     shouldCalculateAvg: true,

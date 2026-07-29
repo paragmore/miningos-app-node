@@ -461,6 +461,52 @@ test('getConsumption - happy path', async (t) => {
   t.pass()
 })
 
+test('getConsumption - central DCS reads site power from the DCS worker', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{ ts: 1700006400000, site_power_w: 5000000 }]
+      }
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is(capturedPayload.type, 'dcs-siemens', 'should tail the DCS worker type')
+  t.is(capturedPayload.tag, 't-dcs-custom', 'should use the configured DCS tag')
+  t.is(result.log[0].powerW, 5000000, 'should read site_power_w from the DCS log')
+  t.pass()
+})
+
+test('getConsumption - non-DCS reads site power from the powermeter worker', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{ ts: 1700006400000, site_power_w: 5000000 }]
+      }
+    }
+  })
+
+  await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is(capturedPayload.type, 'powermeter', 'should tail the powermeter worker type')
+  t.is(capturedPayload.tag, 't-powermeter', 'should use the powermeter tag')
+  t.pass()
+})
+
 test('getConsumption - missing start throws', async (t) => {
   const mockCtx = withDataProxy({
     conf: { orks: [] },
