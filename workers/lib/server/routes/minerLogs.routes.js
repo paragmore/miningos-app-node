@@ -1,12 +1,14 @@
 'use strict'
 
-const { ENDPOINTS, HTTP_METHODS } = require('../../constants')
+const { ENDPOINTS, HTTP_METHODS, AUTH_PERMISSIONS } = require('../../constants')
 const {
   startMinerLogDownload,
   getMinerLogDownloadStatus,
   getMinerLogFile
 } = require('../handlers/minerLogs.handlers')
 const { createAuthOnRequest } = require('../lib/routeHelpers')
+
+const MINER_PERMS = [AUTH_PERMISSIONS.MINER]
 
 module.exports = (ctx) => [
   {
@@ -21,7 +23,7 @@ module.exports = (ctx) => [
         required: ['minerId']
       }
     },
-    onRequest: createAuthOnRequest(ctx),
+    onRequest: createAuthOnRequest(ctx, MINER_PERMS),
     handler: (req, reply) => startMinerLogDownload(ctx, req, reply)
   },
   {
@@ -37,7 +39,7 @@ module.exports = (ctx) => [
         required: ['minerId', 'jobId']
       }
     },
-    onRequest: createAuthOnRequest(ctx),
+    onRequest: createAuthOnRequest(ctx, MINER_PERMS),
     handler: (req, reply) => getMinerLogDownloadStatus(ctx, req, reply)
   },
   {
@@ -53,7 +55,7 @@ module.exports = (ctx) => [
         required: ['minerId', 'jobId']
       }
     },
-    onRequest: createAuthOnRequest(ctx),
+    onRequest: createAuthOnRequest(ctx, MINER_PERMS),
     handler: (req, reply) => getMinerLogFile(ctx, req, reply)
   }
 ]

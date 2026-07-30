@@ -111,6 +111,14 @@ async function deleteUser (ctx, req, res) {
   const { id } = req.body.data
   const deletedBy = req._info.user.metadata.email
 
+  if (id.toString() === SUPER_ADMIN_ID) {
+    auditLogger.logSecurityEvent('SUPER_ADMIN_DELETE_ATTEMPT', {
+      userId: id,
+      deletedBy
+    })
+    throw new Error('ERR_NOT_ALLOWED')
+  }
+
   const isSelf = req._info.user.userId === id
   if (isSelf) {
     throw new Error('ERR_AUTH_FAIL_NO_PERMS')

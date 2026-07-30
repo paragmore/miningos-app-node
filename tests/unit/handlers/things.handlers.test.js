@@ -45,6 +45,19 @@ test('listThingsRoute - with query parameter', async (t) => {
   t.pass()
 })
 
+test('listThingsRoute - rejects dangerous $where query', async (t) => {
+  const mockReq = createMockReq({ query: '{"$where":"1==1"}' })
+
+  try {
+    await listThingsRoute({ conf: { orks: [] } }, mockReq, {})
+    t.fail('should reject $where')
+  } catch (err) {
+    t.is(err.message, 'ERR_INVALID_FILTER')
+  }
+
+  t.pass()
+})
+
 test('listThingsRoute - with sort parameter', async (t) => {
   const mockCtx = createMockCtxWithOrks(
     [{ rpcPublicKey: 'key1' }],

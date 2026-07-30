@@ -86,6 +86,26 @@ test('mapFilterFields - passes through unknown keys', (t) => {
   t.pass()
 })
 
+test('mapFilterFields - rejects dangerous $where operator', (t) => {
+  try {
+    mapFilterFields({ $where: 'this.a == 1' }, FIELD_MAP)
+    t.fail('should throw')
+  } catch (err) {
+    t.is(err.message, 'ERR_INVALID_FILTER')
+  }
+  t.pass()
+})
+
+test('mapFilterFields - rejects unknown $-operators', (t) => {
+  try {
+    mapFilterFields({ $expr: { $eq: ['$a', 1] } }, FIELD_MAP)
+    t.fail('should throw')
+  } catch (err) {
+    t.is(err.message, 'ERR_INVALID_FILTER')
+  }
+  t.pass()
+})
+
 test('mapFilterFields - handles null/undefined filter', (t) => {
   t.is(mapFilterFields(null, FIELD_MAP), null)
   t.is(mapFilterFields(undefined, FIELD_MAP), undefined)
@@ -135,9 +155,32 @@ test('buildSearchQuery - builds multi-field OR regex', (t) => {
   const result = buildSearchQuery('192.168', ['id', 'opts.address', 'code'])
   t.ok(result.$or)
   t.is(result.$or.length, 3)
-  t.is(result.$or[0].id.$regex, '192.168')
+  t.is(result.$or[0].id.$regex, '192\\.168')
   t.is(result.$or[0].id.$options, 'i')
-  t.is(result.$or[1]['opts.address'].$regex, '192.168')
+  t.is(result.$or[1]['opts.address'].$regex, '192\\.168')
+  t.pass()
+})
+
+test('buildSearchQuery - escapes regex metacharacters', (t) => {
+  const result = buildSearchQuery('a.*b+', ['id'])
+  t.is(result.$or[0].id.$regex, 'a\\.\\*b\\+')
+  t.pass()
+})
+
+test('assertSafeMongoQuery - allows equality queries', (t) => {
+  const { assertSafeMongoQuery } = require('../../../workers/lib/server/lib/queryUtils')
+  t.alike(assertSafeMongoQuery({ id: 'x', tags: { $in: ['t-miner'] } }), { id: 'x', tags: { $in: ['t-miner'] } })
+  t.pass()
+})
+
+test('assertSafeMongoQuery - rejects $where', (t) => {
+  const { assertSafeMongoQuery } = require('../../../workers/lib/server/lib/queryUtils')
+  try {
+    assertSafeMongoQuery({ $where: '1==1' })
+    t.fail('should throw')
+  } catch (err) {
+    t.is(err.message, 'ERR_INVALID_FILTER')
+  }
   t.pass()
 })
 

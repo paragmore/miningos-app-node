@@ -333,22 +333,22 @@ test('Api security', { timeout: 90000 }, async (main) => {
 
   await main.test('Api: get tail-log', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.TAIL_LOG}?key=stat-5m`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, admin1, encoding)
   })
 
   await main.test('Api: get tail-log/multi', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.TAIL_LOG_MULTI}?keys=[]`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, admin1, encoding)
   })
 
   await main.test('Api: get tail-log/range-aggr', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.TAIL_LOG_RANGE_AGGR}?keys=[{"type":1,"startDate":1,"endDate":1}]`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, admin1, encoding)
   })
 
   await main.test('Api: get history-log', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.HISTORY_LOG}?logType=alerts`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, admin1, encoding)
   })
 
   await main.test('Api: get global/data', async (n) => {
@@ -422,17 +422,17 @@ test('Api security', { timeout: 90000 }, async (main) => {
 
   await main.test('Api: get actions', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.ACTIONS}?queries=[]`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, siteOperatorUser, encoding)
   })
 
   await main.test('Api: get actions/batch', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.ACTIONS_BATCH}?ids=1,2`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, siteOperatorUser, encoding)
   })
 
   await main.test('Api: get actions/:type/:id', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.ACTIONS_SINGLE}`.replace(':type', 'done').replace(':id', 1)
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, siteOperatorUser, encoding)
   })
 
   await main.test('Api: post actions/voting', async (n) => {
@@ -444,18 +444,18 @@ test('Api security', { timeout: 90000 }, async (main) => {
   await main.test('Api: post actions/voting/batch', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.ACTIONS_VOTING_BATCH}`
     const body = { batchActionsPayload: [], batchActionUID: '' }
-    await testPostEndpointSecurityWithPermissions(n, httpClient, api, invalidToken, body, readonlyUser, 'ERR_WRITE_PERM_REQUIRED', siteOperatorUser, encoding)
+    await testPostEndpointSecurityWithPermissions(n, httpClient, api, invalidToken, body, readonlyUser, 'ERR_AUTH_FAIL_NO_PERMS', siteOperatorUser, encoding)
   })
 
   await main.test('Api: put actions/voting/:id/vote', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.ACTIONS_VOTE}`.replace(':id', 1)
     const body = { approve: false }
-    await testPutEndpointSecurityWithPermissions(n, httpClient, api, invalidToken, body, readonlyUser, 'ERR_WRITE_PERM_REQUIRED', siteOperatorUser, encoding)
+    await testPutEndpointSecurityWithPermissions(n, httpClient, api, invalidToken, body, readonlyUser, 'ERR_AUTH_FAIL_NO_PERMS', siteOperatorUser, encoding)
   })
 
   await main.test('Api: delete actions/voting/cancel', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.ACTIONS_CANCEL}?ids=1`
-    await testDeleteEndpointSecurityWithPermissions(n, httpClient, api, invalidToken, readonlyUser, 'ERR_WRITE_PERM_REQUIRED', siteOperatorUser, { body: {} }, encoding)
+    await testDeleteEndpointSecurityWithPermissions(n, httpClient, api, invalidToken, readonlyUser, 'ERR_AUTH_FAIL_NO_PERMS', siteOperatorUser, { body: {} }, encoding)
   })
 
   await main.test('Api: post users', async (n) => {

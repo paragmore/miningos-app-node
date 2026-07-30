@@ -267,8 +267,8 @@ test('listMiners - builds search query', async (t) => {
   const dataCall = capturedCalls.find(c => c.method === 'listThings')
   const lastCondition = dataCall.payload.query.$and[dataCall.payload.query.$and.length - 1]
   t.ok(lastCondition.$or)
-  t.ok(lastCondition.$or.some(c => c.id?.$regex === '192.168'))
-  t.ok(lastCondition.$or.some(c => c['opts.address']?.$regex === '192.168'))
+  t.ok(lastCondition.$or.some(c => c.id?.$regex === '192\\.168'))
+  t.ok(lastCondition.$or.some(c => c['opts.address']?.$regex === '192\\.168'))
   t.pass()
 })
 

@@ -93,6 +93,11 @@ async function startMinerLogDownload (ctx, req, reply) {
  *   failed   — action completed but the miner returned an error
  *   expired  — log was ready but the Hypercore TTL has passed
  */
+function assertJobOwner (action, req) {
+  const email = req._info?.user?.metadata?.email
+  return !!(email && action.voter && action.voter === email)
+}
+
 async function getMinerLogDownloadStatus (ctx, req, reply) {
   const { minerId, jobId } = req.params
 
@@ -107,6 +112,10 @@ async function getMinerLogDownloadStatus (ctx, req, reply) {
   // Action not yet in the 'done' bucket — still executing through the pipeline
   if (!action || !action.targets) {
     return reply.code(200).send({ status: 'pending', jobId })
+  }
+
+  if (!assertJobOwner(action, req)) {
+    return reply.code(403).send({ error: 'ERR_AUTH_FAIL_NO_PERMS' })
   }
 
   let meta = null
@@ -133,6 +142,10 @@ async function getMinerLogDownloadStatus (ctx, req, reply) {
       error,
       message: describeWorkerError(error)
     })
+  }
+
+  if (meta.minerId && meta.minerId !== minerId) {
+    return reply.code(404).send({ error: 'ERR_ACTION_NOT_FOUND' })
   }
 
   if (meta.expiresAt && Date.now() > meta.expiresAt) {

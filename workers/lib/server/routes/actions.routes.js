@@ -2,7 +2,8 @@
 const {
   ENDPOINTS,
   HTTP_METHODS,
-  ACTIONS_QUERIES_MAX_LENGTH
+  ACTIONS_QUERIES_MAX_LENGTH,
+  AUTH_PERMISSIONS
 } = require('../../constants')
 const {
   queryActions,
@@ -15,6 +16,8 @@ const {
   downloadLogFile
 } = require('../handlers/actions.handlers')
 const { createAuthRoute, createCachedAuthRoute, createAuthOnRequest } = require('../lib/routeHelpers')
+
+const ACTIONS_PERMS = [AUTH_PERMISSIONS.ACTIONS]
 
 module.exports = (ctx) => {
   return [
@@ -37,7 +40,8 @@ module.exports = (ctx) => {
         ctx,
         (req) => ['actions', req.query.queries, req.query.groupBatch],
         ENDPOINTS.ACTIONS,
-        queryActions
+        queryActions,
+        ACTIONS_PERMS
       )
     },
     {
@@ -60,7 +64,8 @@ module.exports = (ctx) => {
         ctx,
         (req) => ['actions/batch', req.query.ids],
         ENDPOINTS.ACTIONS_BATCH,
-        queryActionsBatch
+        queryActionsBatch,
+        ACTIONS_PERMS
       )
     },
     {
@@ -81,7 +86,8 @@ module.exports = (ctx) => {
         ctx,
         (req) => ['actions/:type/:id', req.params.type, req.params.id],
         ENDPOINTS.ACTIONS_SINGLE,
-        getAction
+        getAction,
+        ACTIONS_PERMS
       )
     },
     {
@@ -100,7 +106,7 @@ module.exports = (ctx) => {
           required: ['query', 'action', 'params']
         }
       },
-      ...createAuthRoute(ctx, pushAction)
+      ...createAuthRoute(ctx, pushAction, ACTIONS_PERMS)
     },
     {
       method: HTTP_METHODS.POST,
@@ -116,7 +122,7 @@ module.exports = (ctx) => {
           required: ['batchActionsPayload', 'batchActionUID']
         }
       },
-      ...createAuthRoute(ctx, pushActionsBatch)
+      ...createAuthRoute(ctx, pushActionsBatch, ACTIONS_PERMS)
     },
     {
       method: HTTP_METHODS.PUT,
@@ -137,7 +143,7 @@ module.exports = (ctx) => {
           required: ['approve']
         }
       },
-      ...createAuthRoute(ctx, voteAction)
+      ...createAuthRoute(ctx, voteAction, ACTIONS_PERMS)
     },
     {
       method: HTTP_METHODS.DELETE,
@@ -154,7 +160,7 @@ module.exports = (ctx) => {
           required: ['ids']
         }
       },
-      ...createAuthRoute(ctx, cancelActionsBatch)
+      ...createAuthRoute(ctx, cancelActionsBatch, ACTIONS_PERMS)
     },
     {
       method: HTTP_METHODS.GET,
@@ -168,7 +174,7 @@ module.exports = (ctx) => {
           required: ['id']
         }
       },
-      onRequest: createAuthOnRequest(ctx),
+      onRequest: createAuthOnRequest(ctx, ACTIONS_PERMS),
       handler: (req, reply) => downloadLogFile(ctx, req, reply)
     }
   ]

@@ -2,13 +2,16 @@
 
 const { HTTP_METHODS, ENDPOINTS } = require('../../constants')
 const { authCheck } = require('../lib/authCheck')
+const { getAuthTokenFromHeaders } = require('../../utils')
 
 module.exports = (ctx) => [{
   method: HTTP_METHODS.GET,
   url: ENDPOINTS.WEBSOCKET,
   websocket: true,
   onRequest: async (req, rep) => {
-    await authCheck(ctx, req, rep, req.query.token)
+    // Prefer Authorization header; query token kept for browser WS clients
+    const token = getAuthTokenFromHeaders(req.headers) || req.query.token
+    await authCheck(ctx, req, rep, token)
   },
   handler: async (socket, _request) => {
     socket.subscriptions = new Set()
