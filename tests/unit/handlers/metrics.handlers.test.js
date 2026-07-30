@@ -775,6 +775,144 @@ test('getEfficiency - happy path', async (t) => {
   t.pass()
 })
 
+test('getEfficiency - central DCS derives efficiency from DCS site power over miner hashrate', async (t) => {
+  const dayTs = 1700006400000
+  const payloads = []
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        payloads.push(payload)
+        if (payload.type === 'dcs-siemens') {
+          return [{ ts: dayTs, site_power_w: 3000000 }]
+        }
+        // miner hashrate: 1e11 Mh/s -> 1e5 THs
+        return [{ ts: dayTs, hashrate_mhs_5m_sum_aggr: 100000000000 }]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  const dcsPayload = payloads.find(p => p.type === 'dcs-siemens')
+  const minerPayload = payloads.find(p => p.type === 'miner')
+  t.ok(dcsPayload, 'should tail the DCS worker for site power')
+  t.is(dcsPayload.tag, 't-dcs-custom', 'should use the configured DCS tag')
+  t.is(dcsPayload.aggrFields.site_power_w, 1, 'should request site power aggregate')
+  t.ok(minerPayload, 'should tail the miner worker for hashrate')
+  t.is(minerPayload.aggrFields.hashrate_mhs_5m_sum_aggr, 1, 'should request hashrate aggregate')
+  // 3,000,000 W / 100,000 THs = 30 W/THs
+  t.is(result.log[0].efficiencyWThs, 30, 'should divide site power by hashrate')
+  t.is(result.summary.avgEfficiencyWThs, 30, 'summary should reflect the derived efficiency')
+  t.pass()
+})
+
+test('getEfficiency - central DCS with no hashrate yields zero, not a crash', async (t) => {
+  const dayTs = 1700006400000
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload.type === 'dcs-siemens') return [{ ts: dayTs, site_power_w: 3000000 }]
+        return []
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is(result.log[0].efficiencyWThs, 0, 'should not divide by zero hashrate')
+  t.pass()
+})
+
+test('getEfficiency - central DCS aligns multiple entries by timestamp', async (t) => {
+  const ts1 = 1700006400000
+  const ts2 = 1700092800000
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload.type === 'dcs-siemens') {
+          return [
+            { ts: ts1, site_power_w: 3000000 },
+            { ts: ts2, site_power_w: 6000000 }
+          ]
+        }
+        // 1e11 Mh/s -> 1e5 THs for both buckets
+        return [
+          { ts: ts1, hashrate_mhs_5m_sum_aggr: 100000000000 },
+          { ts: ts2, hashrate_mhs_5m_sum_aggr: 100000000000 }
+        ]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is(result.log.length, 2, 'should keep one entry per DCS bucket')
+  // 3,000,000 / 100,000 = 30 ; 6,000,000 / 100,000 = 60
+  t.is(result.log[0].efficiencyWThs, 30, 'first bucket pairs power with its own hashrate')
+  t.is(result.log[1].efficiencyWThs, 60, 'second bucket pairs power with its own hashrate')
+  t.is(result.summary.avgEfficiencyWThs, 45, 'summary averages across buckets')
+  t.pass()
+})
+
+test('getEfficiency - central DCS handles non-overlapping timestamps in both series', async (t) => {
+  const tsBoth = 1700006400000
+  const tsDcsOnly = 1700092800000
+  const tsMinerOnly = 1700179200000
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload.type === 'dcs-siemens') {
+          return [
+            { ts: tsBoth, site_power_w: 3000000 },
+            { ts: tsDcsOnly, site_power_w: 9000000 }
+          ]
+        }
+        return [
+          { ts: tsBoth, hashrate_mhs_5m_sum_aggr: 100000000000 },
+          { ts: tsMinerOnly, hashrate_mhs_5m_sum_aggr: 100000000000 }
+        ]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700200000000 }
+  })
+
+  // Log is driven by DCS power points; a miner-only bucket has no power and is dropped.
+  t.is(result.log.length, 2, 'should emit one entry per DCS bucket only')
+  t.is(result.log[0].ts, tsBoth, 'first entry is the shared bucket')
+  t.is(result.log[0].efficiencyWThs, 30, 'shared bucket divides power by hashrate')
+  t.is(result.log[1].ts, tsDcsOnly, 'second entry is the DCS-only bucket')
+  t.is(result.log[1].efficiencyWThs, 0, 'DCS-only bucket has no hashrate, yields zero')
+  t.absent(result.log.find(e => e.ts === tsMinerOnly), 'miner-only bucket is not emitted')
+  // (30 + 0) / 2 = 15
+  t.is(result.summary.avgEfficiencyWThs, 15, 'summary averages over emitted buckets')
+  t.pass()
+})
+
 test('getEfficiency - missing start throws', async (t) => {
   const mockCtx = withDataProxy({
     conf: { orks: [] },
