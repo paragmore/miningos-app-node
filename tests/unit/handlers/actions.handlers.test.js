@@ -14,6 +14,7 @@ const {
 const { createMockCtxWithOrks, createMockReq, withDataProxy } = require('../helpers/mockHelpers')
 
 test('queryActionsBatch - basic functionality', async (t) => {
+  t.fail("Forced failure")
   const mockCtx = createMockCtxWithOrks(
     [
       { rpcPublicKey: 'key1' },
