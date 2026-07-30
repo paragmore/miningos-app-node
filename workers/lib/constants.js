@@ -735,6 +735,72 @@ const RPC_TIMEOUT = 15000
 const RPC_CONCURRENCY_LIMIT = 2
 const RPC_PAGE_LIMIT = 100
 
+// A pooled protomux-rpc channel can be torn down between requests, so the first
+// jRequest that reuses it fails while an immediate re-dial succeeds. Retry those.
+const RPC_RETRYABLE_ERRORS = ['CHANNEL_CLOSED', 'channel closed']
+const RPC_MAX_ATTEMPTS = 3
+const RPC_RETRY_DELAY = 100
+
+// Only read methods may be retried. A channel can drop after the ork applied the
+// request but before the response arrives — indistinguishable from a drop before
+// it was applied — so retrying a write can execute it twice, and no write payload
+// carries an idempotency key (pushActionsBatch has a client-supplied
+// batchActionUID, but the single-action path has nothing). This is an allowlist,
+// not a denylist, so a method reaching the proxy dynamically or a write added
+// later defaults to not retrying.
+const RPC_RETRYABLE_METHODS = new Set([
+  'getAction',
+  'getActionsBatch',
+  'getConfigs',
+  'getGlobalConfig',
+  'getHistoricalLogs',
+  'getThingConf',
+  'getThingsCount',
+  'getWrkConf',
+  'getWrkExtData',
+  'getWrkSettings',
+  'listFirmwares',
+  'listRacks',
+  'listThings',
+  'loadFile',
+  'queryActions',
+  'tailLog',
+  'tailLogCustomRangeAggr',
+  'tailLogMulti'
+])
+
+// Upper bound on rows a request that sends no limit may span, rejecting the
+// unbounded ranges that pull hundreds of thousands of rows over one RPC channel.
+// Sized off the only limitless caller, the UI's historical miner KPI export: it
+// picks the finest stat key whose bucket count fits its own 8640-row budget, so
+// 8640 is the largest range it ever asks for (30 days of stat-5m, or 6 days of
+// stat-1m on a 1-minute site).
+const TAIL_LOG_MAX_ROWS = 9000
+
+// Upper bound on a client-supplied limit, which bounds the response on its own
+// and so exempts the request from the range check above. Sized off the UI's
+// widest limit, the dashboard power-mode timeline's 7 days of stat-1m.
+const TAIL_LOG_MAX_LIMIT = 10080
+
+// Bucket width per stat key, used to estimate the row count of a range. Covers
+// every fixed-width key in LOG_KEYS: a key missing here would make the range
+// guard fail open, which is how an unbounded year of stat-20s (~1.58M buckets)
+// could slip past it.
+const TAIL_LOG_BUCKET_MS = {
+  'stat-20s': 20 * 1000,
+  'stat-1m': 60 * 1000,
+  'stat-5m': 5 * 60 * 1000,
+  'stat-30m': 30 * 60 * 1000,
+  'stat-3h': 3 * 60 * 60 * 1000,
+  'stat-1D': 24 * 60 * 60 * 1000
+}
+
+// The one stat key with no fixed bucket width: stat-rtd holds the latest sample
+// per thing, not a time series, so its row count is bounded by the thing count
+// rather than by the range. Deliberately exempt from the range guard; every other
+// stat-* key without a bucket width above is rejected rather than waved through.
+const TAIL_LOG_UNBUCKETED_KEYS = new Set(['stat-rtd'])
+
 const AUTH_CACHE_TTL = 60 * 1000
 
 const ACTIONS_MAX_QUERIES = 10
@@ -850,6 +916,14 @@ module.exports = {
   RPC_TIMEOUT,
   RPC_CONCURRENCY_LIMIT,
   RPC_PAGE_LIMIT,
+  RPC_RETRYABLE_ERRORS,
+  RPC_MAX_ATTEMPTS,
+  RPC_RETRY_DELAY,
+  RPC_RETRYABLE_METHODS,
+  TAIL_LOG_MAX_ROWS,
+  TAIL_LOG_MAX_LIMIT,
+  TAIL_LOG_BUCKET_MS,
+  TAIL_LOG_UNBUCKETED_KEYS,
   AUTH_CACHE_TTL,
   ACTIONS_MAX_QUERIES,
   ACTIONS_QUERIES_MAX_LENGTH,
