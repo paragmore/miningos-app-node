@@ -159,6 +159,61 @@ test('getEnergyBalance - empty ork results', async (t) => {
   t.pass()
 })
 
+test('getEnergyBalance - reads a grouped range-string ts on the electricity stats', async (t) => {
+  // Both stats-history queries pass groupRange, so the worker answers with ts as a range
+  // string. Read raw, getStartOfDay turns it into NaN and every energy reading is dropped,
+  // leaving curtailment null on a day that has one.
+  const dayTs = 1700006400000
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }]
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (method === 'tailLogCustomRangeAggr') {
+          return [{ type: 'powermeter', data: [{ ts: dayTs, val: { site_power_w: 5000 } }], error: null }]
+        }
+        if (method === 'getWrkExtData') {
+          if (payload.query && payload.query.key === 'transactions') {
+            return [{ ts: dayTs, transactions: [{ ts: dayTs, changed_balance: 0.5 }] }]
+          }
+          if (payload.query && payload.query.key === 'current_price') {
+            return [{ currentPrice: 40000 }]
+          }
+          if (payload.query && payload.query.key === 'stats-history') {
+            return [{
+              data: [{
+                ts: `${dayTs}-${dayTs + 86399999}`,
+                energy_aggr: { active_energy_in_aggr: 1, ute_energy_aggr: 1 }
+              }]
+            }]
+          }
+        }
+        if (method === 'getGlobalConfig') {
+          return { nominalPowerAvailability_MW: 10 }
+        }
+        return {}
+      }
+    },
+    globalDataLib: {
+      getGlobalData: async () => []
+    }
+  })
+
+  const mockReq = {
+    query: { start: 1700000000000, end: 1700100000000, period: 'daily' }
+  }
+
+  const result = await getEnergyBalance(mockCtx, mockReq, {})
+  const day = result.log.find(entry => entry.ts === dayTs)
+
+  t.ok(day, 'should return the day')
+  // consumptionMWh is 5000 W over 24 h = 0.12 MWh, so 1 MWh in leaves 0.88 curtailed
+  t.is(day.curtailmentMWh, 0.88, 'should derive curtailment from the range-string bucket')
+  t.ok(day.operationalIssuesRate !== null, 'should derive the operational issues rate too')
+  t.pass()
+})
+
 test('processConsumptionData - processes daily data from ORK', (t) => {
   const results = [
     [{ type: 'powermeter', data: [{ ts: 1700006400000, val: { site_power_w: 5000 } }], error: null }]

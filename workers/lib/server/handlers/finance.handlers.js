@@ -9,6 +9,7 @@ const {
   GLOBAL_DATA_TYPES
 } = require('../../constants')
 const { getStartOfDay, safeDiv, runParallel } = require('../../utils')
+const { parseEntryTs } = require('../../metrics.utils')
 const { aggregateByPeriod } = require('../../period.utils')
 const {
   validateStartEnd,
@@ -216,6 +217,10 @@ function processPriceData (results) {
   return daily
 }
 
+// Both callers request stats-history with groupRange, so ts arrives as a range string rather
+// than a number -- see parseEntryTs. getStartOfDay would divide that into NaN and every reading
+// would be dropped by the guard below, leaving curtailment and operational issues with no data
+// at all rather than a wrong value.
 function processEnergyData (results, aggrField) {
   const daily = {}
   for (const res of results) {
@@ -228,7 +233,7 @@ function processEnergyData (results, aggrField) {
       if (Array.isArray(items)) {
         for (const item of items) {
           if (!item) continue
-          const ts = getStartOfDay(item.ts || item.timestamp)
+          const ts = getStartOfDay(parseEntryTs(item.ts || item.timestamp))
           if (!ts) continue
           const energyAggr = item[AGGR_FIELDS.ENERGY_AGGR]
           if (energyAggr && energyAggr[aggrField]) {

@@ -2697,3 +2697,62 @@ test('processPowerModeTimelineData - handles non-object powerModeObj', (t) => {
   t.is(log.length, 0, 'should skip non-object powerModeObj entries')
   t.pass()
 })
+
+// ==================== Grouped range-string ts Tests ====================
+// With groupRange the ork returns ts as a range string ("<start>-<end>"). Passing that
+// through raw reaches the UI as a non-numeric timestamp, which charts plotted at the epoch
+// (a 1970-01-01 point) and, once they started rejecting undated readings, dropped entirely.
+// Any range over two days resolves to interval '1d', so this is the default report view.
+
+const RANGE_TS = '1770854400000-1771459199999'
+const RANGE_START = 1770854400000
+
+test('getHashrate - normalizes a grouped range-string ts to its start', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: RANGE_TS, hashrate_mhs_5m_sum_aggr: 100000 }]
+    }
+  })
+
+  // 7-day span -> interval '1d' -> groupRange '1D'
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.is(result.log[0].ts, RANGE_START, 'ts should be the numeric range start')
+  t.is(typeof result.log[0].ts, 'number', 'ts should be a number, not a range string')
+  t.is(result.log[0].hashrateMhs, 100000, 'value should be preserved')
+})
+
+test('getConsumption - normalizes a grouped range-string ts to its start', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: RANGE_TS, power_w_sum_aggr: 5000 }]
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.is(result.log[0].ts, RANGE_START, 'ts should be the numeric range start')
+  t.is(typeof result.log[0].ts, 'number', 'ts should be a number, not a range string')
+})
+
+test('getEfficiency - normalizes a grouped range-string ts to its start', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: RANGE_TS, efficiency_w_ths_aggr: 24 }]
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.is(result.log[0].ts, RANGE_START, 'ts should be the numeric range start')
+  t.is(typeof result.log[0].ts, 'number', 'ts should be a number, not a range string')
+})

@@ -86,7 +86,7 @@ async function getHashrate (ctx, req) {
   })
 
   const log = firstOrkEntries(res).map(val => ({
-    ts: val.ts,
+    ts: parseEntryTs(val.ts),
     hashrateMhs: readHashrate(val[aggrField], container)
   }))
 
@@ -128,7 +128,7 @@ async function getGoupedHashrate (ctx, req) {
     if (rackFilter && hashrateMhs && typeof hashrateMhs === 'object') {
       hashrateMhs = Object.fromEntries(Object.entries(hashrateMhs).filter(([rack]) => rackFilter.has(rack)))
     }
-    aggr.push({ ts: val.ts, hashrateMhs })
+    aggr.push({ ts: parseEntryTs(val.ts), hashrateMhs })
     return aggr
   }, [])
 
@@ -218,7 +218,7 @@ async function getConsumption (ctx, req) {
   const log = firstOrkEntries(res).map(val => {
     const powerW = Number(val[AGGR_FIELDS.SITE_POWER]) || 0
     return {
-      ts: val.ts,
+      ts: parseEntryTs(val.ts),
       powerW,
       consumptionMWh: (powerW * hours) / 1000000
     }
@@ -276,7 +276,7 @@ async function getGroupedConsumption (ctx, req) {
       powerW = Object.fromEntries(Object.entries(powerW).filter(([rack]) => rackFilter.has(rack)))
     }
     aggr.push({
-      ts: val.ts,
+      ts: parseEntryTs(val.ts),
       powerW,
       consumptionMWh: typeof powerW === 'object' && powerW !== null
         ? Object.fromEntries(
@@ -358,7 +358,7 @@ async function getEfficiency (ctx, req) {
   })
 
   const log = firstOrkEntries(res).map(val => ({
-    ts: val.ts,
+    ts: parseEntryTs(val.ts),
     efficiencyWThs: Number(val[AGGR_FIELDS.EFFICIENCY]) || 0
   }))
 
@@ -458,7 +458,7 @@ async function getGroupedEfficiency (ctx, req) {
     if (rackFilter && efficiencyWThs && typeof efficiencyWThs === 'object') {
       efficiencyWThs = Object.fromEntries(Object.entries(efficiencyWThs).filter(([rack]) => rackFilter.has(rack)))
     }
-    return { ts: val.ts, efficiencyWThs }
+    return { ts: parseEntryTs(val.ts), efficiencyWThs }
   })
 
   const summary = calculateGroupedEfficiencySummary(log, groupBy)
