@@ -14,9 +14,11 @@ const {
   getMinersByContainer,
   getInventorySummary,
   processMinerStatusData,
+  processGroupedMinerStatusData,
   calculateMinerStatusSummary,
   sumObjectValues,
   parseEntryTs,
+  parseEntryTimeRange,
   resolveInterval,
   getIntervalConfig,
   getPowerMode,
@@ -2755,4 +2757,168 @@ test('getEfficiency - normalizes a grouped range-string ts to its start', async 
 
   t.is(result.log[0].ts, RANGE_START, 'ts should be the numeric range start')
   t.is(typeof result.log[0].ts, 'number', 'ts should be a number, not a range string')
+})
+
+// ==================== timeRange attribute Tests ====================
+// When the ork aggregates over a range interval (groupRange), each entry covers a
+// window, not an instant. ts stays the numeric range start; timeRange carries the
+// full window so consumers no longer have to re-parse the raw range string.
+
+const RANGE_END = 1771459199999
+
+test('parseEntryTimeRange - parses a range string into startTs/endTs', (t) => {
+  t.alike(parseEntryTimeRange(RANGE_TS), { startTs: RANGE_START, endTs: RANGE_END })
+  t.is(parseEntryTimeRange(1770854400000), null, 'numeric ts has no range')
+  t.is(parseEntryTimeRange('1770854400000'), null, 'plain numeric string has no range')
+  t.is(parseEntryTimeRange('abc-def'), null, 'non-numeric parts are rejected')
+  t.is(parseEntryTimeRange(null), null, 'null ts has no range')
+})
+
+test('getHashrate - exposes the aggregation window as timeRange', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: RANGE_TS, hashrate_mhs_5m_sum_aggr: 100000 }]
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.alike(result.log[0].timeRange, { startTs: RANGE_START, endTs: RANGE_END }, 'timeRange should cover the full window')
+  t.is(result.log[0].ts, RANGE_START, 'ts should stay the numeric range start')
+})
+
+test('getHashrate - omits timeRange for non-grouped numeric entries', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 100000 }]
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is('timeRange' in result.log[0], false, 'point entries should not carry timeRange')
+})
+
+test('getConsumption - exposes the aggregation window as timeRange', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: RANGE_TS, site_power_w: 5000 }]
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.alike(result.log[0].timeRange, { startTs: RANGE_START, endTs: RANGE_END }, 'timeRange should cover the full window')
+  t.is(result.log[0].powerW, 5000, 'value should be preserved')
+})
+
+test('getEfficiency - exposes the aggregation window as timeRange', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: RANGE_TS, efficiency_w_ths_aggr: 24 }]
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.alike(result.log[0].timeRange, { startTs: RANGE_START, endTs: RANGE_END }, 'timeRange should cover the full window')
+})
+
+test('getEfficiency - central DCS path normalizes range ts and exposes timeRange', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, params) => {
+        if (params.type === 'dcs-siemens') return [{ ts: RANGE_TS, site_power_w: 5000 }]
+        return [{ ts: RANGE_TS, hashrate_mhs_5m_sum_aggr: 100000000 }]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.is(result.log[0].ts, RANGE_START, 'ts should be the numeric range start')
+  t.is(typeof result.log[0].ts, 'number', 'ts should be a number, not a range string')
+  t.alike(result.log[0].timeRange, { startTs: RANGE_START, endTs: RANGE_END }, 'timeRange should cover the full window')
+  t.is(result.log[0].efficiencyWThs, 50, 'efficiency should join power and hashrate on the same bucket')
+})
+
+test('getMinerStatus - exposes the aggregation window as timeRange', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: RANGE_TS, type_cnt: { m50: 10 }, offline_cnt: { m50: 2 } }]
+    }
+  })
+
+  const result = await getMinerStatus(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.alike(result.log[0].timeRange, { startTs: RANGE_START, endTs: RANGE_END }, 'timeRange should cover the full window')
+  t.is(result.log[0].online, 8, 'counts should be preserved')
+})
+
+test('processGroupedMinerStatusData - exposes the aggregation window as timeRange', (t) => {
+  const daily = processGroupedMinerStatusData([[{ ts: RANGE_TS, type_cnt: { m50: 10 }, offline_type_cnt: { m50: 2 } }]])
+
+  const bucket = daily[RANGE_START]
+  t.alike(bucket.timeRange, { startTs: RANGE_START, endTs: RANGE_END }, 'timeRange should cover the full window')
+})
+
+test('getPowerMode - exposes the aggregation window as timeRange on grouped buckets', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{
+        ts: RANGE_TS,
+        power_mode_group_aggr: { 'container-1-m1': 'normal' },
+        status_group_aggr: {}
+      }]
+    }
+  })
+
+  const result = await getPowerMode(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.alike(result.log[0].timeRange, { startTs: RANGE_START, endTs: RANGE_END }, 'timeRange should cover the full window')
+  t.is(result.log[0].normal, 1, 'categories should be preserved')
+})
+
+test('getTemperature - exposes the aggregation window as timeRange on grouped buckets', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{
+        ts: RANGE_TS,
+        temperature_c_group_max_aggr: { c1: 80 },
+        temperature_c_group_avg_aggr: { c1: 60 }
+      }]
+    }
+  })
+
+  const result = await getTemperature(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.alike(result.log[0].timeRange, { startTs: RANGE_START, endTs: RANGE_END }, 'timeRange should cover the full window')
+  t.is(result.log[0].siteMaxC, 80, 'values should be preserved')
 })

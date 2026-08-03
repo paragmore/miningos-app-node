@@ -18,6 +18,16 @@ function parseEntryTs (ts) {
   return null
 }
 
+function parseEntryTimeRange (ts) {
+  if (typeof ts !== 'string') return null
+  const dashIdx = ts.indexOf('-')
+  if (dashIdx <= 0) return null
+  const startTs = Number(ts.slice(0, dashIdx))
+  const endTs = Number(ts.slice(dashIdx + 1))
+  if (!Number.isFinite(startTs) || !Number.isFinite(endTs)) return null
+  return { startTs, endTs }
+}
+
 function validateStartEnd (req) {
   const start = Number(req.query.start)
   const end = Number(req.query.end)
@@ -202,6 +212,7 @@ function buildGroupPowerFromDCS (powerMeters, hashrateByGroup, energyLayout, min
 
 module.exports = {
   parseEntryTs,
+  parseEntryTimeRange,
   validateStartEnd,
   iterateRpcEntries,
   forEachRangeAggrItem,

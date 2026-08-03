@@ -26,6 +26,7 @@ const {
 } = require('../../dcs.utils')
 const {
   parseEntryTs,
+  parseEntryTimeRange,
   validateStartEnd,
   iterateRpcEntries,
   sumObjectValues,
@@ -85,10 +86,14 @@ async function getHashrate (ctx, req) {
     aggrFields: { [aggrField]: 1 }
   })
 
-  const log = firstOrkEntries(res).map(val => ({
-    ts: parseEntryTs(val.ts),
-    hashrateMhs: readHashrate(val[aggrField], container)
-  }))
+  const log = firstOrkEntries(res).map(val => {
+    const timeRange = parseEntryTimeRange(val.ts)
+    return {
+      ts: parseEntryTs(val.ts),
+      ...(timeRange && { timeRange }),
+      hashrateMhs: readHashrate(val[aggrField], container)
+    }
+  })
 
   const summary = calculateHashrateSummary(log)
 
@@ -217,8 +222,10 @@ async function getConsumption (ctx, req) {
   const hours = bucketHours(groupRange)
   const log = firstOrkEntries(res).map(val => {
     const powerW = Number(val[AGGR_FIELDS.SITE_POWER]) || 0
+    const timeRange = parseEntryTimeRange(val.ts)
     return {
       ts: parseEntryTs(val.ts),
+      ...(timeRange && { timeRange }),
       powerW,
       consumptionMWh: (powerW * hours) / 1000000
     }
@@ -357,10 +364,14 @@ async function getEfficiency (ctx, req) {
     aggrFields: { [AGGR_FIELDS.EFFICIENCY]: 1 }
   })
 
-  const log = firstOrkEntries(res).map(val => ({
-    ts: parseEntryTs(val.ts),
-    efficiencyWThs: Number(val[AGGR_FIELDS.EFFICIENCY]) || 0
-  }))
+  const log = firstOrkEntries(res).map(val => {
+    const timeRange = parseEntryTimeRange(val.ts)
+    return {
+      ts: parseEntryTs(val.ts),
+      ...(timeRange && { timeRange }),
+      efficiencyWThs: Number(val[AGGR_FIELDS.EFFICIENCY]) || 0
+    }
+  })
 
   const summary = calculateEfficiencySummary(log)
 
@@ -404,8 +415,10 @@ async function getDCSEfficiency (ctx, { key, groupRange, start, end }) {
   const log = firstOrkEntries(powerRes).map(val => {
     const powerW = Number(val[AGGR_FIELDS.SITE_POWER]) || 0
     const hashrateThs = mhsToThs(hashrateByTs.get(val.ts) || 0)
+    const timeRange = parseEntryTimeRange(val.ts)
     return {
-      ts: val.ts,
+      ts: parseEntryTs(val.ts),
+      ...(timeRange && { timeRange }),
       efficiencyWThs: hashrateThs > 0 ? powerW / hashrateThs : 0
     }
   })
@@ -548,6 +561,8 @@ function processMinerStatusData (results) {
     if (!ts) continue
     if (!daily[ts]) {
       daily[ts] = { online: 0, offline: 0, sleep: 0, maintenance: 0, error: 0 }
+      const timeRange = parseEntryTimeRange(entry.ts || entry.timestamp)
+      if (timeRange) daily[ts].timeRange = timeRange
     }
 
     const offlineCnt = sumObjectValues(entry[AGGR_FIELDS.OFFLINE_CNT] || entry.aggrFields?.[AGGR_FIELDS.OFFLINE_CNT])
@@ -639,6 +654,8 @@ function processGroupedMinerStatusData (results) {
     if (!ts) continue
     if (!daily[ts]) {
       daily[ts] = { total: {}, online: {}, offline: {}, sleep: {}, maintenance: {}, error: {} }
+      const timeRange = parseEntryTimeRange(entry.ts || entry.timestamp)
+      if (timeRange) daily[ts].timeRange = timeRange
     }
     const bucket = daily[ts]
     mergeGroupedField(bucket.total, entry[AGGR_FIELDS.TYPE_CNT])
@@ -854,7 +871,11 @@ function processPowerModeData (results, groupRange) {
     const ts = groupRange && rawTs ? getStartOfDay(rawTs) : rawTs
     if (!ts) continue
 
-    if (!timePoints[ts]) timePoints[ts] = emptyPoint()
+    if (!timePoints[ts]) {
+      timePoints[ts] = emptyPoint()
+      const timeRange = parseEntryTimeRange(entry.ts || entry.timestamp)
+      if (timeRange) timePoints[ts].timeRange = timeRange
+    }
 
     const powerModeObj = entry[AGGR_FIELDS.POWER_MODE_GROUP] || entry.aggrFields?.[AGGR_FIELDS.POWER_MODE_GROUP] || {}
     const statusObj = entry[AGGR_FIELDS.STATUS_GROUP] || entry.aggrFields?.[AGGR_FIELDS.STATUS_GROUP] || {}
@@ -1027,6 +1048,8 @@ function processTemperatureData (results, groupRange, containerFilter) {
 
     if (!timePoints[ts]) {
       timePoints[ts] = { containers: {}, siteMaxC: null, siteAvgC: null }
+      const timeRange = parseEntryTimeRange(entry.ts || entry.timestamp)
+      if (timeRange) timePoints[ts].timeRange = timeRange
       avgCounts[ts] = {}
     }
 
@@ -1274,9 +1297,11 @@ function processCoolingData (results, groupRange) {
     const supply = read('miner_supply_temp_c')
     const ret = read('miner_return_temp_c')
     const chillerRunning = read('chiller_running')
+    const timeRange = parseEntryTimeRange(entry.ts || entry.timestamp)
 
     points.push({
       ts: Number(ts),
+      ...(timeRange && { timeRange }),
       minerSupplyTempC: round1(supply),
       minerReturnTempC: round1(ret),
       minerDeltaTC: (supply != null && ret != null) ? round1(ret - supply) : null,

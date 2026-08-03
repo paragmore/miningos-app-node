@@ -98,3 +98,17 @@ test('BE-10 - getCooling validates start/end', async (t) => {
   }
   t.pass()
 })
+
+test('processCoolingData - exposes the aggregation window as timeRange', (t) => {
+  const results = [[{
+    ts: '1770854400000-1771459199999',
+    miner_supply_temp_c: 30,
+    miner_return_temp_c: 40
+  }]]
+
+  const log = processCoolingData(results, '1D')
+
+  t.is(log[0].ts, 1770854400000, 'ts should be the numeric range start')
+  t.alike(log[0].timeRange, { startTs: 1770854400000, endTs: 1771459199999 }, 'timeRange should cover the full window')
+  t.pass()
+})
