@@ -50,7 +50,7 @@ function attributeColumns (attributeLog, title) {
 
 module.exports = {
   type: 'historical-miner-kpi',
-  perms: null,
+  perms: ['reporting:r'],
   jsonRootKey: 'logs',
   columns: null,
   statKeys: STAT_KEYS,

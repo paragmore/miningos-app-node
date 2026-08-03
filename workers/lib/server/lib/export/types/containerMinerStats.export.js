@@ -71,7 +71,7 @@ function mapMiner (miner) {
 
 module.exports = {
   type: 'container-miner-stats',
-  perms: null,
+  perms: ['reporting:r'],
   jsonRootKey: 'miners',
   columns: COLUMNS,
   filenamePrefix () {

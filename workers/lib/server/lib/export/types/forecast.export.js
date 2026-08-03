@@ -82,7 +82,7 @@ function pickSummary (payload) {
 function buildForecastEntry ({ type, filenamePrefix, extDataKey, includeExpected, assertParams, buildQuery }) {
   return {
     type,
-    perms: null,
+    perms: ['forecast:r'],
     jsonRootKey: 'hourlyForecast',
     columns: includeExpected ? OVERVIEW_COLUMNS : BASE_COLUMNS,
     filenamePrefix () {

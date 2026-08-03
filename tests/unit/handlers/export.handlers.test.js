@@ -19,6 +19,9 @@ function makeMockReply () {
       _code = statusCode
       return reply
     },
+    status (statusCode) {
+      return reply.code(statusCode)
+    },
     header (name, value) {
       _headers[name.toLowerCase()] = value
       return reply
@@ -119,6 +122,52 @@ test('exportRoute returns 404 when the export has no rows', async (t) => {
 
   t.is(reply.statusCode, 404)
   t.is(reply.body.error, 'ERR_EXPORT_NO_DATA')
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Permissions
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('exportRoute checks the expected read permission per export type', async (t) => {
+  const cases = [
+    [{ type: 'miner-stats' }, ['reporting:r']],
+    [{ type: 'container-miner-stats', container: '7' }, ['reporting:r']],
+    [{ type: 'historical-miner-kpi', statKey: 'stat-5m', start: 0, end: 1 }, ['reporting:r']],
+    [{ type: 'forecast-overview' }, ['forecast:r']],
+    [{ type: 'historical-forecast', start: 1, end: 2 }, ['forecast:r']]
+  ]
+  for (const [query, perms] of cases) {
+    let seen = null
+    const ctx = makeMockCtx(async () => [[]])
+    ctx.authLib.tokenHasPerms = async (token, write, requestedPerms) => {
+      seen = { token, write, requestedPerms }
+      return true
+    }
+    await exportRoute(ctx, makeMockReq(query), makeMockReply())
+    t.alike(seen, { token: 'test-token', write: false, requestedPerms: perms }, `${query.type} requires ${perms[0]}`)
+  }
+})
+
+test('exportRoute rejects a token without the required permission with 401', async (t) => {
+  const ctx = makeMockCtx(async () => [[makeMiner('1')]])
+  ctx.authLib.tokenHasPerms = async () => false
+  const reply = makeMockReply()
+  await exportRoute(ctx, makeMockReq({ type: 'miner-stats' }), reply)
+
+  t.is(reply.statusCode, 401)
+  t.is(reply.body.message, 'ERR_AUTH_FAIL_NO_PERMS')
+})
+
+test('exportRoute skips the permission check when auth is disabled', async (t) => {
+  const ctx = makeMockCtx(async () => [[makeMiner('1')]])
+  ctx.noAuth = true
+  ctx.authLib.tokenHasPerms = async () => {
+    throw new Error('should not be called')
+  }
+  const reply = makeMockReply()
+  await exportRoute(ctx, makeMockReq({ type: 'miner-stats' }), reply)
+
+  t.is(reply.statusCode, 200)
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
