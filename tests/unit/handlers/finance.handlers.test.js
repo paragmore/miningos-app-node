@@ -16,6 +16,8 @@ const {
   getSubsidyFees,
   calculateSubsidyFeesSummary,
   getRevenue,
+  getRevenueHourly,
+  processHourlyRevenues,
   calculateRevenueSummary,
   getRevenueSummary,
   calculateDetailedRevenueSummary,
@@ -154,6 +156,61 @@ test('getEnergyBalance - empty ork results', async (t) => {
   t.ok(result.log, 'should return log array')
   t.ok(result.summary, 'should return summary')
   t.is(result.log.length, 0, 'log should be empty with no data')
+  t.pass()
+})
+
+test('getEnergyBalance - reads a grouped range-string ts on the electricity stats', async (t) => {
+  // Both stats-history queries pass groupRange, so the worker answers with ts as a range
+  // string. Read raw, getStartOfDay turns it into NaN and every energy reading is dropped,
+  // leaving curtailment null on a day that has one.
+  const dayTs = 1700006400000
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }]
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (method === 'tailLogCustomRangeAggr') {
+          return [{ type: 'powermeter', data: [{ ts: dayTs, val: { site_power_w: 5000 } }], error: null }]
+        }
+        if (method === 'getWrkExtData') {
+          if (payload.query && payload.query.key === 'transactions') {
+            return [{ ts: dayTs, transactions: [{ ts: dayTs, changed_balance: 0.5 }] }]
+          }
+          if (payload.query && payload.query.key === 'current_price') {
+            return [{ currentPrice: 40000 }]
+          }
+          if (payload.query && payload.query.key === 'stats-history') {
+            return [{
+              data: [{
+                ts: `${dayTs}-${dayTs + 86399999}`,
+                energy_aggr: { active_energy_in_aggr: 1, ute_energy_aggr: 1 }
+              }]
+            }]
+          }
+        }
+        if (method === 'getGlobalConfig') {
+          return { nominalPowerAvailability_MW: 10 }
+        }
+        return {}
+      }
+    },
+    globalDataLib: {
+      getGlobalData: async () => []
+    }
+  })
+
+  const mockReq = {
+    query: { start: 1700000000000, end: 1700100000000, period: 'daily' }
+  }
+
+  const result = await getEnergyBalance(mockCtx, mockReq, {})
+  const day = result.log.find(entry => entry.ts === dayTs)
+
+  t.ok(day, 'should return the day')
+  // consumptionMWh is 5000 W over 24 h = 0.12 MWh, so 1 MWh in leaves 0.88 curtailed
+  t.is(day.curtailmentMWh, 0.88, 'should derive curtailment from the range-string bucket')
+  t.ok(day.operationalIssuesRate !== null, 'should derive the operational issues rate too')
   t.pass()
 })
 
@@ -1239,5 +1296,55 @@ test('calculateHashRevenueSummary - handles empty log', (t) => {
   t.is(summary.avgHashCostUSDPerPHsPerDay, null, 'should be null')
   t.is(summary.avgNetworkHashPriceBTCPerPHsPerDay, null, 'should be null')
   t.is(summary.avgNetworkHashPriceUSDPerPHsPerDay, null, 'should be null')
+  t.pass()
+})
+
+test('processHourlyRevenues - merges hourlyRevenues buckets across orks', (t) => {
+  const results = [
+    { ts: 1, hourlyRevenues: [{ ts: 1700000000000, revenue: 0.01 }, { ts: 1700003600000, revenue: 0.02 }] },
+    [{ ts: 2, hourlyRevenues: [{ ts: 1700000000000, revenue: 0.005 }] }]
+  ]
+  const log = processHourlyRevenues(results)
+  t.is(log.length, 2, 'one entry per hour bucket')
+  t.is(log[0].revenueBTC, 0.015, 'sums the same bucket across orks (0.01 + 0.005)')
+  t.is(log[1].revenueBTC, 0.02, 'carries the second bucket')
+  t.pass()
+})
+
+test('processHourlyRevenues - handles empty and errored results', (t) => {
+  t.alike(processHourlyRevenues([]), [], 'empty results')
+  t.alike(processHourlyRevenues([{ error: 'timeout' }, { ts: 1 }]), [], 'ignores errors and missing hourlyRevenues')
+  t.pass()
+})
+
+test('getRevenueHourly - queries the pool with aggrHourly and shapes the log', async (t) => {
+  let payload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'k' }] },
+    net_r0: {
+      jRequest: async (key, method, p) => {
+        payload = p
+        return { ts: 1, hourlyRevenues: [{ ts: 1700000000000, revenue: 0.03 }] }
+      }
+    }
+  })
+  const result = await getRevenueHourly(mockCtx, { query: { start: 1700000000000, end: 1700007200000, pool: 'ocean' } })
+  t.is(payload.type, 'minerpool-ocean', 'targets the requested pool')
+  t.is(payload.query.aggrHourly, 1, 'requests hourly aggregation')
+  t.is(payload.query.key, 'transactions', 'reads the transactions source')
+  t.is(result.log[0].revenueBTC, 0.03, 'exposes hourly revenue in BTC')
+  t.is(result.summary.totalRevenueBTC, 0.03, 'summary totals the buckets')
+  t.pass()
+})
+
+test('getRevenueHourly - no pool param falls back to the generic minerpool type', async (t) => {
+  let payload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'k' }] },
+    net_r0: { jRequest: async (key, method, p) => { payload = p; return [] } }
+  })
+  const result = await getRevenueHourly(mockCtx, { query: { start: 1, end: 2 } })
+  t.is(payload.type, 'minerpool', 'defaults to the generic minerpool type')
+  t.alike(result, { log: [], summary: { totalRevenueBTC: 0 } }, 'empty source yields an empty shape')
   t.pass()
 })

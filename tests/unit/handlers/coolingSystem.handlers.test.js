@@ -62,8 +62,8 @@ const createMockEquipment = () => ({
     { equipment: 'TC-7501', is_active: true, miner_side_out_temp: { value: 37.1, unit: '°C' }, tower_side_in_temp: { value: 29.2, unit: '°C' }, tower_side_out_temp: { value: 36.9, unit: '°C' }, tcv_position: { value: 55, unit: '%' } }
   ],
   cooling_towers: [
-    { equipment: 'TR-7501', is_running: true, fan_status: 'Running', fan_cv: { value: 60, unit: 'CV' }, level: { value: 82, unit: '%' }, vibration: { value: 0.8, unit: 'mm/s', status: 'Normal' } },
-    { equipment: 'TR-7502', is_running: true, fan_status: 'Running', fan_cv: { value: 45, unit: 'CV' }, level: { value: 85, unit: '%' }, vibration: { value: 0.6, unit: 'mm/s', status: 'Normal' } }
+    { equipment: 'TR-7501', circuit: 'COOLING_TOWER', is_running: true, fan_status: 'Running', fan_cv: { value: 60, unit: 'CV' }, level: { value: 82, unit: '%' }, vibration: { value: 0.8, unit: 'mm/s', status: 'Normal' } },
+    { equipment: 'TR-7502', circuit: 'HVAC_CONDENSER', is_running: true, fan_status: 'Running', fan_cv: { value: 45, unit: 'CV' }, level: { value: 85, unit: '%' }, vibration: { value: 0.6, unit: 'mm/s', status: 'Normal' } }
   ],
   valves: [
     { equipment: 'PCV-7502', position: { value: 12, unit: '%' } },
@@ -403,7 +403,8 @@ test('buildMinersCircuit1View - builds view from enriched equipment', (t) => {
   t.ok(view.lines, 'should have lines')
   t.is(view.lines.length, 2, 'should have 2 lines')
   t.ok(view.pumps, 'should have pumps')
-  t.is(view.pumps.length, 3, 'should have 3 miner loop pumps')
+  t.is(view.pumps.length, 2, 'should have 2 miner loop pumps (makeup pump excluded)')
+  t.absent(view.pumps.find(p => p.id === 'B-7515'), 'makeup pump not in pumps array')
   // Check enriched data with units
   t.ok(view.pumps[0].speed.unit, 'pump speed should have unit')
   t.ok(view.pumps[0].current.unit, 'pump current should have unit')
@@ -685,6 +686,50 @@ test('buildMinersCircuit1View - control_valves null when config has none', (t) =
   const view = buildMinersCircuit1View(equipment, config)
 
   t.is(view.control_valves, null, 'should be null when no control_valves configured')
+  t.pass()
+})
+
+test('buildMinersCircuit1View - makeup system from global config', (t) => {
+  const equipment = createMockEquipment()
+  const config = createMockConfig()
+  config.cooling_system.makeup = {
+    tank: 'TQ-7501',
+    level_sensor: 'LIT-7503',
+    level_control_valve: 'LCV-7501',
+    on_off_valves: ['LCV-7501', 'LCV-7502'],
+    pump: 'B-7515',
+    defaults: {
+      tank_volume: { value: 0.5, unit: 'm³' },
+      pump_head: { value: 40, unit: 'm.c.a' },
+      pump_flow: { value: 2, unit: 'm³/h' }
+    }
+  }
+  const view = buildMinersCircuit1View(equipment, config)
+
+  t.ok(view.makeup, 'should have makeup system')
+  t.is(view.makeup.tank.id, 'TQ-7501', 'tank id from config')
+  t.is(view.makeup.tank.description, 'Make-Up Tank (0.5 m³)', 'tank description carries volume')
+  t.alike(view.makeup.tank.volume, { value: 0.5, unit: 'm³' }, 'tank volume from defaults')
+  t.is(view.makeup.tank.level.value, 76, 'tank level from level sensor')
+  t.is(view.makeup.pump.id, 'B-7515', 'makeup pump id from config')
+  t.is(view.makeup.pump.description, 'Make-Up Pump', 'pump description')
+  t.is(view.makeup.pump.status, 'Standby', 'pump status from equipment')
+  t.alike(view.makeup.pump.rated_head, { value: 40, unit: 'm.c.a' }, 'pump rated head from defaults')
+  t.alike(view.makeup.pump.rated_flow, { value: 2, unit: 'm³/h' }, 'pump rated flow from defaults')
+  t.is(view.makeup.level_control_valve.id, 'LCV-7501', 'level control valve id')
+  t.is(view.makeup.on_off_valves.length, 2, 'on/off valves from config')
+  t.absent(view.pumps.find(p => p.id === 'B-7515'), 'makeup pump excluded from pumps array')
+  t.pass()
+})
+
+test('buildMinersCircuit1View - makeup tank description without volume', (t) => {
+  const equipment = createMockEquipment()
+  const config = createMockConfig()
+  config.cooling_system.makeup = { tank: 'TQ-7501', level_sensor: 'LIT-7503' }
+  const view = buildMinersCircuit1View(equipment, config)
+
+  t.is(view.makeup.tank.description, 'Make-Up Tank', 'description without volume suffix')
+  t.is(view.makeup.pump, null, 'no pump when not configured')
   t.pass()
 })
 
@@ -1406,6 +1451,30 @@ test('6 - differential_pressure populated when per-group PTs configured', (t) =>
   t.is(dp[0].supply.tag, 'PT-7501A', 'supply PT tag')
   t.is(dp[0].return.tag, 'PT-7501B', 'return PT tag')
   t.is(dp[0].delta_p.value, 1.8, 'group delta-p = supply - return')
+  t.pass()
+})
+
+test('6 - differential_pressure from single-transmitter array (supply/return/diff)', (t) => {
+  const equipment = createMockEquipment()
+  equipment.pressures = [
+    ...equipment.pressures,
+    { equipment: 'PT-7502-A', value: 2.81, unit: 'bar', supply_pressure: 2.81, return_pressure: 2.2, differential_pressure: 0.61 },
+    { equipment: 'PT-7502-B', value: 2.9, unit: 'bar', supply_pressure: 2.9, return_pressure: 2.3 }
+  ]
+  const config = createMockConfig()
+  config.cooling_system.miner_loop.line1.group_pressure_sensors = ['PT-7502-A', 'PT-7502-B']
+  const view = buildMinersCircuit1View(equipment, config)
+
+  const dp = view.lines[0].differential_pressure
+  t.is(dp.length, 2, 'one row per transmitter')
+  // Group 1: device-provided differential is preferred
+  t.is(dp[0].supply.tag, 'PT-7502-A', 'supply tag = transmitter id')
+  t.is(dp[0].return.tag, 'PT-7502-A', 'return tag = same transmitter id')
+  t.is(dp[0].supply.reading.value, 2.81, 'supply from supply_pressure')
+  t.is(dp[0].return.reading.value, 2.2, 'return from return_pressure')
+  t.is(dp[0].delta_p.value, 0.61, 'uses device-provided differential_pressure')
+  // Group 2: no device differential -> derived from supply - return
+  t.is(dp[1].delta_p.value, 0.6, 'derived delta-p = supply - return when DP absent')
   t.pass()
 })
 

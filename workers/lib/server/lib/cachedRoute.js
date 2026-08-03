@@ -14,10 +14,14 @@ async function cachedRoute (ctx, ckeyParts, apiPath, func, overwriteCache = fals
 
   const ckey = ckeyParts.map(k => k ?? '-').join(':')
 
-  if (!overwriteCache) {
-    const cached = lru.get(ckey)
-    if (cached !== undefined) return cached
+  if (overwriteCache) {
+    const data = await func()
+    lru.set(ckey, data)
+    return data
   }
+
+  const cached = lru.get(ckey)
+  if (cached !== undefined) return cached
 
   const requests = ctx.queuedRequests
 

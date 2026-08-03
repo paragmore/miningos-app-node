@@ -195,3 +195,34 @@ test('cachedRoute - null key parts', async (t) => {
   await cachedRoute(mockCtx, ['test', null, null], '/test', async () => ({}), false)
   t.pass()
 })
+
+test('cachedRoute - overwriteCache bypasses in-flight dedup and refetches', async (t) => {
+  const mockCtx = {
+    conf: { cacheTiming: { '/test': '30s' } },
+    lru_30s: { get: () => undefined, set: () => {} },
+    queuedRequests: new Map()
+  }
+
+  let inflightResolved = false
+  const inflight = cachedRoute(mockCtx, ['k'], '/test', async () => {
+    await new Promise(resolve => setTimeout(resolve, 50))
+    inflightResolved = true
+    return { data: 'stale' }
+  }, false)
+
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.ok(mockCtx.queuedRequests.has('k'), 'a request is already in flight for the key')
+
+  let overwriteRan = false
+  const fresh = await cachedRoute(mockCtx, ['k'], '/test', async () => {
+    overwriteRan = true
+    return { data: 'fresh' }
+  }, true)
+
+  t.is(fresh.data, 'fresh', 'overwriteCache returns its own fresh result')
+  t.ok(overwriteRan, 'overwriteCache ran its own fetch instead of joining the queue')
+  t.absent(inflightResolved, 'overwriteCache did not block on the in-flight request')
+
+  await inflight
+  t.pass()
+})

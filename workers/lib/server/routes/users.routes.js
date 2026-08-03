@@ -51,7 +51,7 @@ module.exports = (ctx) => [
     url: ENDPOINTS.USERS,
     onRequest: async (req, rep) => {
       await authCheck(ctx, req, rep)
-      await capCheck(ctx, req, rep, ['users:w'])
+      await capCheck(ctx, req, rep, ['users:r'], false)
     },
     handler: async (req, rep) => {
       const users = await listUsers(ctx, req, rep)

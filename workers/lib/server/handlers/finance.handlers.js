@@ -9,6 +9,7 @@ const {
   GLOBAL_DATA_TYPES
 } = require('../../constants')
 const { getStartOfDay, safeDiv, runParallel } = require('../../utils')
+const { parseEntryTs } = require('../../metrics.utils')
 const { aggregateByPeriod } = require('../../period.utils')
 const {
   validateStartEnd,
@@ -216,6 +217,10 @@ function processPriceData (results) {
   return daily
 }
 
+// Both callers request stats-history with groupRange, so ts arrives as a range string rather
+// than a number -- see parseEntryTs. getStartOfDay would divide that into NaN and every reading
+// would be dropped by the guard below, leaving curtailment and operational issues with no data
+// at all rather than a wrong value.
 function processEnergyData (results, aggrField) {
   const daily = {}
   for (const res of results) {
@@ -228,7 +233,7 @@ function processEnergyData (results, aggrField) {
       if (Array.isArray(items)) {
         for (const item of items) {
           if (!item) continue
-          const ts = getStartOfDay(item.ts || item.timestamp)
+          const ts = getStartOfDay(parseEntryTs(item.ts || item.timestamp))
           if (!ts) continue
           const energyAggr = item[AGGR_FIELDS.ENERGY_AGGR]
           if (energyAggr && energyAggr[aggrField]) {
@@ -754,6 +759,53 @@ function calculateRevenueSummary (log) {
     totalFeesBTC: totals.feesBTC,
     totalNetRevenueBTC: totals.netRevenueBTC
   }
+}
+
+// ==================== Revenue Hourly ====================
+
+// Hourly pool revenue estimates. The minerpool worker's _aggrTransactions
+// produces hourlyRevenues (BTC per hour) when queried with aggrHourly; this
+// exposes it directly rather than fanning the tail-log call out on the client.
+async function getRevenueHourly (ctx, req) {
+  const { start, end } = validateStartEnd(req)
+  const pool = req.query.pool || null
+
+  const type = pool ? WORKER_TYPES.MINERPOOL + '-' + pool : WORKER_TYPES.MINERPOOL
+
+  const results = await ctx.dataProxy.requestData(RPC_METHODS.GET_WRK_EXT_DATA, {
+    type,
+    query: { key: MINERPOOL_EXT_DATA_KEYS.TRANSACTIONS, start, end, aggrHourly: 1 }
+  })
+
+  const log = processHourlyRevenues(results)
+  const summary = calculateHourlyRevenueSummary(log)
+
+  return { log, summary }
+}
+
+function processHourlyRevenues (results) {
+  const byHour = {}
+  for (const res of results) {
+    if (!res || res.error) continue
+    const items = Array.isArray(res) ? res : [res]
+    for (const item of items) {
+      const hourly = item && item.hourlyRevenues
+      if (!Array.isArray(hourly)) continue
+      for (const bucket of hourly) {
+        if (!bucket || bucket.ts == null) continue
+        byHour[bucket.ts] = (byHour[bucket.ts] || 0) + (Number(bucket.revenue) || 0)
+      }
+    }
+  }
+
+  return Object.keys(byHour)
+    .sort((a, b) => a - b)
+    .map(ts => ({ ts: Number(ts), revenueBTC: byHour[ts] }))
+}
+
+function calculateHourlyRevenueSummary (log) {
+  const totalRevenueBTC = log.reduce((sum, entry) => sum + (entry.revenueBTC || 0), 0)
+  return { totalRevenueBTC }
 }
 
 // ==================== Revenue Summary ====================
@@ -1285,6 +1337,9 @@ module.exports = {
   getCostSummary,
   getSubsidyFees,
   getRevenue,
+  getRevenueHourly,
+  processHourlyRevenues,
+  calculateHourlyRevenueSummary,
   getRevenueSummary,
   getHashRevenue,
   getProductionCosts,

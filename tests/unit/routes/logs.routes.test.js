@@ -78,3 +78,23 @@ test('logs routes - preHandler functions', (t) => {
   testPreHandlerFunctions(t, routes, 'logs')
   t.pass()
 })
+
+test('logs routes - limit cap admits the widest limit the UI sends', (t) => {
+  const mockCtx = {}
+  const routes = require('../../../workers/lib/server/routes/logs.routes.js')(mockCtx)
+
+  // the dashboard power-mode timeline asks for 7 days of stat-1m. Capping below
+  // this would reject that chart outright, so it is pinned rather than assumed.
+  const DASHBOARD_LIMIT = 10080
+
+  const tailLogRoutes = routes.filter(r => r.url?.includes('tail-log') && !r.url.includes('range'))
+  t.is(tailLogRoutes.length, 2, 'should cover both the single and multi tail-log routes')
+
+  tailLogRoutes.forEach(route => {
+    const { limit } = route.schema.querystring.properties
+    t.is(limit.minimum, 1, `${route.url} should reject a non-positive limit`)
+    t.ok(limit.maximum >= DASHBOARD_LIMIT, `${route.url} should admit the dashboard limit`)
+  })
+
+  t.pass()
+})

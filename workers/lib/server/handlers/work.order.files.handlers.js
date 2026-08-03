@@ -10,6 +10,7 @@ const {
   WORK_ORDER_FILE_MIME_ALLOWLIST_DEFAULT
 } = require('../../constants')
 const { getWorkOrderRackId } = require('../lib/work.orders')
+const { safeContentDispositionFilename } = require('../lib/queryUtils')
 
 async function _loadWorkOrder (ctx, id) {
   const results = await ctx.dataProxy.requestData('listThings', {
@@ -126,7 +127,7 @@ async function downloadWorkOrderFile (ctx, req, rep) {
   }
 
   rep.header('content-type', file.mime)
-  rep.header('content-disposition', `attachment; filename="${file.name}"`)
+  rep.header('content-disposition', `attachment; filename="${safeContentDispositionFilename(file.name)}"`)
   rep.send(Buffer.from(got.contentBase64, 'base64'))
 }
 

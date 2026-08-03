@@ -326,17 +326,17 @@ test('Api', { timeout: 90000 }, async (main) => {
       }
     })
 
-    await n.test('should fail for readonly user (capCheck requires write)', async (t) => {
+    await n.test('should succeed for readonly user (GET checks miner:r)', async (t) => {
       const headers = await createAuthHeaders(readonlyUser)
       try {
         await httpClient.get(minersApi, { headers, encoding })
-        t.fail('Expected error for readonly user')
+        t.pass()
       } catch (e) {
-        t.is(e.response.message.includes('ERR_AUTH_FAIL'), true)
+        t.fail(`Expected success but got: ${e.message || e}`)
       }
     })
 
-    await n.test('should succeed for site operator user (has actions:rw)', async (t) => {
+    await n.test('should succeed for site operator user (has miner:rw)', async (t) => {
       const headers = await createAuthHeaders(siteOperatorUser)
       try {
         await httpClient.get(minersApi, { headers, encoding })
@@ -798,22 +798,22 @@ test('Api', { timeout: 90000 }, async (main) => {
 
   await main.test('Api: get tail-log', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.TAIL_LOG}?key=stat-5m`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, admin1, encoding)
   })
 
   await main.test('Api: get tail-log/multi', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.TAIL_LOG_MULTI}?keys=[]`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, admin1, encoding)
   })
 
   await main.test('Api: get tail-log/range-aggr', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.TAIL_LOG_RANGE_AGGR}?keys=[{"type":1,"startDate":1,"endDate":1}]`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, admin1, encoding)
   })
 
   await main.test('Api: get history-log', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.HISTORY_LOG}?logType=alerts`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, admin1, encoding)
   })
 
   await main.test('Api: get global/data', async (n) => {
@@ -877,7 +877,7 @@ test('Api', { timeout: 90000 }, async (main) => {
 
   await main.test('Api: get site/status/live with overwriteCache', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.SITE_STATUS_LIVE}?overwriteCache=true`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, siteOperatorUser, encoding)
   })
 
   await main.test('Api: get site/status/live - response structure', async (n) => {
@@ -966,12 +966,12 @@ test('Api', { timeout: 90000 }, async (main) => {
 
   await main.test('Api: get finance/ebitda', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.FINANCE_EBITDA}?start=1700000000000&end=1700100000000`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, admin1, encoding)
   })
 
   await main.test('Api: get finance/cost-summary', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.FINANCE_COST_SUMMARY}?start=1700000000000&end=1700100000000`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, admin1, encoding)
   })
 
   await main.test('Api: get ext-data', async (n) => {
@@ -981,17 +981,17 @@ test('Api', { timeout: 90000 }, async (main) => {
 
   await main.test('Api: get actions', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.ACTIONS}?queries=[]`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, siteOperatorUser, encoding)
   })
 
   await main.test('Api: get actions/batch', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.ACTIONS_BATCH}?ids=1,2`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, siteOperatorUser, encoding)
   })
 
   await main.test('Api: get actions/:type/:id', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.ACTIONS_SINGLE}`.replace(':type', 'done').replace(':id', 1)
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, siteOperatorUser, encoding)
   })
 
   await main.test('Api: post actions/voting', async (n) => {
@@ -1003,19 +1003,19 @@ test('Api', { timeout: 90000 }, async (main) => {
   await main.test('Api: post actions/voting/batch', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.ACTIONS_VOTING_BATCH}`
     const body = { batchActionsPayload: [], batchActionUID: '' }
-    await testPostEndpointSecurityWithPermissions(n, httpClient, api, invalidToken, body, readonlyUser, 'ERR_WRITE_PERM_REQUIRED', siteOperatorUser, encoding)
+    await testPostEndpointSecurityWithPermissions(n, httpClient, api, invalidToken, body, readonlyUser, 'ERR_AUTH_FAIL_NO_PERMS', siteOperatorUser, encoding)
   })
 
   await main.test('Api: put actions/voting/:id/vote', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.ACTIONS_VOTE}`.replace(':id', 1)
     const body = { approve: false }
-    await testPutEndpointSecurityWithPermissions(n, httpClient, api, invalidToken, body, readonlyUser, 'ERR_WRITE_PERM_REQUIRED', siteOperatorUser, encoding)
+    await testPutEndpointSecurityWithPermissions(n, httpClient, api, invalidToken, body, readonlyUser, 'ERR_AUTH_FAIL_NO_PERMS', siteOperatorUser, encoding)
   })
 
   await main.test('Api: delete actions/voting/cancel', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.ACTIONS_CANCEL}?ids=1`
     // Fastify rejects application/json with an empty body; send {} so json encoding is valid
-    await testDeleteEndpointSecurityWithPermissions(n, httpClient, api, invalidToken, readonlyUser, 'ERR_WRITE_PERM_REQUIRED', siteOperatorUser, { body: {} }, encoding)
+    await testDeleteEndpointSecurityWithPermissions(n, httpClient, api, invalidToken, readonlyUser, 'ERR_AUTH_FAIL_NO_PERMS', siteOperatorUser, { body: {} }, encoding)
   })
 
   await main.test('Api: post users', async (n) => {
@@ -1063,45 +1063,41 @@ test('Api', { timeout: 90000 }, async (main) => {
       })
     })
 
-    await n.test('admin user should not access other admins or superadmin user data', async (t) => {
+    await n.test('admin user should not access superadmin user data', async (t) => {
       const headers = await createAuthHeaders(admin1)
       const { body: data } = await httpClient.get(api, { headers, encoding })
       t.is(data.users.length > 1, true)
-      data.users.forEach(user => {
-        if (user.role === 'superadmin' || user.role === 'admin') {
-          t.fail()
-        }
-      })
+      t.ok(data.users.every(u => u.role !== 'superadmin'), 'admin should not see superadmin')
+      t.ok(data.users.some(u => u.role === 'admin'), 'admin can see other admins per roleManagement')
     })
   })
 
   await main.test('Api: put users', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.USERS}`
+    const headers = await createAuthHeaders(superadminUser)
+    const { body: list } = await httpClient.get(api, { headers, encoding })
+    const target = list.users.find(u => u.email === 'dev@test.test')
 
     await n.test('api should fail due to invalid permissions', async (t) => {
+      t.ok(target, 'test user dev@test.test should exist')
       await testEndpointWithAuthAndError(t, httpClient, 'put', api, readonlyUser, 'ERR_AUTH_FAIL_NO_PERMS', {
-        body: { data: { id: 8, email: 'dev@test.test', role: 'admin' } },
+        body: { data: { id: target.id, email: 'dev@test.test', role: 'admin' } },
         encoding
       })
     })
 
     await n.test('api should succeed for valid permissions', async (t) => {
-      const headers = await createAuthHeaders(superadminUser)
-      const { body: list } = await httpClient.get(api, { headers, encoding })
-      const target = list.users.find(u => u.email === 'dev@test.test')
-      if (!target) {
-        t.fail('test user dev@test.test not found')
-        return
-      }
+      t.ok(target, 'test user dev@test.test should exist')
       await testEndpointWithAuth(t, httpClient, 'put', api, superadminUser, {
         body: { data: { id: target.id, email: 'dev@test.test', role: 'admin' } },
         encoding
       })
     })
 
-    await n.test('api should fail for missing admin permissions', async (t) => {
-      await testEndpointWithAuthAndError(t, httpClient, 'put', api, newCreatedUser, 'ERR_AUTH_FAIL_NO_PERMS', {
-        body: { data: { id: 8, email: 'dev@test.test', role: 'admin' } },
+    await n.test('api should fail for missing users write permissions', async (t) => {
+      t.ok(target, 'test user dev@test.test should exist')
+      await testEndpointWithAuthAndError(t, httpClient, 'put', api, siteOperatorUser, 'ERR_AUTH_FAIL_NO_PERMS', {
+        body: { data: { id: target.id, email: 'dev@test.test', role: 'read_only_user' } },
         encoding
       })
     })
@@ -1139,7 +1135,7 @@ test('Api', { timeout: 90000 }, async (main) => {
 
   await main.test('Api: get finance/energy-balance', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.FINANCE_ENERGY_BALANCE}?start=1700000000000&end=1700100000000`
-    await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)
+    await testGetEndpointSecurity(n, httpClient, api, invalidToken, admin1, encoding)
   })
 
   await main.test('Token expiration: api should fail due to token expiration', async (t) => {

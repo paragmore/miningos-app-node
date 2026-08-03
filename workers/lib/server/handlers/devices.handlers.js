@@ -7,14 +7,20 @@ const {
   WORKER_TAGS,
   DEVICE_LIST_FIELDS
 } = require('../../constants')
-const { parseJsonQueryParam, flattenRpcResults } = require('../../utils')
+const { parseJsonQueryParam, flattenRpcResults, escapeRegex } = require('../../utils')
+const { assertSafeMongoQuery } = require('../lib/queryUtils')
 
 const CABINET_TAGS_QUERY = { tags: { $in: [WORKER_TAGS.POWERMETER, WORKER_TAGS.TEMP_SENSOR] } }
 
 function parseListQuery (req) {
+  const filter = req.query.filter ? parseJsonQueryParam(req.query.filter, 'ERR_FILTER_INVALID_JSON') : null
+  if (filter) assertSafeMongoQuery(filter)
+  const sort = req.query.sort ? parseJsonQueryParam(req.query.sort, 'ERR_SORT_INVALID_JSON') : null
+  if (sort) assertSafeMongoQuery(sort)
+
   return {
-    filter: req.query.filter ? parseJsonQueryParam(req.query.filter, 'ERR_FILTER_INVALID_JSON') : null,
-    sort: req.query.sort ? parseJsonQueryParam(req.query.sort, 'ERR_SORT_INVALID_JSON') : null,
+    filter,
+    sort,
     fields: req.query.fields ? parseJsonQueryParam(req.query.fields, 'ERR_FIELDS_INVALID_JSON') : null,
     search: req.query.search || null,
     offset: Number(req.query.offset) || 0,
@@ -25,11 +31,12 @@ function parseListQuery (req) {
 function buildMingoFilter (filter, search) {
   if (!filter && !search) return {}
 
-  const searchFilter = search
+  const escaped = search ? escapeRegex(search) : null
+  const searchFilter = escaped
     ? {
         $or: [
-          { id: { $regex: search, $options: 'i' } },
-          { ip: { $regex: search, $options: 'i' } }
+          { id: { $regex: escaped, $options: 'i' } },
+          { ip: { $regex: escaped, $options: 'i' } }
         ]
       }
     : null

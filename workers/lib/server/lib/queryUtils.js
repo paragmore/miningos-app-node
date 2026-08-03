@@ -6,11 +6,48 @@
  * text search, multi-ork result flattening, sorting, and pagination.
  */
 
+const LOGICAL_OPERATORS = new Set(['$and', '$or', '$nor', '$not', '$elemMatch'])
+
 const MONGO_OPERATORS = new Set([
   '$gt', '$gte', '$lt', '$lte', '$eq', '$ne',
   '$in', '$nin', '$regex', '$options', '$exists',
   '$elemMatch', '$not', '$type', '$size'
 ])
+
+/** Operators that enable code execution / unbounded queries — never accept from clients. */
+const DANGEROUS_OPERATORS = new Set([
+  '$where', '$expr', '$function', '$accumulator',
+  '$jsonSchema', '$text', '$code', '$javascript'
+])
+
+function escapeRegex (s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Recursively rejects dangerous Mongo operators in client-supplied queries.
+ * @param {*} value
+ * @throws {Error} ERR_INVALID_FILTER
+ */
+function assertSafeMongoQuery (value) {
+  if (value == null || typeof value !== 'object') return value
+
+  if (Array.isArray(value)) {
+    value.forEach(assertSafeMongoQuery)
+    return value
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (DANGEROUS_OPERATORS.has(key)) {
+      throw new Error('ERR_INVALID_FILTER')
+    }
+    if (key.startsWith('$') && !LOGICAL_OPERATORS.has(key) && !MONGO_OPERATORS.has(key)) {
+      throw new Error('ERR_INVALID_FILTER')
+    }
+    assertSafeMongoQuery(child)
+  }
+  return value
+}
 
 /**
  * Gets a nested value from an object using a dot-separated path.
@@ -32,26 +69,22 @@ function getNestedValue (obj, path) {
 /**
  * Recursively maps clean field names to internal dot-paths in a MongoDB-style filter.
  * Handles $and, $or, $not, $elemMatch operators by recursing into their values.
- * Unknown keys are passed through as-is (allows raw internal paths).
+ * Unknown field keys are passed through as-is (allows raw internal paths).
+ * Dangerous / unknown $-operators are rejected.
  *
  * @param {Object} filter - MongoDB-style filter object
  * @param {Object} fieldMap - Map of clean name → internal path
  * @returns {Object} Filter with mapped field names
- *
- * @example
- * mapFilterFields({ status: 'error' }, { status: 'last.snap.stats.status' })
- * // → { 'last.snap.stats.status': 'error' }
- *
- * mapFilterFields({ $or: [{ status: 'error' }, { hashrate: { $gt: 0 } }] }, fieldMap)
- * // → { $or: [{ 'last.snap.stats.status': 'error' }, { 'last.snap.stats.hashrate_mhs': { $gt: 0 } }] }
  */
 function mapFilterFields (filter, fieldMap) {
   if (!filter || typeof filter !== 'object') return filter
   if (Array.isArray(filter)) return filter.map(f => mapFilterFields(f, fieldMap))
 
+  assertSafeMongoQuery(filter)
+
   const mapped = {}
   for (const [key, value] of Object.entries(filter)) {
-    if (key === '$and' || key === '$or') {
+    if (key === '$and' || key === '$or' || key === '$nor') {
       mapped[key] = Array.isArray(value)
         ? value.map(f => mapFilterFields(f, fieldMap))
         : value
@@ -59,8 +92,13 @@ function mapFilterFields (filter, fieldMap) {
       mapped[key] = mapFilterFields(value, fieldMap)
     } else if (MONGO_OPERATORS.has(key)) {
       mapped[key] = value
+    } else if (key.startsWith('$')) {
+      throw new Error('ERR_INVALID_FILTER')
     } else {
       const mappedKey = fieldMap[key] || key
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        assertSafeMongoQuery(value)
+      }
       mapped[mappedKey] = value
     }
   }
@@ -73,35 +111,29 @@ function mapFilterFields (filter, fieldMap) {
  * @param {Object} sort - Sort spec: { field: 1 } (1=asc, -1=desc)
  * @param {Object} fieldMap - Map of clean name → internal path
  * @returns {Object} Sort with mapped field names
- *
- * @example
- * mapSortFields({ hashrate: -1 }, { hashrate: 'last.snap.stats.hashrate_mhs' })
- * // → { 'last.snap.stats.hashrate_mhs': -1 }
  */
 function mapSortFields (sort, fieldMap) {
   if (!sort || typeof sort !== 'object') return sort
   const mapped = {}
   for (const [key, value] of Object.entries(sort)) {
+    if (key.startsWith('$')) throw new Error('ERR_INVALID_FILTER')
     mapped[fieldMap[key] || key] = value
   }
   return mapped
 }
 
 /**
- * Builds a text search query as a multi-field $or with $regex.
+ * Builds a text search query as a multi-field $or with escaped $regex.
  *
  * @param {string} search - Search term
  * @param {Array<string>} searchFields - Internal field paths to search across
  * @returns {Object} MongoDB-style $or query
- *
- * @example
- * buildSearchQuery('192.168', ['id', 'opts.address'])
- * // → { $or: [{ id: { $regex: '192.168', $options: 'i' } }, { 'opts.address': { $regex: '192.168', $options: 'i' } }] }
  */
 function buildSearchQuery (search, searchFields) {
+  const escaped = escapeRegex(search)
   return {
     $or: searchFields.map(field => ({
-      [field]: { $regex: search, $options: 'i' }
+      [field]: { $regex: escaped, $options: 'i' }
     }))
   }
 }
@@ -178,6 +210,19 @@ function parseRacks (req) {
   return raw.split(',').map(r => r.trim()).filter(Boolean)
 }
 
+/**
+ * Sanitizes a filename for Content-Disposition (strips quotes/CRLF/path seps).
+ * @param {string} name
+ * @returns {string}
+ */
+function safeContentDispositionFilename (name) {
+  const base = String(name || 'download')
+    .replace(/[\r\n"\\]/g, '_')
+    .replace(/[/\\]/g, '_')
+    .slice(0, 200)
+  return base || 'download'
+}
+
 module.exports = {
   getNestedValue,
   mapFilterFields,
@@ -186,5 +231,10 @@ module.exports = {
   flattenOrkResults,
   sortItems,
   paginateResults,
-  parseRacks
+  parseRacks,
+  assertSafeMongoQuery,
+  escapeRegex,
+  safeContentDispositionFilename,
+  MONGO_OPERATORS,
+  DANGEROUS_OPERATORS
 }

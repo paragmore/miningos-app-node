@@ -164,7 +164,8 @@ function composeSiteStatus (
   tailLogResults,
   poolDataResults,
   globalConfigResults,
-  consumption
+  consumption,
+  minerCoolingStatus = null
 ) {
   const minerStats = aggregateMinerStats(tailLogResults)
   const alertStats = aggregateAlertStats(tailLogResults)
@@ -188,7 +189,7 @@ function composeSiteStatus (
     alertStats.high +
     alertStats.medium
 
-  return {
+  const status = {
     hashrate: {
       value: hashrateValue,
       nominal: hashrateNominal,
@@ -227,6 +228,12 @@ function composeSiteStatus (
     },
     ts: Date.now()
   }
+
+  if (minerCoolingStatus) {
+    status.cooling = { status: minerCoolingStatus }
+  }
+
+  return status
 }
 
 module.exports = {

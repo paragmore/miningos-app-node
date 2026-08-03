@@ -54,6 +54,8 @@ const update = {
     properties: {
       rackId: { type: 'string', minLength: 1 },
       workOrderId: { type: 'string', minLength: 1 },
+      remarks: { type: 'string', maxLength: 4000 },
+      replacesPartCode: { type: 'string', minLength: 1, maxLength: 200 },
       info: {
         type: 'object',
         additionalProperties: true,

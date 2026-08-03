@@ -26,6 +26,7 @@ const energyRoutes = require('./routes/energy.routes')
 const workOrdersRoutes = require('./routes/work.orders.routes')
 const sparePartsRoutes = require('./routes/spare.parts.routes')
 const workOrderFilesRoutes = require('./routes/work.order.files.routes')
+const pduLayoutRoutes = require('./routes/pdu.layout.routes')
 
 /**
  * Collect all routes into a flat array for server injection.
@@ -58,7 +59,8 @@ function routes (ctx) {
     ...energyRoutes(ctx),
     ...workOrdersRoutes(ctx),
     ...sparePartsRoutes(ctx),
-    ...workOrderFilesRoutes(ctx)
+    ...workOrderFilesRoutes(ctx),
+    ...pduLayoutRoutes(ctx)
   ]
 }
 

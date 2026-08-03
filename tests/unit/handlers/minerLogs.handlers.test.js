@@ -63,6 +63,7 @@ function makeMockCtx ({ write = true, permissions = ['admin'], requestDataResult
 
 function makeActionResult (overrides = {}) {
   return {
+    voter: 'ops@example.com',
     targets: {
       'rack-001': {
         calls: [
@@ -223,6 +224,7 @@ test('getMinerLogDownloadStatus - returns ready with metadata when log is availa
 
 test('getMinerLogDownloadStatus - returns failed when no coreKey in targets', async (t) => {
   const action = {
+    voter: 'ops@example.com',
     targets: {
       'rack-001': {
         calls: [
@@ -248,6 +250,7 @@ test('getMinerLogDownloadStatus - returns failed when no coreKey in targets', as
 
 test('getMinerLogDownloadStatus - returns failed with generic error when no error_msg', async (t) => {
   const action = {
+    voter: 'ops@example.com',
     targets: {
       'rack-001': {
         calls: [{ result: { success: false } }]
@@ -315,6 +318,7 @@ test('getMinerLogDownloadStatus - failed status carries the worker error code an
 
   for (const errMsg of workerErrors) {
     const action = {
+      voter: 'ops@example.com',
       targets: {
         'rack-001': { calls: [{ result: { success: false, error_msg: errMsg } }] }
       }
@@ -334,6 +338,40 @@ test('getMinerLogDownloadStatus - failed status carries the worker error code an
       `should include a human-readable message for ${errMsg}`)
     t.not(reply.body.message, errMsg, 'message should not just repeat the raw code')
   }
+  t.pass()
+})
+
+test('getMinerLogDownloadStatus - returns 403 when voter does not match caller', async (t) => {
+  const ctx = {
+    authLib: { getTokenPerms: async () => ({}) },
+    dataProxy: {
+      requestData: async () => [makeActionResult({ voter: 'other@example.com' })]
+    }
+  }
+  const req = makeMockReq('miner-001', '42')
+  const reply = makeMockReply()
+
+  await getMinerLogDownloadStatus(ctx, req, reply)
+
+  t.is(reply.statusCode, 403, 'should return 403')
+  t.is(reply.body.error, 'ERR_AUTH_FAIL_NO_PERMS')
+  t.pass()
+})
+
+test('getMinerLogDownloadStatus - returns 404 when minerId mismatches meta', async (t) => {
+  const ctx = {
+    authLib: { getTokenPerms: async () => ({}) },
+    dataProxy: {
+      requestData: async () => [makeActionResult({ data: { minerId: 'other-miner' } })]
+    }
+  }
+  const req = makeMockReq('miner-001', '42')
+  const reply = makeMockReply()
+
+  await getMinerLogDownloadStatus(ctx, req, reply)
+
+  t.is(reply.statusCode, 404, 'should return 404')
+  t.is(reply.body.error, 'ERR_ACTION_NOT_FOUND')
   t.pass()
 })
 
@@ -401,6 +439,7 @@ test('getMinerLogFile - returns 503 when the log peer is unreachable', async (t)
 test('getMinerLogDownloadStatus - finds successful result across multiple racks', async (t) => {
   const expiresAt = Date.now() + 3600000
   const action = {
+    voter: 'ops@example.com',
     targets: {
       'rack-001': {
         calls: [{ result: { success: false, error_msg: 'offline' } }]

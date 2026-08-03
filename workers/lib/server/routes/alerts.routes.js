@@ -25,6 +25,7 @@ module.exports = (ctx) => {
         ctx,
         (req) => [
           'alerts/site',
+          req.query.type,
           req.query.filter,
           req.query.sort,
           req.query.search,
@@ -48,6 +49,7 @@ module.exports = (ctx) => {
           'alerts/history',
           req.query.start,
           req.query.end,
+          req.query.type,
           req.query.filter,
           req.query.search,
           req.query.sort,

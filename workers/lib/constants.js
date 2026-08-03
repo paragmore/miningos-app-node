@@ -37,7 +37,7 @@ const AUTH_PERMISSIONS = {
   REPORTING: 'reporting',
   SETTINGS: 'settings',
   TICKETS: 'tickets',
-  POWER_SPOT_FORECAST: 'power_spot_forecast',
+  FORECAST: 'forecast',
   POOL_CONFIG: 'pool_config',
   POOL_CONFIG_APPROVE: 'pool_config_approve',
   WORK_ORDER: 'work_order'
@@ -48,7 +48,9 @@ const WORK_ORDER_THING_TYPE = 'inventory-work_order'
 const WORK_ORDER_TYPES = { REGISTER: 1, MOVE: 2, MICROBT_MINER: 3, MICROBT_NON_MINER: 4 }
 const WORK_ORDER_TERMINAL_STATUSES = ['closed', 'cancelled']
 const WORK_ORDER_VALID_DEVICE_TYPES = ['miner', 'psu', 'hashboard', 'controller']
-const MINER_LOCATIONS = ['workshop.warehouse', 'workshop.lab', 'site.warehouse', 'site.lab', 'site.container', 'miner.room', 'vendor', 'acme.container', 'scrapped', 'disposed', 'unknown']
+const MINER_LOCATIONS = ['workshop.warehouse', 'workshop.lab', 'site.warehouse', 'site.lab', 'site.container', 'miner.room', 'vendor', 'emca.container', 'scrapped', 'disposed', 'unknown']
+const MINER_ROOM_LOCATION = 'miner.room'
+const MAINTENANCE_CONTAINER = 'maintenance'
 const SPARE_PART_INITIAL_LOCATION = 'site.warehouse'
 const FILE_TYPES = { WORK_ORDER: 'work_order' }
 const WORK_ORDER_FILE_MAX_BYTES_DEFAULT = 10 * 1024 * 1024
@@ -132,6 +134,7 @@ const ENDPOINTS = {
   SETTINGS: '/auth/settings',
   WORKER_CONFIG: '/auth/worker-config',
   THING_CONFIG: '/auth/thing-config',
+  PDU_LAYOUT: '/auth/pdu-layout',
 
   // WebSocket endpoint
   WEBSOCKET: '/ws',
@@ -167,6 +170,10 @@ const ENDPOINTS = {
   METRICS_CONSUMPTION: '/auth/metrics/consumption',
   METRICS_EFFICIENCY: '/auth/metrics/efficiency',
   METRICS_MINER_STATUS: '/auth/metrics/miner-status',
+  METRICS_MINERS_BY_CONTAINER: '/auth/metrics/miners/by-container',
+  METRICS_SITE_SUMMARY: '/auth/metrics/site/summary',
+  METRICS_INVENTORY_SUMMARY: '/auth/metrics/inventory/summary',
+  METRICS_REVENUE_HOURLY: '/auth/metrics/revenue/hourly',
   METRICS_POWER_MODE: '/auth/metrics/power-mode',
   METRICS_POWER_MODE_TIMELINE: '/auth/metrics/power-mode/timeline',
   METRICS_TEMPERATURE: '/auth/metrics/temperature',
@@ -197,6 +204,7 @@ const ENDPOINTS = {
   ENERGY_FORECAST: '/auth/energy/forecast',
   ENERGY_FORECAST_HISTORY: '/auth/energy/forecast/history',
   ENERGY_FORECAST_SETTINGS: '/auth/energy/forecast/settings',
+  ENERGY_FORECAST_OVERRIDE: '/auth/energy/forecast/override',
   ENERGY_AVAILABLE: '/auth/energy/available',
   // Work Order endpoints
   WORK_ORDERS: '/auth/work-orders',
@@ -209,6 +217,7 @@ const ENDPOINTS = {
   WORK_ORDER_ASSIGN: '/auth/work-orders/:id/assign',
   WORK_ORDER_CLOSE: '/auth/work-orders/:id/close',
   WORK_ORDER_CANCEL: '/auth/work-orders/:id/cancel',
+  WORK_ORDER_REOPEN: '/auth/work-orders/:id/reopen',
   // Spare Part endpoints
   SPARE_PARTS: '/auth/spare-parts',
   SPARE_PARTS_BATCH: '/auth/spare-parts/batch',
@@ -234,6 +243,10 @@ const RMA_COLUMNS = [
   'Repair Date',
   'Engineer'
 ]
+
+const MINER_MODEL_DISPLAY_NAMES = {
+  'miner-wm-m63spp': 'M63S'
+}
 
 const HTTP_METHODS = {
   GET: 'GET',
@@ -267,7 +280,8 @@ const OPERATIONS = {
   WORK_ORDER_UPDATE: 'work_order.update',
   WORK_ORDER_CLOSE: 'work_order.close',
   WORK_ORDER_CANCEL: 'work_order.cancel',
-  WORK_ORDER_ASSIGN: 'work_order.assign'
+  WORK_ORDER_ASSIGN: 'work_order.assign',
+  WORK_ORDER_REOPEN: 'work_order.reopen'
 }
 
 const DEFAULTS = {
@@ -294,6 +308,7 @@ const RPC_METHODS = {
   LIST_THINGS: 'listThings',
   GET_HISTORICAL_LOGS: 'getHistoricalLogs',
   TAIL_LOG: 'tailLog',
+  TAIL_LOG_MULTI: 'tailLogMulti',
   GLOBAL_CONFIG: 'getGlobalConfig',
   GET_CONFIGS: 'getConfigs'
 }
@@ -305,10 +320,15 @@ const WORKER_TYPES = {
   MINERPOOL: 'minerpool',
   MEMPOOL: 'mempool',
   ELECTRICITY: 'electricity',
+  INVENTORY: 'inventory',
   // The Siemens DCS worker registers its thing type as 'dcs-siemens'
   // (WrkDCSBase 'dcs' + '-siemens'); the stat log is tailed by this type.
   DCS: 'dcs-siemens'
 }
+
+// Spare parts are inventory things tagged t-inventory-miner_part-<type>
+const SPARE_PART_TYPES = ['controller', 'hashboard', 'psu']
+const sparePartTag = (type) => `t-inventory-miner_part-${type}`
 
 // BE-10 — historical cooling metric fields produced by the DCS worker stat spec
 // (miningos-wrk-dcs-siemens/workers/lib/stats.js -> libStats.specs.dcs.ops). Each
@@ -327,6 +347,9 @@ const COOLING_METRICS_AGGR_FIELDS = {
 
 const SEVERITY_LEVELS = new Set(['critical', 'high', 'medium', 'low'])
 
+// Rank for severity-aware sorting; higher = more severe, unknown severities rank lowest.
+const SEVERITY_RANK = { critical: 4, high: 3, medium: 2, low: 1 }
+
 const ALERTS_DEFAULT_LIMIT = 100
 const ALERTS_MAX_SITE_LIMIT = 200
 const ALERTS_MAX_HISTORY_LIMIT = 1000
@@ -334,10 +357,32 @@ const ALERTS_MAX_HISTORY_LIMIT = 1000
 // `message` carries the per-alert device/equipment tag (e.g. 'FIT-7513'), so it
 // is filterable and searchable on both endpoints.
 const SITE_ALERTS_FILTER_FIELDS = ['severity', 'type', 'container', 'deviceId', 'message']
-const SITE_ALERTS_SEARCH_FIELDS = ['id', 'code', 'container', 'message', 'description']
+const SITE_ALERTS_SEARCH_FIELDS = ['id', 'code', 'container', 'message', 'description', 'name']
 
-const HISTORY_FILTER_FIELDS = ['severity', 'code', 'deviceType', 'container', 'deviceId', 'tags', 'message']
+const HISTORY_FILTER_FIELDS = ['severity', 'code', 'type', 'container', 'deviceId', 'tags', 'message']
 const HISTORY_SEARCH_FIELDS = ['name', 'description', 'position', 'code', 'message']
+
+// Operators allowed inside a filter value; anything else is rejected.
+const ALERTS_FILTER_OPERATORS = ['$eq', '$ne', '$in', '$nin', '$gt', '$gte', '$lt', '$lte']
+
+const ALERT_TYPE_CATEGORIES = ['all', 'operational', 'miner']
+
+const ALERT_EXT_DATA_WORKER_TYPES = [WORKER_TYPES.MINERPOOL]
+
+// Matches the miner base type and its subtypes (e.g. 'miner-am-s19xp'), not 'minerals'.
+const MINER_TYPE_REGEX = '^miner(-|$)'
+
+// Maps history-alert filter fields to the transformed-entry path used by the
+// worker's `getHistoricalLogs` query (thing metadata is nested under `thing`).
+const HISTORY_ALERTS_QUERY_MAP = {
+  severity: 'severity',
+  message: 'message',
+  code: 'thing.code',
+  type: 'thing.type',
+  container: 'thing.info.container',
+  deviceId: 'thing.id',
+  tags: 'thing.tags'
+}
 
 const POOL_ALERT_TYPES = [
   'all_pools_dead',
@@ -378,8 +423,11 @@ const MINER_CATEGORIES = {
 
 const LOG_KEYS = {
   STAT_RTD: 'stat-rtd',
+  STAT_20S: 'stat-20s',
+  STAT_1M: 'stat-1m',
   STAT_3H: 'stat-3h',
   STAT_5M: 'stat-5m',
+  STAT_30M: 'stat-30m',
   STAT_1D: 'stat-1D'
 }
 
@@ -425,8 +473,10 @@ const COOLING_SYSTEM_PROJECTIONS = {
       'last.snap.stats.dcs_specific.equipment.temperatures': 1,
       'last.snap.stats.dcs_specific.equipment.pressures': 1,
       'last.snap.stats.dcs_specific.equipment.flows': 1,
+      'last.snap.stats.dcs_specific.equipment.levels': 1,
       'last.snap.stats.dcs_specific.equipment.heat_exchangers': 1,
       'last.snap.stats.dcs_specific.equipment.valves': 1,
+      'last.snap.stats.dcs_specific.equipment.tanks': 1,
       'last.snap.config.cooling_system': 1
     },
     circuit2: {
@@ -574,6 +624,10 @@ const DCS_POWER_METER_FIELDS = {
   'last.snap.config.energy_layout': 1
 }
 
+const DCS_MINER_COOLING_STATUS_FIELDS = {
+  'last.snap.stats.dcs_specific.cooling_system': 1
+}
+
 // DCS field projections for site efficiency
 const DCS_EFFICIENCY_FIELDS = {
   'last.snap.stats.dcs_specific.equipment.power_meters': 1,
@@ -584,12 +638,18 @@ const DCS_EFFICIENCY_FIELDS = {
 }
 
 const LOG_FIELDS = {
+  HASHRATE_SUM: 'hashrate_mhs_5m_sum',
+  SITE_POWER: 'site_power_w',
+  EFFICIENCY: 'efficiency_w_ths_avg',
   HASHRATE_SUM_TYPE_GROUP: 'hashrate_mhs_5m_type_group_sum',
   HASHRATE_SUM_CONTAINER_GROUP: 'hashrate_mhs_5m_container_group_sum',
   HASHRATE_SUM_RACK_GROUP: 'hashrate_mhs_5m_pdu_rack_group_sum',
   POWER_W_TYPE_GROUP_SUM: 'power_w_type_group_sum',
   POWER_W_CONTAINER_GROUP_SUM: 'power_w_container_group_sum',
-  POWER_W_RACK_GROUP_SUM: 'power_w_pdu_rack_group_sum'
+  POWER_W_RACK_GROUP_SUM: 'power_w_pdu_rack_group_sum',
+  EFFICIENCY_TYPE_GROUP_AVG: 'efficiency_w_ths_type_group_avg',
+  EFFICIENCY_CONTAINER_GROUP_AVG: 'efficiency_w_ths_container_group_avg',
+  EFFICIENCY_RACK_GROUP_AVG: 'efficiency_w_ths_pdu_rack_group_avg'
 }
 
 const AGGR_FIELDS = {
@@ -602,6 +662,9 @@ const AGGR_FIELDS = {
   ACTIVE_ENERGY_IN: 'active_energy_in_aggr',
   UTE_ENERGY: 'ute_energy_aggr',
   EFFICIENCY: 'efficiency_w_ths_avg_aggr',
+  EFFICIENCY_TYPE_GROUP_AVG: 'efficiency_w_ths_type_group_avg_aggr',
+  EFFICIENCY_CONTAINER_GROUP_AVG: 'efficiency_w_ths_container_group_avg_aggr',
+  EFFICIENCY_RACK_GROUP_AVG: 'efficiency_w_ths_pdu_rack_group_avg_aggr',
   POWER_MODE_GROUP: 'power_mode_group_aggr',
   STATUS_GROUP: 'status_group_aggr',
   TEMP_MAX: 'temperature_c_group_max_aggr',
@@ -610,6 +673,9 @@ const AGGR_FIELDS = {
   OFFLINE_CNT: 'offline_cnt',
   SLEEP_CNT: 'power_mode_sleep_cnt',
   MAINTENANCE_CNT: 'maintenance_type_cnt',
+  OFFLINE_TYPE_CNT: 'offline_type_cnt',
+  SLEEP_TYPE_CNT: 'power_mode_sleep_type_cnt',
+  ERROR_TYPE_CNT: 'error_type_cnt',
   CONTAINER_SPECIFIC_STATS: 'container_specific_stats_group_aggr',
   HASHRATE_1M_CONTAINER_GROUP_SUM: 'hashrate_mhs_1m_container_group_sum_aggr',
   POWER_W_CONTAINER_GROUP_SUM: 'power_w_container_group_sum_aggr',
@@ -619,7 +685,13 @@ const AGGR_FIELDS = {
   POWER_MODE_NORMAL_CNT: 'power_mode_normal_cnt',
   POWER_MODE_HIGH_CNT: 'power_mode_high_cnt',
   ERROR_CNT: 'error_cnt',
-  NOT_MINING_CNT: 'not_mining_cnt'
+  NOT_MINING_CNT: 'not_mining_cnt',
+  ACTIVE_CONTAINER_CNT: 'hashrate_mhs_5m_active_container_group_cnt',
+  MINER_INVENTORY_STATUS: 'miner_inventory_status_group_cnt_aggr',
+  MINER_INVENTORY_LOCATION: 'miner_inventory_location_group_cnt_aggr',
+  SPARE_PARTS_CNT: 'spare_parts_cnt_aggr',
+  SPARE_PART_INVENTORY_STATUS: 'spare_part_inventory_status_group_cnt_aggr',
+  SPARE_PART_INVENTORY_LOCATION: 'spare_part_inventory_location_group_cnt_aggr'
 }
 
 const PERIOD_TYPES = {
@@ -638,7 +710,8 @@ const ELECTRICITY_EXT_DATA_KEYS = {
   FORECAST: 'forecast',
   FORECAST_SETTINGS: 'forecastSettings',
   FORECAST_HISTORY: 'forecastHistory',
-  AVAIL_ENERGY: 'availableEnergy'
+  AVAIL_ENERGY: 'availableEnergy',
+  FORECAST_OVERRIDE: 'forecastOverride'
 }
 
 const NON_METRIC_KEYS = [
@@ -661,6 +734,72 @@ const RANGE_BUCKETS = {
 const RPC_TIMEOUT = 15000
 const RPC_CONCURRENCY_LIMIT = 2
 const RPC_PAGE_LIMIT = 100
+
+// A pooled protomux-rpc channel can be torn down between requests, so the first
+// jRequest that reuses it fails while an immediate re-dial succeeds. Retry those.
+const RPC_RETRYABLE_ERRORS = ['CHANNEL_CLOSED', 'channel closed']
+const RPC_MAX_ATTEMPTS = 3
+const RPC_RETRY_DELAY = 100
+
+// Only read methods may be retried. A channel can drop after the ork applied the
+// request but before the response arrives — indistinguishable from a drop before
+// it was applied — so retrying a write can execute it twice, and no write payload
+// carries an idempotency key (pushActionsBatch has a client-supplied
+// batchActionUID, but the single-action path has nothing). This is an allowlist,
+// not a denylist, so a method reaching the proxy dynamically or a write added
+// later defaults to not retrying.
+const RPC_RETRYABLE_METHODS = new Set([
+  'getAction',
+  'getActionsBatch',
+  'getConfigs',
+  'getGlobalConfig',
+  'getHistoricalLogs',
+  'getThingConf',
+  'getThingsCount',
+  'getWrkConf',
+  'getWrkExtData',
+  'getWrkSettings',
+  'listFirmwares',
+  'listRacks',
+  'listThings',
+  'loadFile',
+  'queryActions',
+  'tailLog',
+  'tailLogCustomRangeAggr',
+  'tailLogMulti'
+])
+
+// Upper bound on rows a request that sends no limit may span, rejecting the
+// unbounded ranges that pull hundreds of thousands of rows over one RPC channel.
+// Sized off the only limitless caller, the UI's historical miner KPI export: it
+// picks the finest stat key whose bucket count fits its own 8640-row budget, so
+// 8640 is the largest range it ever asks for (30 days of stat-5m, or 6 days of
+// stat-1m on a 1-minute site).
+const TAIL_LOG_MAX_ROWS = 9000
+
+// Upper bound on a client-supplied limit, which bounds the response on its own
+// and so exempts the request from the range check above. Sized off the UI's
+// widest limit, the dashboard power-mode timeline's 7 days of stat-1m.
+const TAIL_LOG_MAX_LIMIT = 10080
+
+// Bucket width per stat key, used to estimate the row count of a range. Covers
+// every fixed-width key in LOG_KEYS: a key missing here would make the range
+// guard fail open, which is how an unbounded year of stat-20s (~1.58M buckets)
+// could slip past it.
+const TAIL_LOG_BUCKET_MS = {
+  'stat-20s': 20 * 1000,
+  'stat-1m': 60 * 1000,
+  'stat-5m': 5 * 60 * 1000,
+  'stat-30m': 30 * 60 * 1000,
+  'stat-3h': 3 * 60 * 60 * 1000,
+  'stat-1D': 24 * 60 * 60 * 1000
+}
+
+// The one stat key with no fixed bucket width: stat-rtd holds the latest sample
+// per thing, not a time series, so its row count is bounded by the thing count
+// rather than by the range. Deliberately exempt from the range guard; every other
+// stat-* key without a bucket width above is rejected rather than waved through.
+const TAIL_LOG_UNBUCKETED_KEYS = new Set(['stat-rtd'])
 
 const AUTH_CACHE_TTL = 60 * 1000
 
@@ -777,6 +916,14 @@ module.exports = {
   RPC_TIMEOUT,
   RPC_CONCURRENCY_LIMIT,
   RPC_PAGE_LIMIT,
+  RPC_RETRYABLE_ERRORS,
+  RPC_MAX_ATTEMPTS,
+  RPC_RETRY_DELAY,
+  RPC_RETRYABLE_METHODS,
+  TAIL_LOG_MAX_ROWS,
+  TAIL_LOG_MAX_LIMIT,
+  TAIL_LOG_BUCKET_MS,
+  TAIL_LOG_UNBUCKETED_KEYS,
   AUTH_CACHE_TTL,
   ACTIONS_MAX_QUERIES,
   ACTIONS_QUERIES_MAX_LENGTH,
@@ -785,6 +932,8 @@ module.exports = {
   GET_HISTORICAL_LOGS,
   RPC_METHODS,
   WORKER_TYPES,
+  SPARE_PART_TYPES,
+  sparePartTag,
   POOL_ALERT_TYPES,
   MINER_POOL_STATUS,
   AGGR_FIELDS,
@@ -800,6 +949,7 @@ module.exports = {
   LOG_KEYS,
   WORKER_TAGS,
   SEVERITY_LEVELS,
+  SEVERITY_RANK,
   ALERTS_DEFAULT_LIMIT,
   ALERTS_MAX_SITE_LIMIT,
   ALERTS_MAX_HISTORY_LIMIT,
@@ -807,6 +957,11 @@ module.exports = {
   SITE_ALERTS_SEARCH_FIELDS,
   HISTORY_FILTER_FIELDS,
   HISTORY_SEARCH_FIELDS,
+  ALERTS_FILTER_OPERATORS,
+  ALERT_TYPE_CATEGORIES,
+  ALERT_EXT_DATA_WORKER_TYPES,
+  MINER_TYPE_REGEX,
+  HISTORY_ALERTS_QUERY_MAP,
   DEVICE_LIST_FIELDS,
   MINER_FIELD_MAP,
   MINER_PROJECTION_MAP,
@@ -820,6 +975,7 @@ module.exports = {
   SITE_STATUS_LIVE_AGGR_FIELDS,
   SITE_STATUS_LIVE_WINDOW_MS,
   DCS_POWER_METER_FIELDS,
+  DCS_MINER_COOLING_STATUS_FIELDS,
   DCS_EFFICIENCY_FIELDS,
   EXPLORER_RACK_AGGR_FIELDS,
   EXPLORER_RACK_DEFAULT_LIMIT,
@@ -832,6 +988,8 @@ module.exports = {
   WORK_ORDER_TERMINAL_STATUSES,
   WORK_ORDER_VALID_DEVICE_TYPES,
   MINER_LOCATIONS,
+  MINER_ROOM_LOCATION,
+  MAINTENANCE_CONTAINER,
   SPARE_PART_INITIAL_LOCATION,
   FILE_TYPES,
   WORK_ORDER_FILE_MAX_BYTES_DEFAULT,
@@ -839,5 +997,6 @@ module.exports = {
   WORK_ORDER_FILE_MIME_ALLOWLIST_DEFAULT,
   WORK_ORDER_EXPORT_FORMATS,
   RMA_COLUMNS,
+  MINER_MODEL_DISPLAY_NAMES,
   MICROSOFT_AUTH_SCOPE
 }

@@ -32,7 +32,11 @@ const create = {
           notes: { type: 'string', maxLength: 4000 },
           remarks: { type: 'string', maxLength: 4000 },
           site: { type: 'string', maxLength: 200 },
-          location: { type: 'string', maxLength: 200 }
+          location: { type: 'string', maxLength: 200 },
+          deviceStatus: { type: 'string', maxLength: 100 },
+          pos: { type: 'string', maxLength: 200 },
+          container: { type: 'string', maxLength: 200 },
+          subnet: { type: 'string', maxLength: 200 }
         }
       }
     },
@@ -60,7 +64,10 @@ const createBatch = {
           properties: {
             deviceType: { type: 'string', minLength: 1, maxLength: 100 },
             deviceModel: { type: 'string', minLength: 1, maxLength: 100 },
-            deviceIdentifier: { type: 'string', minLength: 1, maxLength: 200 }
+            deviceIdentifier: { type: 'string', minLength: 1, maxLength: 200 },
+            pos: { type: 'string', maxLength: 200 },
+            container: { type: 'string', maxLength: 200 },
+            subnet: { type: 'string', maxLength: 200 }
           }
         }
       },
@@ -74,7 +81,9 @@ const createBatch = {
           notes: { type: 'string', maxLength: 4000 },
           remarks: { type: 'string', maxLength: 4000 },
           site: { type: 'string', maxLength: 200 },
-          location: { type: 'string', maxLength: 200 }
+          location: { type: 'string', maxLength: 200 },
+          deviceStatus: { type: 'string', maxLength: 100 },
+          minerIdentifier: { type: 'string', maxLength: 200 }
         }
       }
     },
@@ -132,10 +141,32 @@ const update = {
         type: 'object',
         additionalProperties: false,
         properties: {
+          issue: { type: 'string', minLength: 1, maxLength: 2000 },
           notes: { type: 'string', maxLength: 4000 },
           remarks: { type: 'string', maxLength: 4000 },
           site: { type: 'string', maxLength: 200 },
-          location: { type: 'string', maxLength: 200 }
+          location: { type: 'string', maxLength: 200 },
+          partsMoves: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: true,
+              required: ['role'],
+              properties: {
+                role: { type: 'string' },
+                partId: { type: 'string' },
+                partCode: { type: 'string' },
+                deviceType: { type: 'string' },
+                fromLocation: { type: ['string', 'null'] },
+                toLocation: { type: ['string', 'null'] },
+                reason: { type: ['string', 'null'] },
+                replacesPartCode: { type: 'string' },
+                partStatus: { type: 'string' },
+                ts: { type: 'number' },
+                user: { type: 'string' }
+              }
+            }
+          }
         }
       }
     }
@@ -152,6 +183,15 @@ const close = {
 }
 
 const cancel = {
+  params: byId.params,
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    properties: { reason: { type: 'string', minLength: 1, maxLength: 2000 } }
+  }
+}
+
+const reopen = {
   params: byId.params,
   body: {
     type: 'object',
@@ -217,4 +257,4 @@ const exportRma = {
   }
 }
 
-module.exports = { create, createBatch, list, byId, update, close, cancel, assign, audit, log, export: exportRoute, exportRma }
+module.exports = { create, createBatch, list, byId, update, close, cancel, reopen, assign, audit, log, export: exportRoute, exportRma }

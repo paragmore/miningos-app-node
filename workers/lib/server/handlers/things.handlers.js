@@ -5,13 +5,16 @@ const {
   COMMENT_ACTION
 } = require('../../constants')
 const { parseJsonQueryParam } = require('../../utils')
+const { assertSafeMongoQuery } = require('../lib/queryUtils')
 
 async function listThingsRoute (ctx, req, rep) {
   if (req.query.query) {
     req.query.query = parseJsonQueryParam(req.query.query, 'ERR_QUERY_INVALID_JSON')
+    assertSafeMongoQuery(req.query.query)
   }
   if (req.query.sort) {
     req.query.sort = parseJsonQueryParam(req.query.sort, 'ERR_SORT_INVALID_JSON')
+    assertSafeMongoQuery(req.query.sort)
   }
 
   if (req.query.fields) {

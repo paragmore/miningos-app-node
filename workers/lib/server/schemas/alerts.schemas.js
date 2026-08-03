@@ -5,6 +5,7 @@ const schemas = {
     siteAlerts: {
       type: 'object',
       properties: {
+        type: { type: 'string', enum: ['all', 'operational', 'miner'] },
         filter: { type: 'string' },
         sort: { type: 'string' },
         search: { type: 'string' },
@@ -18,6 +19,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
+        type: { type: 'string', enum: ['all', 'operational', 'miner'] },
         filter: { type: 'string' },
         search: { type: 'string' },
         sort: { type: 'string' },

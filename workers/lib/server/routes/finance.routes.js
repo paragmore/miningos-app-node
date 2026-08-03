@@ -2,7 +2,8 @@
 
 const {
   ENDPOINTS,
-  HTTP_METHODS
+  HTTP_METHODS,
+  AUTH_PERMISSIONS
 } = require('../../constants')
 const {
   getEnergyBalance,
@@ -14,6 +15,8 @@ const {
   getHashRevenue
 } = require('../handlers/finance.handlers')
 const { createCachedAuthRoute } = require('../lib/routeHelpers')
+
+const FINANCE_PERMS = [AUTH_PERMISSIONS.REVENUE]
 
 module.exports = (ctx) => {
   const schemas = require('../schemas/finance.schemas.js')
@@ -34,7 +37,8 @@ module.exports = (ctx) => {
           req.query.period
         ],
         ENDPOINTS.FINANCE_ENERGY_BALANCE,
-        getEnergyBalance
+        getEnergyBalance,
+        FINANCE_PERMS
       )
     },
     {
@@ -52,7 +56,8 @@ module.exports = (ctx) => {
           req.query.period
         ],
         ENDPOINTS.FINANCE_EBITDA,
-        getEbitda
+        getEbitda,
+        FINANCE_PERMS
       )
     },
     {
@@ -70,7 +75,8 @@ module.exports = (ctx) => {
           req.query.period
         ],
         ENDPOINTS.FINANCE_COST_SUMMARY,
-        getCostSummary
+        getCostSummary,
+        FINANCE_PERMS
       )
     },
     {
@@ -88,7 +94,8 @@ module.exports = (ctx) => {
           req.query.period
         ],
         ENDPOINTS.FINANCE_SUBSIDY_FEES,
-        getSubsidyFees
+        getSubsidyFees,
+        FINANCE_PERMS
       )
     },
     {
@@ -107,7 +114,8 @@ module.exports = (ctx) => {
           req.query.pool
         ],
         ENDPOINTS.FINANCE_REVENUE,
-        getRevenue
+        getRevenue,
+        FINANCE_PERMS
       )
     },
     {
@@ -125,7 +133,8 @@ module.exports = (ctx) => {
           req.query.period
         ],
         ENDPOINTS.FINANCE_REVENUE_SUMMARY,
-        getRevenueSummary
+        getRevenueSummary,
+        FINANCE_PERMS
       )
     },
     {
@@ -143,7 +152,8 @@ module.exports = (ctx) => {
           req.query.period
         ],
         ENDPOINTS.FINANCE_HASH_REVENUE,
-        getHashRevenue
+        getHashRevenue,
+        FINANCE_PERMS
       )
     }
   ]

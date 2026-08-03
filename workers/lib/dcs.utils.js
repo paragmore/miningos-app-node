@@ -32,13 +32,26 @@ function extractSiteMainMeterPowerW (dcsThing) {
   return (siteMeter?.power?.value || 0) * 1000
 }
 
+function extractMinerCoolingStatus (dcsThing) {
+  return dcsThing?.last?.snap?.stats?.dcs_specific?.cooling_system?.status || 'Unavailable'
+}
+
 function getSensorReading (sensors, sensorId, defaultConfig = null) {
   if (!sensorId) return defaultConfig
   const sensor = sensors?.find(s => s.equipment === sensorId)
-  if (sensor?.value != null) {
-    return { value: sensor.value, unit: sensor.unit }
-  }
-  return defaultConfig
+  if (!sensor) return defaultConfig
+  // A configured sensor is present in the snap even when the DCS is offline;
+  // keep its unit and surface value: null rather than dropping the reading.
+  return { value: sensor.value ?? null, unit: sensor.unit ?? null }
+}
+
+// Like getSensorReading, but always surfaces the configured sensor id even when
+// the tag isn't readable yet (value: null). Returns null only when no sensor is
+// configured — so the UI can render the sensor label without a value.
+function sensorReading (sensors, sensorId, unit = null) {
+  if (!sensorId) return null
+  const sensor = (sensors || []).find(s => s.equipment === sensorId)
+  return { value: sensor?.value ?? null, unit: sensor?.unit || unit, sensor: sensorId }
 }
 
 function findEquipment (equipmentList, equipmentId) {
@@ -70,7 +83,9 @@ module.exports = {
   getDCSTag,
   extractDcsThing,
   extractSiteMainMeterPowerW,
+  extractMinerCoolingStatus,
   getSensorReading,
+  sensorReading,
   findEquipment,
   filterEquipmentBy,
   fetchDcsThing

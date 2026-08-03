@@ -14,6 +14,7 @@ const {
   updateWorkOrder,
   closeWorkOrder,
   cancelWorkOrder,
+  reopenWorkOrder,
   assignWorkOrder,
   appendWorkLogEntry,
   getWorkOrderAudit,
@@ -67,13 +68,7 @@ module.exports = (ctx) => [
     method: HTTP_METHODS.GET,
     url: ENDPOINTS.WORK_ORDER_BY_ID,
     schema: schemas.byId,
-    ...createCachedAuthRoute(
-      ctx,
-      (req) => ['work-orders', req.params.id],
-      ENDPOINTS.WORK_ORDER_BY_ID,
-      getWorkOrder,
-      [AUTH_PERMISSIONS.WORK_ORDER]
-    )
+    ...createAuthRoute(ctx, getWorkOrder, [AUTH_PERMISSIONS.WORK_ORDER])
   },
   {
     method: HTTP_METHODS.GET,
@@ -104,6 +99,12 @@ module.exports = (ctx) => [
     url: ENDPOINTS.WORK_ORDER_CANCEL,
     schema: schemas.cancel,
     ...createAuthRoute(ctx, cancelWorkOrder, [AUTH_PERMISSIONS.WORK_ORDER])
+  },
+  {
+    method: HTTP_METHODS.POST,
+    url: ENDPOINTS.WORK_ORDER_REOPEN,
+    schema: schemas.reopen,
+    ...createAuthRoute(ctx, reopenWorkOrder, [AUTH_PERMISSIONS.WORK_ORDER])
   },
   {
     method: HTTP_METHODS.POST,

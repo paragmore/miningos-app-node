@@ -37,6 +37,19 @@ const schemas = {
         'lcoe',
         'siteEfficiency'
       ]
+    },
+    forecastOverride: {
+      type: 'object',
+      properties: {
+        start: { type: 'integer', minimum: 0 },
+        end: { type: 'integer', minimum: 0 },
+        manualOverrideMine: { type: 'boolean' }
+      },
+      required: [
+        'start',
+        'end',
+        'manualOverrideMine'
+      ]
     }
   }
 }

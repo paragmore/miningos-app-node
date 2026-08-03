@@ -1,13 +1,21 @@
 'use strict'
 
 const { csvEscape } = require('../../utils')
-const { RMA_COLUMNS } = require('../../constants')
+const { RMA_COLUMNS, MINER_MODEL_DISPLAY_NAMES } = require('../../constants')
+
+function displayMinerModel (model) {
+  if (!model) return model
+  return MINER_MODEL_DISPLAY_NAMES[String(model).toLowerCase()] || model
+}
 
 function renderWorkOrderCsv (wo) {
   const { partsMoves, ...woFields } = wo.info || {}
   const base = { code: wo.code, ...woFields }
   const moves = Array.isArray(partsMoves) ? partsMoves : []
-  const rows = moves.length ? moves.map(move => ({ ...base, ...move })) : [base]
+  const rawRows = moves.length ? moves.map(move => ({ ...base, ...move })) : [base]
+  const rows = rawRows.map(row => (
+    row.deviceModel == null ? row : { ...row, deviceModel: displayMinerModel(row.deviceModel) }
+  ))
 
   const headers = []
   const seen = new Set()
@@ -33,16 +41,17 @@ function renderRmaCsv (workOrders) {
     const repaired = moves.find(m => m.role === 'repaired') || moves.find(m => m.role === 'diagnosis') || moves[0] || {}
     const replaced = moves.find(m => m.role === 'replacement') || repaired
     const repairTs = info.closedAt ?? info.createdAt
+    const minerModel = displayMinerModel(info.deviceModel)
     return [
       wo.code,
-      info.deviceModel,
+      minerModel,
       info.deviceIdentifier,
       repaired.partCode,
       replaced.partCode,
       info.issue,
       info.finalResult,
       info.remarks,
-      info.deviceModel,
+      minerModel,
       repairTs ? new Date(repairTs).toISOString().slice(0, 10) : '',
       info.assignedTo ?? info.createdBy
     ]

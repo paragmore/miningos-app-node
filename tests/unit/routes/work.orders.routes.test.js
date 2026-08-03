@@ -26,6 +26,7 @@ test('work.orders.routes: registers every WO endpoint', (t) => {
     { method: HTTP_METHODS.PATCH, url: ENDPOINTS.WORK_ORDER_BY_ID },
     { method: HTTP_METHODS.POST, url: ENDPOINTS.WORK_ORDER_CLOSE },
     { method: HTTP_METHODS.POST, url: ENDPOINTS.WORK_ORDER_CANCEL },
+    { method: HTTP_METHODS.POST, url: ENDPOINTS.WORK_ORDER_REOPEN },
     { method: HTTP_METHODS.POST, url: ENDPOINTS.WORK_ORDER_ASSIGN },
     { method: HTTP_METHODS.POST, url: ENDPOINTS.WORK_ORDER_LOG },
     { method: HTTP_METHODS.GET, url: ENDPOINTS.WORK_ORDER_EXPORT },

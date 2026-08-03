@@ -142,6 +142,21 @@ async function cancelActionsBatch (ctx, req) {
   })
 }
 
+function assertLogDownloadOwner (action, req) {
+  const email = req._info?.user?.metadata?.email
+  if (!email || !action.voter || action.voter !== email) {
+    return false
+  }
+  return true
+}
+
+function assertLogDownloadMiner (meta, req) {
+  const minerId = req.params?.minerId
+  if (!minerId) return true
+  if (meta.minerId && meta.minerId !== minerId) return false
+  return true
+}
+
 // Action result contains only metadata (coreKey, byteLength, expiresAt) — actual bytes
 // come directly from wrk-miner over Hypercore/Hyperswarm, bypassing the HRPC pipeline.
 async function downloadLogFile (ctx, req, reply) {
@@ -152,6 +167,10 @@ async function downloadLogFile (ctx, req, reply) {
 
   if (!action || !action.targets) {
     return reply.code(404).send({ error: 'ERR_ACTION_NOT_FOUND' })
+  }
+
+  if (!assertLogDownloadOwner(action, req)) {
+    return reply.code(403).send({ error: 'ERR_AUTH_FAIL_NO_PERMS' })
   }
 
   let meta = null
@@ -167,6 +186,10 @@ async function downloadLogFile (ctx, req, reply) {
 
   if (!meta) {
     return reply.code(404).send({ error: 'ERR_LOG_NOT_AVAILABLE' })
+  }
+
+  if (!assertLogDownloadMiner(meta, req)) {
+    return reply.code(404).send({ error: 'ERR_ACTION_NOT_FOUND' })
   }
 
   if (meta.expiresAt && Date.now() > meta.expiresAt) {
@@ -186,7 +209,8 @@ async function downloadLogFile (ctx, req, reply) {
   // Set headers only after stream is ready — if set before the try-catch and stream()
   // throws, the error response would carry application/octet-stream content-type and
   // Fastify would refuse to serialize the JSON error object.
-  const filename = `miner-log-${meta.minerId || 'unknown'}-${id}.log`
+  const { safeContentDispositionFilename } = require('../lib/queryUtils')
+  const filename = safeContentDispositionFilename(`miner-log-${meta.minerId || 'unknown'}-${id}.log`)
   reply.header('Content-Type', 'application/octet-stream')
   reply.header('Content-Disposition', `attachment; filename="${filename}"`)
   reply.header('Content-Length', meta.byteLength)

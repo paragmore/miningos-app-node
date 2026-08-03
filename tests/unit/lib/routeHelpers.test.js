@@ -109,6 +109,68 @@ test('createAuthOnRequest - calls capCheck when perms provided', async (t) => {
   t.pass()
 })
 
+test('createAuthOnRequest - GET requests are checked at read level', async (t) => {
+  let writeFlag = null
+  const mockCtx = {
+    noAuth: false,
+    authLib: {
+      resolveToken: async () => ({ userId: 'test' }),
+      tokenHasPerms: async (token, write, perms) => {
+        writeFlag = write
+        return true
+      }
+    }
+  }
+
+  const mockReq = {
+    method: 'GET',
+    headers: { authorization: 'Bearer token123' },
+    ip: '127.0.0.1',
+    _info: {}
+  }
+
+  const mockRep = {
+    status: function () { return this },
+    send: function () { return this }
+  }
+
+  const onRequest = createAuthOnRequest(mockCtx, ['inventory'])
+  await onRequest(mockReq, mockRep)
+
+  t.is(writeFlag, false, 'GET should be checked with write=false')
+})
+
+test('createAuthOnRequest - non-GET requests are checked at write level', async (t) => {
+  const seen = []
+  const mockCtx = {
+    noAuth: false,
+    authLib: {
+      resolveToken: async () => ({ userId: 'test' }),
+      tokenHasPerms: async (token, write, perms) => {
+        seen.push(write)
+        return true
+      }
+    }
+  }
+
+  const mockRep = {
+    status: function () { return this },
+    send: function () { return this }
+  }
+
+  const onRequest = createAuthOnRequest(mockCtx, ['inventory'])
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    await onRequest({
+      method,
+      headers: { authorization: 'Bearer token123' },
+      ip: '127.0.0.1',
+      _info: {}
+    }, mockRep)
+  }
+
+  t.alike(seen, [true, true, true, true], 'mutating methods should be checked with write=true')
+})
+
 test('createAuthOnRequest - skips capCheck when ctx.noAuth is set', async (t) => {
   let permsChecked = false
   const mockCtx = {

@@ -3,16 +3,16 @@
 const test = require('brittle')
 const {
   getHashrate,
-  processHashrateData,
   calculateHashrateSummary,
   getConsumption,
-  processConsumptionData,
   calculateConsumptionSummary,
   calculateGroupedConsumptionSummary,
   getEfficiency,
-  processEfficiencyData,
   calculateEfficiencySummary,
+  calculateGroupedEfficiencySummary,
   getMinerStatus,
+  getMinersByContainer,
+  getInventorySummary,
   processMinerStatusData,
   calculateMinerStatusSummary,
   sumObjectValues,
@@ -47,7 +47,7 @@ test('getHashrate - happy path', async (t) => {
     },
     net_r0: {
       jRequest: async () => {
-        return [{ type: 'miner', data: [{ ts: dayTs, val: { hashrate_mhs_5m_sum_aggr: 100000 } }], error: null }]
+        return [{ ts: dayTs, hashrate_mhs_5m_sum_aggr: 100000 }]
       }
     }
   })
@@ -63,7 +63,112 @@ test('getHashrate - happy path', async (t) => {
   t.ok(result.log.length > 0, 'log should have entries')
   t.is(result.log[0].hashrateMhs, 100000, 'should have hashrate value')
   t.ok(result.summary.avgHashrateMhs !== null, 'should have avg hashrate')
-  t.is(result.summary.totalHashrateMhs, 100000, 'should have total hashrate')
+  t.pass()
+})
+
+test('getHashrate - container filter reads that container from the group aggregate', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{
+          ts: 1700006400000,
+          hashrate_mhs_5m_container_group_sum_aggr: { 'container-A': 500, 'container-B': 277 }
+        }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, container: 'container-A' }
+  })
+
+  t.is(capturedPayload.aggrFields.hashrate_mhs_5m_container_group_sum_aggr, 1, 'should request the container-group aggregate')
+  t.is(result.log[0].hashrateMhs, 500, 'should read only the requested container')
+  t.is(result.summary.avgHashrateMhs, 500, 'summary should cover the requested container only')
+  t.absent('currentHashrateMhs' in result.summary, 'should not add current unless asked')
+  t.pass()
+})
+
+test('getHashrate - unknown container yields zeroes, not a crash', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: 1700006400000, hashrate_mhs_5m_container_group_sum_aggr: { 'container-A': 500 } }]
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, container: 'nope' }
+  })
+
+  t.is(result.log[0].hashrateMhs, 0, 'should fall back to 0')
+  t.pass()
+})
+
+test('getHashrate - current adds the latest stat-rtd value', async (t) => {
+  const calls = []
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        calls.push(payload)
+        if (payload.key === 'stat-rtd') return [{ hashrate_mhs_5m_sum_aggr: 987 }]
+        return [{ ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 100000 }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, current: true }
+  })
+
+  t.is(calls.length, 2, 'should make a second call for the live value')
+  t.is(calls[1].limit, 1, 'should read a single rtd sample')
+  t.is(result.log[0].hashrateMhs, 100000, 'series should be unchanged')
+  t.is(result.summary.currentHashrateMhs, 987, 'should expose the rtd value')
+  t.pass()
+})
+
+test('getHashrate - current with container reads that container rtd value', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload.key === 'stat-rtd') {
+          return [{ hashrate_mhs_5m_container_group_sum_aggr: { 'container-A': 42 } }]
+        }
+        return [{ ts: 1700006400000, hashrate_mhs_5m_container_group_sum_aggr: { 'container-A': 500 } }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, container: 'container-A', current: true }
+  })
+
+  t.is(result.summary.currentHashrateMhs, 42, 'should read the container rtd value')
+  t.pass()
+})
+
+test('getHashrate - current is null when no rtd sample is in the window', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload.key === 'stat-rtd') return []
+        return [{ ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 100000 }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, current: true }
+  })
+
+  t.is(result.summary.currentHashrateMhs, null, 'should be null rather than 0')
   t.pass()
 })
 
@@ -90,11 +195,10 @@ test('getHashrate - grouped by miner uses type group aggregation', async (t) => 
   t.is(capturedPayload.aggrFields.hashrate_mhs_5m_type_group_sum_aggr, 1, 'should request type-group aggregate field')
   t.is(result.log.length, 1, 'should map one grouped row')
   t.alike(result.log[0].hashrateMhs, { 'S19-Pro': 100000, S21: 23456 }, 'should map grouped hashrate value')
-  t.is(result.summary.totalHashrateMhs, 123456, 'should have site-wide total')
   t.is(result.summary.avgHashrateMhs, 123456, 'should have site-wide average')
-  t.ok(result.summary.groupedBy, 'should have per-miner breakdown')
-  t.is(result.summary.groupedBy['S19-Pro'].totalHashrateMhs, 100000, 'should have per-miner total')
-  t.is(result.summary.groupedBy.S21.totalHashrateMhs, 23456, 'should have per-miner total')
+  t.is(result.summary.groupedBy['S19-Pro'].avgHashrateMhs, 100000, 'should have per-miner average')
+  t.is(result.summary.groupedBy.S21.avgHashrateMhs, 23456, 'should have per-miner average')
+  t.absent('totalHashrateMhs' in result.summary, 'summary should not expose a time-summed total')
   t.pass()
 })
 
@@ -121,10 +225,9 @@ test('getHashrate - grouped by container uses container group aggregation', asyn
   t.is(capturedPayload.aggrFields.hashrate_mhs_5m_container_group_sum_aggr, 1, 'should request container-group aggregate field')
   t.is(result.log.length, 1, 'should map grouped row')
   t.alike(result.log[0].hashrateMhs, { 'container-A': 500, 'container-B': 277 }, 'should map container grouped hashrate value')
-  t.is(result.summary.totalHashrateMhs, 777, 'should have site-wide total')
-  t.ok(result.summary.groupedBy, 'should have per-container breakdown')
-  t.is(result.summary.groupedBy['container-A'].totalHashrateMhs, 500, 'should have per-container total')
-  t.is(result.summary.groupedBy['container-B'].totalHashrateMhs, 277, 'should have per-container total')
+  t.is(result.summary.avgHashrateMhs, 777, 'should have site-wide average')
+  t.is(result.summary.groupedBy['container-A'].avgHashrateMhs, 500, 'should have per-container average')
+  t.is(result.summary.groupedBy['container-B'].avgHashrateMhs, 277, 'should have per-container average')
   t.pass()
 })
 
@@ -153,8 +256,8 @@ test('getHashrate - grouped by rack uses rack group aggregation', async (t) => {
   t.is(capturedPayload.aggrFields.hashrate_mhs_5m_pdu_rack_group_sum_aggr, 1, 'should request rack-group aggregate field')
   t.is(result.log.length, 1, 'should map grouped row')
   t.alike(result.log[0].hashrateMhs, { 'group-1_rack-1': 1000, 'group-1_rack-2': 2000, 'group-2_rack-1': 3000 }, 'should map all racks when no filter given')
-  t.is(result.summary.totalHashrateMhs, 6000, 'should total all racks')
-  t.ok(result.summary.groupedBy['group-1_rack-1'], 'should have per-rack breakdown')
+  t.is(result.summary.avgHashrateMhs, 6000, 'should average all racks')
+  t.is(result.summary.groupedBy['group-1_rack-1'].avgHashrateMhs, 1000, 'should have per-rack average')
   t.pass()
 })
 
@@ -181,8 +284,8 @@ test('getHashrate - grouped by rack filters to requested racks', async (t) => {
   })
 
   t.alike(result.log[0].hashrateMhs, { 'group-1_rack-1': 1000, 'group-2_rack-1': 3000 }, 'should keep only requested racks')
-  t.is(result.summary.totalHashrateMhs, 4000, 'summary should reflect filtered racks only')
   t.absent(result.summary.groupedBy['group-1_rack-2'], 'filtered-out rack should be absent from summary')
+  t.is(result.summary.avgHashrateMhs, 4000, 'summary should reflect filtered racks only')
   t.pass()
 })
 
@@ -198,7 +301,6 @@ test('getHashrate - grouped mode handles empty results', async (t) => {
 
   t.is(result.log.length, 0, 'grouped log should be empty when no data is returned')
   t.is(result.summary.avgHashrateMhs, null, 'grouped empty summary should have null avg')
-  t.is(result.summary.totalHashrateMhs, 0, 'grouped empty summary should have zero total')
   t.pass()
 })
 
@@ -257,52 +359,56 @@ test('getHashrate - empty ork results', async (t) => {
   t.ok(result.log, 'should return log array')
   t.ok(result.summary, 'should return summary')
   t.is(result.log.length, 0, 'log should be empty with no data')
-  t.is(result.summary.totalHashrateMhs, 0, 'total should be zero')
   t.is(result.summary.avgHashrateMhs, null, 'avg should be null')
   t.pass()
 })
 
-test('processHashrateData - processes array data from ORK', (t) => {
-  const results = [
-    [{ type: 'miner', data: [{ ts: 1700006400000, val: { hashrate_mhs_5m_sum_aggr: 100000 } }], error: null }]
-  ]
+test('getHashrate - returns one entry per bucket without summing samples', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [
+          { ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 100000 },
+          { ts: 1700092800000, hashrate_mhs_5m_sum_aggr: 120000 }
+        ]
+      }
+    }
+  })
 
-  const daily = processHashrateData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  const key = Object.keys(daily)[0]
-  t.is(daily[key], 100000, 'should extract hashrate from val')
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is(capturedPayload.shouldCalculateAvg, true, 'should ask the rack to average samples in the bucket')
+  t.is(result.log.length, 2, 'should emit one entry per bucket')
+  t.is(result.log[0].hashrateMhs, 100000, 'should read the bucket value as-is')
+  t.is(result.log[1].hashrateMhs, 120000, 'should read the bucket value as-is')
   t.pass()
 })
 
-test('processHashrateData - processes object-keyed data', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { hashrate_mhs_5m_sum_aggr: 100000 } } }]
-  ]
+test('getHashrate - interval selects the bucket range', async (t) => {
+  const captured = []
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        captured.push(payload)
+        return []
+      }
+    }
+  })
 
-  const daily = processHashrateData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  t.pass()
-})
+  const query = { start: 1700000000000, end: 1700100000000 }
+  await getHashrate(mockCtx, { query: { ...query, interval: '1h' } })
+  await getHashrate(mockCtx, { query: { ...query, interval: '1d' } })
+  await getHashrate(mockCtx, { query: { ...query, interval: '1w' } })
 
-test('processHashrateData - handles error results', (t) => {
-  const results = [{ error: 'timeout' }]
-  const daily = processHashrateData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.is(Object.keys(daily).length, 0, 'should be empty for error results')
-  t.pass()
-})
-
-test('processHashrateData - aggregates multiple orks', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { hashrate_mhs_5m_sum_aggr: 50000 } } }],
-    [{ data: { 1700006400000: { hashrate_mhs_5m_sum_aggr: 30000 } } }]
-  ]
-
-  const daily = processHashrateData(results)
-  const key = Object.keys(daily)[0]
-  t.is(daily[key], 80000, 'should sum hashrate from multiple orks')
+  t.is(captured[0].groupRange, null, '1h should not bucket')
+  t.is(captured[1].groupRange, '1D', '1d should bucket daily')
+  t.is(captured[2].groupRange, '1W', '1w should bucket weekly')
   t.pass()
 })
 
@@ -313,14 +419,13 @@ test('calculateHashrateSummary - calculates from log entries', (t) => {
   ]
 
   const summary = calculateHashrateSummary(log)
-  t.is(summary.totalHashrateMhs, 220000, 'should sum hashrate')
   t.is(summary.avgHashrateMhs, 110000, 'should average hashrate')
+  t.absent('totalHashrateMhs' in summary, 'should not expose a total that is just avg x bucket count')
   t.pass()
 })
 
 test('calculateHashrateSummary - handles empty log', (t) => {
   const summary = calculateHashrateSummary([])
-  t.is(summary.totalHashrateMhs, 0, 'should be zero')
   t.is(summary.avgHashrateMhs, null, 'should be null')
   t.pass()
 })
@@ -335,7 +440,7 @@ test('getConsumption - happy path', async (t) => {
     },
     net_r0: {
       jRequest: async () => {
-        return [{ type: 'powermeter', data: [{ ts: dayTs, val: { site_power_w: 5000000 } }], error: null }]
+        return [{ ts: dayTs, site_power_w: 5000000 }]
       }
     }
   })
@@ -350,9 +455,55 @@ test('getConsumption - happy path', async (t) => {
   t.ok(Array.isArray(result.log), 'log should be array')
   t.ok(result.log.length > 0, 'log should have entries')
   t.is(result.log[0].powerW, 5000000, 'should have power value')
-  t.is(result.log[0].consumptionMWh, (5000000 * 24) / 1000000, 'should convert to MWh')
+  t.is(result.log[0].consumptionMWh, (5000000 * 3) / 1000000, 'should convert to MWh over the bucket span')
   t.ok(result.summary.avgPowerW !== null, 'should have avg power')
   t.ok(result.summary.totalConsumptionMWh > 0, 'should have total consumption')
+  t.pass()
+})
+
+test('getConsumption - central DCS reads site power from the DCS worker', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{ ts: 1700006400000, site_power_w: 5000000 }]
+      }
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is(capturedPayload.type, 'dcs-siemens', 'should tail the DCS worker type')
+  t.is(capturedPayload.tag, 't-dcs-custom', 'should use the configured DCS tag')
+  t.is(result.log[0].powerW, 5000000, 'should read site_power_w from the DCS log')
+  t.pass()
+})
+
+test('getConsumption - non-DCS reads site power from the powermeter worker', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{ ts: 1700006400000, site_power_w: 5000000 }]
+      }
+    }
+  })
+
+  await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is(capturedPayload.type, 'powermeter', 'should tail the powermeter worker type')
+  t.is(capturedPayload.tag, 't-powermeter', 'should use the powermeter tag')
   t.pass()
 })
 
@@ -400,47 +551,21 @@ test('getConsumption - empty ork results', async (t) => {
   t.pass()
 })
 
-test('processConsumptionData - processes array data from ORK', (t) => {
-  const results = [
-    [{ type: 'powermeter', data: [{ ts: 1700006400000, val: { site_power_w: 5000 } }], error: null }]
-  ]
+test('getConsumption - MWh scales with the bucket span', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: 1700006400000, site_power_w: 5000000 }]
+    }
+  })
 
-  const daily = processConsumptionData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  const key = Object.keys(daily)[0]
-  t.is(daily[key], 5000, 'should extract power from val')
-  t.pass()
-})
+  const query = { start: 1700000000000, end: 1700100000000 }
+  const hourly = await getConsumption(mockCtx, { query: { ...query, interval: '1h' } })
+  const daily = await getConsumption(mockCtx, { query: { ...query, interval: '1d' } })
 
-test('processConsumptionData - processes object-keyed data', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { site_power_w: 5000 } } }]
-  ]
-
-  const daily = processConsumptionData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  t.pass()
-})
-
-test('processConsumptionData - handles error results', (t) => {
-  const results = [{ error: 'timeout' }]
-  const daily = processConsumptionData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.is(Object.keys(daily).length, 0, 'should be empty for error results')
-  t.pass()
-})
-
-test('processConsumptionData - aggregates multiple orks', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { site_power_w: 3000 } } }],
-    [{ data: { 1700006400000: { site_power_w: 2000 } } }]
-  ]
-
-  const daily = processConsumptionData(results)
-  const key = Object.keys(daily)[0]
-  t.is(daily[key], 5000, 'should sum power from multiple orks')
+  t.is(hourly.log[0].consumptionMWh, 15, '3h bucket at 5 MW is 15 MWh')
+  t.is(daily.log[0].consumptionMWh, 120, '24h bucket at 5 MW is 120 MWh')
+  t.is(hourly.log[0].powerW, daily.log[0].powerW, 'average power is unaffected by bucket span')
   t.pass()
 })
 
@@ -631,7 +756,7 @@ test('getEfficiency - happy path', async (t) => {
     },
     net_r0: {
       jRequest: async () => {
-        return [{ type: 'miner', data: [{ ts: dayTs, val: { efficiency_w_ths_avg_aggr: 25.5 } }], error: null }]
+        return [{ ts: dayTs, efficiency_w_ths_avg_aggr: 25.5 }]
       }
     }
   })
@@ -647,6 +772,144 @@ test('getEfficiency - happy path', async (t) => {
   t.ok(result.log.length > 0, 'log should have entries')
   t.is(result.log[0].efficiencyWThs, 25.5, 'should have efficiency value')
   t.ok(result.summary.avgEfficiencyWThs !== null, 'should have avg efficiency')
+  t.pass()
+})
+
+test('getEfficiency - central DCS derives efficiency from DCS site power over miner hashrate', async (t) => {
+  const dayTs = 1700006400000
+  const payloads = []
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        payloads.push(payload)
+        if (payload.type === 'dcs-siemens') {
+          return [{ ts: dayTs, site_power_w: 3000000 }]
+        }
+        // miner hashrate: 1e11 Mh/s -> 1e5 THs
+        return [{ ts: dayTs, hashrate_mhs_5m_sum_aggr: 100000000000 }]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  const dcsPayload = payloads.find(p => p.type === 'dcs-siemens')
+  const minerPayload = payloads.find(p => p.type === 'miner')
+  t.ok(dcsPayload, 'should tail the DCS worker for site power')
+  t.is(dcsPayload.tag, 't-dcs-custom', 'should use the configured DCS tag')
+  t.is(dcsPayload.aggrFields.site_power_w, 1, 'should request site power aggregate')
+  t.ok(minerPayload, 'should tail the miner worker for hashrate')
+  t.is(minerPayload.aggrFields.hashrate_mhs_5m_sum_aggr, 1, 'should request hashrate aggregate')
+  // 3,000,000 W / 100,000 THs = 30 W/THs
+  t.is(result.log[0].efficiencyWThs, 30, 'should divide site power by hashrate')
+  t.is(result.summary.avgEfficiencyWThs, 30, 'summary should reflect the derived efficiency')
+  t.pass()
+})
+
+test('getEfficiency - central DCS with no hashrate yields zero, not a crash', async (t) => {
+  const dayTs = 1700006400000
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload.type === 'dcs-siemens') return [{ ts: dayTs, site_power_w: 3000000 }]
+        return []
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is(result.log[0].efficiencyWThs, 0, 'should not divide by zero hashrate')
+  t.pass()
+})
+
+test('getEfficiency - central DCS aligns multiple entries by timestamp', async (t) => {
+  const ts1 = 1700006400000
+  const ts2 = 1700092800000
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload.type === 'dcs-siemens') {
+          return [
+            { ts: ts1, site_power_w: 3000000 },
+            { ts: ts2, site_power_w: 6000000 }
+          ]
+        }
+        // 1e11 Mh/s -> 1e5 THs for both buckets
+        return [
+          { ts: ts1, hashrate_mhs_5m_sum_aggr: 100000000000 },
+          { ts: ts2, hashrate_mhs_5m_sum_aggr: 100000000000 }
+        ]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is(result.log.length, 2, 'should keep one entry per DCS bucket')
+  // 3,000,000 / 100,000 = 30 ; 6,000,000 / 100,000 = 60
+  t.is(result.log[0].efficiencyWThs, 30, 'first bucket pairs power with its own hashrate')
+  t.is(result.log[1].efficiencyWThs, 60, 'second bucket pairs power with its own hashrate')
+  t.is(result.summary.avgEfficiencyWThs, 45, 'summary averages across buckets')
+  t.pass()
+})
+
+test('getEfficiency - central DCS handles non-overlapping timestamps in both series', async (t) => {
+  const tsBoth = 1700006400000
+  const tsDcsOnly = 1700092800000
+  const tsMinerOnly = 1700179200000
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload.type === 'dcs-siemens') {
+          return [
+            { ts: tsBoth, site_power_w: 3000000 },
+            { ts: tsDcsOnly, site_power_w: 9000000 }
+          ]
+        }
+        return [
+          { ts: tsBoth, hashrate_mhs_5m_sum_aggr: 100000000000 },
+          { ts: tsMinerOnly, hashrate_mhs_5m_sum_aggr: 100000000000 }
+        ]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700200000000 }
+  })
+
+  // Log is driven by DCS power points; a miner-only bucket has no power and is dropped.
+  t.is(result.log.length, 2, 'should emit one entry per DCS bucket only')
+  t.is(result.log[0].ts, tsBoth, 'first entry is the shared bucket')
+  t.is(result.log[0].efficiencyWThs, 30, 'shared bucket divides power by hashrate')
+  t.is(result.log[1].ts, tsDcsOnly, 'second entry is the DCS-only bucket')
+  t.is(result.log[1].efficiencyWThs, 0, 'DCS-only bucket has no hashrate, yields zero')
+  t.absent(result.log.find(e => e.ts === tsMinerOnly), 'miner-only bucket is not emitted')
+  // (30 + 0) / 2 = 15
+  t.is(result.summary.avgEfficiencyWThs, 15, 'summary averages over emitted buckets')
   t.pass()
 })
 
@@ -693,52 +956,6 @@ test('getEfficiency - empty ork results', async (t) => {
   t.pass()
 })
 
-test('processEfficiencyData - processes array data from ORK', (t) => {
-  const results = [
-    [{ type: 'miner', data: [{ ts: 1700006400000, val: { efficiency_w_ths_avg_aggr: 25.5 } }], error: null }]
-  ]
-
-  const daily = processEfficiencyData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  const key = Object.keys(daily)[0]
-  t.is(daily[key].total, 25.5, 'should extract efficiency total')
-  t.is(daily[key].count, 1, 'should track count')
-  t.pass()
-})
-
-test('processEfficiencyData - processes object-keyed data', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { efficiency_w_ths_avg_aggr: 25.5 } } }]
-  ]
-
-  const daily = processEfficiencyData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  t.pass()
-})
-
-test('processEfficiencyData - handles error results', (t) => {
-  const results = [{ error: 'timeout' }]
-  const daily = processEfficiencyData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.is(Object.keys(daily).length, 0, 'should be empty for error results')
-  t.pass()
-})
-
-test('processEfficiencyData - averages across multiple orks', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { efficiency_w_ths_avg_aggr: 20 } } }],
-    [{ data: { 1700006400000: { efficiency_w_ths_avg_aggr: 30 } } }]
-  ]
-
-  const daily = processEfficiencyData(results)
-  const key = Object.keys(daily)[0]
-  t.is(daily[key].total, 50, 'should sum efficiency totals')
-  t.is(daily[key].count, 2, 'should track count from multiple orks')
-  t.pass()
-})
-
 test('calculateEfficiencySummary - calculates from log entries', (t) => {
   const log = [
     { ts: 1700006400000, efficiencyWThs: 25 },
@@ -753,6 +970,185 @@ test('calculateEfficiencySummary - calculates from log entries', (t) => {
 test('calculateEfficiencySummary - handles empty log', (t) => {
   const summary = calculateEfficiencySummary([])
   t.is(summary.avgEfficiencyWThs, null, 'should be null')
+  t.pass()
+})
+
+test('getEfficiency - grouped by miner uses type group aggregation', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{
+          ts: 1700006400000,
+          efficiency_w_ths_type_group_avg_aggr: { 'S19-Pro': 30, S21: 20 }
+        }]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, groupBy: 'miner' }
+  })
+
+  t.is(capturedPayload.fields.efficiency_w_ths_type_group_avg, 1, 'should request type-group source field')
+  t.is(capturedPayload.aggrFields.efficiency_w_ths_type_group_avg_aggr, 1, 'should request type-group aggregate field')
+  t.is(result.log.length, 1, 'should map one grouped row')
+  t.alike(result.log[0].efficiencyWThs, { 'S19-Pro': 30, S21: 20 }, 'should map grouped efficiency value')
+  t.is(result.summary.avgEfficiencyWThs, 25, 'should average across all group readings')
+  t.ok(result.summary.groupedBy, 'should have per-miner breakdown')
+  t.is(result.summary.groupedBy['S19-Pro'].avgEfficiencyWThs, 30, 'should have per-miner avg')
+  t.is(result.summary.groupedBy.S21.avgEfficiencyWThs, 20, 'should have per-miner avg')
+  t.pass()
+})
+
+test('getEfficiency - grouped by container uses container group aggregation', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{
+          ts: 1700006400000,
+          efficiency_w_ths_container_group_avg_aggr: { 'container-A': 24, 'container-B': 28 }
+        }]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, groupBy: 'container' }
+  })
+
+  t.is(capturedPayload.fields.efficiency_w_ths_container_group_avg, 1, 'should request container-group source field')
+  t.is(capturedPayload.aggrFields.efficiency_w_ths_container_group_avg_aggr, 1, 'should request container-group aggregate field')
+  t.is(result.log.length, 1, 'should map grouped row')
+  t.alike(result.log[0].efficiencyWThs, { 'container-A': 24, 'container-B': 28 }, 'should map container grouped efficiency value')
+  t.is(result.summary.avgEfficiencyWThs, 26, 'should average across all group readings')
+  t.ok(result.summary.groupedBy, 'should have per-container breakdown')
+  t.is(result.summary.groupedBy['container-A'].avgEfficiencyWThs, 24, 'should have per-container avg')
+  t.is(result.summary.groupedBy['container-B'].avgEfficiencyWThs, 28, 'should have per-container avg')
+  t.pass()
+})
+
+test('getEfficiency - grouped summary averages across multiple entries', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [
+        { ts: 1700006400000, efficiency_w_ths_container_group_avg_aggr: { 'container-A': 24, 'container-B': 28 } },
+        { ts: 1700092800000, efficiency_w_ths_container_group_avg_aggr: { 'container-A': 26, 'container-B': 30 } }
+      ]
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700200000000, groupBy: 'container' }
+  })
+
+  t.is(result.log.length, 2, 'should map both daily rows')
+  t.is(result.summary.avgEfficiencyWThs, 27, 'site avg should span both entries ((24+28+26+30)/4)')
+  t.is(result.summary.groupedBy['container-A'].avgEfficiencyWThs, 25, 'per-group avg should span both entries ((24+26)/2)')
+  t.is(result.summary.groupedBy['container-B'].avgEfficiencyWThs, 29, 'per-group avg should span both entries ((28+30)/2)')
+  t.pass()
+})
+
+test('getEfficiency - grouped by rack uses rack group aggregation', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{
+          ts: 1700006400000,
+          efficiency_w_ths_pdu_rack_group_avg_aggr: {
+            'group-1_rack-1': 22, 'group-1_rack-2': 24, 'group-2_rack-1': 26
+          }
+        }]
+      }
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, groupBy: 'rack' }
+  })
+
+  t.is(capturedPayload.fields.efficiency_w_ths_pdu_rack_group_avg, 1, 'should request rack-group source field')
+  t.is(capturedPayload.aggrFields.efficiency_w_ths_pdu_rack_group_avg_aggr, 1, 'should request rack-group aggregate field')
+  t.alike(result.log[0].efficiencyWThs, { 'group-1_rack-1': 22, 'group-1_rack-2': 24, 'group-2_rack-1': 26 }, 'should map all racks when no filter given')
+  t.ok(result.summary.groupedBy['group-1_rack-1'], 'should have per-rack breakdown')
+  t.pass()
+})
+
+test('getEfficiency - grouped by rack filters to requested racks', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{
+        ts: 1700006400000,
+        efficiency_w_ths_pdu_rack_group_avg_aggr: {
+          'group-1_rack-1': 22, 'group-1_rack-2': 24, 'group-2_rack-1': 26
+        }
+      }]
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: {
+      start: 1700000000000,
+      end: 1700100000000,
+      groupBy: 'rack',
+      racks: 'group-1_rack-1, group-2_rack-1'
+    }
+  })
+
+  t.alike(result.log[0].efficiencyWThs, { 'group-1_rack-1': 22, 'group-2_rack-1': 26 }, 'should keep only requested racks')
+  t.is(result.summary.avgEfficiencyWThs, 24, 'summary should reflect filtered racks only')
+  t.absent(result.summary.groupedBy['group-1_rack-2'], 'filtered-out rack should be absent from summary')
+  t.pass()
+})
+
+test('getEfficiency - grouped mode handles empty results', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: { jRequest: async () => [] }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, groupBy: 'container' }
+  })
+
+  t.is(result.log.length, 0, 'grouped log should be empty when no data is returned')
+  t.is(result.summary.avgEfficiencyWThs, null, 'grouped empty summary should have null avg')
+  t.pass()
+})
+
+test('calculateGroupedEfficiencySummary - calculates per-group and site-wide stats', (t) => {
+  const log = [
+    { ts: 1700006400000, efficiencyWThs: { 'container-A': 24, 'container-B': 28 } },
+    { ts: 1700092800000, efficiencyWThs: { 'container-A': 26, 'container-B': 30 } }
+  ]
+
+  const summary = calculateGroupedEfficiencySummary(log, 'container')
+  t.is(summary.avgEfficiencyWThs, 27, 'should average across all group readings')
+  t.ok(summary.groupedBy, 'should have per-group breakdown')
+  t.is(summary.groupedBy['container-A'].avgEfficiencyWThs, 25, 'should average per-group efficiency')
+  t.is(summary.groupedBy['container-B'].avgEfficiencyWThs, 29, 'should average per-group efficiency')
+  t.pass()
+})
+
+test('calculateGroupedEfficiencySummary - skips zero readings and handles empty log', (t) => {
+  const summary = calculateGroupedEfficiencySummary([
+    { ts: 1700006400000, efficiencyWThs: { 'container-A': 24, 'container-B': 0 } }
+  ], 'container')
+  t.is(summary.groupedBy['container-A'].avgEfficiencyWThs, 24, 'should keep non-zero reading')
+  t.absent(summary.groupedBy['container-B'], 'zero-only group should be excluded')
+
+  const empty = calculateGroupedEfficiencySummary([], 'container')
+  t.is(empty.avgEfficiencyWThs, null, 'should be null for empty log')
   t.pass()
 })
 
@@ -799,6 +1195,65 @@ test('getMinerStatus - happy path', async (t) => {
   t.is(result.log[0].sleep, 10, 'should sum sleep counts')
   t.is(result.log[0].maintenance, 2, 'should sum maintenance counts')
   t.is(result.log[0].online, 80, 'should derive online (100-8-10-2)')
+  t.pass()
+})
+
+test('getMinerStatus - emits error and excludes it from online', async (t) => {
+  let payload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, p) => {
+        payload = p
+        return [{
+          ts: 1700006400000,
+          type_cnt: { 'am-s19': 800, 'wm-m50': 481 },
+          offline_cnt: {},
+          power_mode_sleep_cnt: {},
+          maintenance_type_cnt: {},
+          error_cnt: { 'container-1a': 1 }
+        }]
+      }
+    }
+  })
+
+  const result = await getMinerStatus(mockCtx, { query: { start: 1700000000000, end: 1700100000000 } })
+
+  t.is(payload.aggrFields.error_cnt, 1, 'should request the error count field')
+  t.is(result.log[0].error, 1, 'should surface the errored miner')
+  t.is(result.log[0].online, 1280, 'online should exclude the errored miner (1281 - 1)')
+  t.is(result.summary.avgError, 1, 'summary should carry avgError')
+  t.pass()
+})
+
+test('getMinerStatus - groupBy=type returns per-type status counts', async (t) => {
+  let payload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, p) => {
+        payload = p
+        return [{
+          ts: 1700006400000,
+          type_cnt: { 'am-s19': 800, 'wm-m50': 481 },
+          offline_type_cnt: { 'wm-m50': 5 },
+          power_mode_sleep_type_cnt: {},
+          maintenance_type_cnt: { 'am-s19': 3 },
+          error_type_cnt: { 'am-s19': 1 }
+        }]
+      }
+    }
+  })
+
+  const result = await getMinerStatus(mockCtx, { query: { start: 1700000000000, end: 1700100000000, groupBy: 'type' } })
+
+  t.is(payload.aggrFields.type_cnt, 1, 'should request per-type total')
+  t.is(payload.aggrFields.offline_type_cnt, 1, 'should request per-type offline')
+  t.is(payload.aggrFields.error_type_cnt, 1, 'should request per-type error')
+  t.alike(result.log[0].total, { 'am-s19': 800, 'wm-m50': 481 }, 'should key total by type')
+  t.is(result.log[0].online['am-s19'], 796, 'per-type online = 800 - 3 maintenance - 1 error')
+  t.is(result.log[0].online['wm-m50'], 476, 'per-type online = 481 - 5 offline')
+  t.is(result.log[0].error['am-s19'], 1, 'should key error by type')
   t.pass()
 })
 
@@ -1023,6 +1478,145 @@ test('parseEntryTs - handles plain numeric string', (t) => {
 test('parseEntryTs - returns null for invalid input', (t) => {
   t.is(parseEntryTs(null), null, 'null returns null')
   t.is(parseEntryTs(undefined), null, 'undefined returns null')
+  t.pass()
+})
+
+// ==================== Miners By Container Tests ====================
+
+test('getMinersByContainer - rolls up counts and metrics per container', async (t) => {
+  let payload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, p) => {
+        payload = p
+        return [[{
+          ts: 1769630399999,
+          hashrate_mhs_5m_container_group_sum_aggr: { 'bitdeer-1a': 12000000, 'microbt-1': 8000000 },
+          power_w_container_group_sum_aggr: { 'bitdeer-1a': 700000 },
+          efficiency_w_ths_container_group_avg_aggr: { 'bitdeer-1a': 21.5 },
+          temperature_c_group_max_aggr: { 'bitdeer-1a': 78 },
+          temperature_c_group_avg_aggr: { 'bitdeer-1a': 61 },
+          hashrate_mhs_5m_active_container_group_cnt: { 'bitdeer-1a': 198 },
+          offline_cnt: { 'bitdeer-1a': 5 },
+          error_cnt: { 'bitdeer-1a': 2 },
+          not_mining_cnt: { 'microbt-1': 1 },
+          power_mode_sleep_cnt: { 'bitdeer-1a': 1 },
+          power_mode_low_cnt: {},
+          power_mode_normal_cnt: { 'bitdeer-1a': 190, 'microbt-1': 149 },
+          power_mode_high_cnt: { 'bitdeer-1a': 2 }
+        }]]
+      }
+    }
+  })
+
+  const result = await getMinersByContainer(mockCtx, { query: {} })
+
+  t.is(payload.keys[0].key, 'stat-rtd', 'should read the realtime snapshot')
+  t.is(payload.limit, 1, 'should take the latest snapshot only')
+  t.is(payload.aggrFields.offline_cnt, 1, 'should request container-keyed status counts')
+  t.is(payload.aggrFields.hashrate_mhs_5m_active_container_group_cnt, 1, 'should request active count')
+
+  const bd = result.containers['bitdeer-1a']
+  t.is(bd.minerCount, 200, 'minerCount sums the mutually exclusive statuses (5+2+0+1+0+190+2)')
+  t.is(bd.onlineCount, 198, 'onlineCount is the active (hashrate-producing) count')
+  t.is(bd.offlineCount, 5, 'should carry offline count')
+  t.is(bd.errorCount, 2, 'should carry error count')
+  t.is(bd.sleepCount, 1, 'should carry sleep count')
+  t.alike(bd.powerMode, { low: 0, normal: 190, high: 2 }, 'should break down power modes')
+  t.is(bd.hashrateMhs, 12000000, 'should carry container hashrate')
+  t.is(bd.powerW, 700000, 'should carry container power')
+  t.is(bd.efficiencyWThs, 21.5, 'should carry container efficiency')
+  t.alike(bd.temperatureC, { max: 78, avg: 61 }, 'should carry container temperature')
+
+  const mb = result.containers['microbt-1']
+  t.is(mb.minerCount, 150, 'container present in only some fields still totals (1 not-mining + 149 normal)')
+  t.is(mb.offlineCount, 0, 'missing status defaults to zero')
+  t.alike(mb.temperatureC, { max: null, avg: null }, 'missing temperature defaults to null')
+  t.pass()
+})
+
+test('getMinersByContainer - merges across orks and handles empty results', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'a' }, { rpcPublicKey: 'b' }] },
+    net_r0: {
+      jRequest: async (key) => key === 'a'
+        ? [[{ ts: 1, offline_cnt: { c1: 3 }, power_mode_normal_cnt: { c1: 10 } }]]
+        : [[]]
+    }
+  })
+
+  const result = await getMinersByContainer(mockCtx, { query: {} })
+  t.is(result.containers.c1.offlineCount, 3, 'should read the contributing ork')
+  t.is(result.containers.c1.minerCount, 13, 'should total across present fields')
+  t.pass()
+})
+
+test('getMinersByContainer - no data returns empty container map', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'a' }] },
+    net_r0: { jRequest: async () => [[]] }
+  })
+  const result = await getMinersByContainer(mockCtx, { query: {} })
+  t.alike(result.containers, {}, 'should return an empty container map')
+  t.pass()
+})
+
+// ==================== Inventory Summary Tests ====================
+
+test('getInventorySummary - rolls up miner and spare-part counts by status/location', async (t) => {
+  let payload = null
+  // tailLogMulti returns, per ork, one result slot per key (miner, then the 3 spare-part types)
+  const orkResult = [
+    [{ miner_inventory_status_group_cnt_aggr: { ok_brand_new: 3, in_operation: 12, faulty: 1 }, miner_inventory_location_group_cnt_aggr: { 'site.warehouse': 13, 'miner.room': 2 } }],
+    [{ spare_parts_cnt_aggr: 45, spare_part_inventory_status_group_cnt_aggr: { ok_brand_new: 31, spare: 10, faulty: 1, ok_repaired: 2, ok_recovered: 1 }, spare_part_inventory_location_group_cnt_aggr: { 'site.warehouse': 45 } }],
+    [{ spare_parts_cnt_aggr: 50, spare_part_inventory_status_group_cnt_aggr: { ok_brand_new: 50 } }],
+    [{ spare_parts_cnt_aggr: 61, spare_part_inventory_status_group_cnt_aggr: { ok_brand_new: 61 } }]
+  ]
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: { jRequest: async (key, method, p) => { payload = p; return orkResult } }
+  })
+
+  const result = await getInventorySummary(mockCtx, { query: {} })
+
+  t.is(payload.keys.length, 4, 'should query the miner tag plus one per spare-part type')
+  t.is(payload.keys[0].tag, 't-miner', 'first key is all miners')
+  t.is(payload.keys[1].tag, 't-inventory-miner_part-controller', 'spare-part keys use the inventory tags')
+  t.is(payload.aggrFields.miner_inventory_status_group_cnt_aggr, 1, 'should request miner status counts')
+
+  t.alike(result.miners.byStatus, { ok_brand_new: 3, in_operation: 12, faulty: 1 }, 'passes miner status keys through untouched')
+  t.alike(result.miners.byLocation, { 'site.warehouse': 13, 'miner.room': 2 }, 'passes miner location keys through untouched')
+  t.is(result.spareParts.controller.total, 45, 'carries the spare-part total')
+  t.is(result.spareParts.controller.byStatus.spare, 10, 'passes non-enum spare-part statuses through')
+  t.is(result.spareParts.psu.total, 61, 'each spare-part type is keyed separately')
+  t.pass()
+})
+
+test('getInventorySummary - sums keyed counts across orks', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'a' }, { rpcPublicKey: 'b' }] },
+    net_r0: {
+      jRequest: async (key) => key === 'a'
+        ? [[{ miner_inventory_status_group_cnt_aggr: { faulty: 2 } }], [{ spare_parts_cnt_aggr: 5 }], [], []]
+        : [[{ miner_inventory_status_group_cnt_aggr: { faulty: 3 } }], [{ spare_parts_cnt_aggr: 7 }], [], []]
+    }
+  })
+
+  const result = await getInventorySummary(mockCtx, { query: {} })
+  t.is(result.miners.byStatus.faulty, 5, 'should sum status counts across orks')
+  t.is(result.spareParts.controller.total, 12, 'should sum spare-part totals across orks')
+  t.pass()
+})
+
+test('getInventorySummary - empty results yield zeroed shape', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'a' }] },
+    net_r0: { jRequest: async () => [[], [], [], []] }
+  })
+  const result = await getInventorySummary(mockCtx, { query: {} })
+  t.alike(result.miners, { byStatus: {}, byLocation: {} }, 'miners default to empty maps')
+  t.is(result.spareParts.hashboard.total, 0, 'spare-part totals default to zero')
   t.pass()
 })
 
@@ -1805,6 +2399,48 @@ test('getContainerHistory - happy path', async (t) => {
   t.pass()
 })
 
+test('getContainerHistory - interval selects the stat key', async (t) => {
+  const keys = []
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        keys.push(payload.key)
+        return []
+      }
+    }
+  })
+
+  const query = { start: 1700000000000, end: 1700100000000 }
+  for (const interval of ['20s', '1m', '5m', '30m', '3h', '1d']) {
+    await getContainerHistory(mockCtx, { params: { id: 'bitdeer-9a' }, query: { ...query, interval } })
+  }
+
+  t.alike(keys, ['stat-20s', 'stat-1m', 'stat-5m', 'stat-30m', 'stat-3h', 'stat-1D'], 'should map each interval to its stat key')
+  t.pass()
+})
+
+test('getContainerHistory - defaults to stat-5m without interval', async (t) => {
+  let capturedKey = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedKey = payload.key
+        return []
+      }
+    }
+  })
+
+  await getContainerHistory(mockCtx, {
+    params: { id: 'bitdeer-9a' },
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.is(capturedKey, 'stat-5m', 'should keep the existing default')
+  t.pass()
+})
+
 test('getContainerHistory - missing id throws', async (t) => {
   const mockCtx = withDataProxy({
     conf: { orks: [] },
@@ -2060,4 +2696,63 @@ test('processPowerModeTimelineData - handles non-object powerModeObj', (t) => {
   const log = processPowerModeTimelineData(results, null)
   t.is(log.length, 0, 'should skip non-object powerModeObj entries')
   t.pass()
+})
+
+// ==================== Grouped range-string ts Tests ====================
+// With groupRange the ork returns ts as a range string ("<start>-<end>"). Passing that
+// through raw reaches the UI as a non-numeric timestamp, which charts plotted at the epoch
+// (a 1970-01-01 point) and, once they started rejecting undated readings, dropped entirely.
+// Any range over two days resolves to interval '1d', so this is the default report view.
+
+const RANGE_TS = '1770854400000-1771459199999'
+const RANGE_START = 1770854400000
+
+test('getHashrate - normalizes a grouped range-string ts to its start', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: RANGE_TS, hashrate_mhs_5m_sum_aggr: 100000 }]
+    }
+  })
+
+  // 7-day span -> interval '1d' -> groupRange '1D'
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.is(result.log[0].ts, RANGE_START, 'ts should be the numeric range start')
+  t.is(typeof result.log[0].ts, 'number', 'ts should be a number, not a range string')
+  t.is(result.log[0].hashrateMhs, 100000, 'value should be preserved')
+})
+
+test('getConsumption - normalizes a grouped range-string ts to its start', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: RANGE_TS, power_w_sum_aggr: 5000 }]
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.is(result.log[0].ts, RANGE_START, 'ts should be the numeric range start')
+  t.is(typeof result.log[0].ts, 'number', 'ts should be a number, not a range string')
+})
+
+test('getEfficiency - normalizes a grouped range-string ts to its start', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{ ts: RANGE_TS, efficiency_w_ths_aggr: 24 }]
+    }
+  })
+
+  const result = await getEfficiency(mockCtx, {
+    query: { start: 1770854400000, end: 1771459199999 }
+  })
+
+  t.is(result.log[0].ts, RANGE_START, 'ts should be the numeric range start')
+  t.is(typeof result.log[0].ts, 'number', 'ts should be a number, not a range string')
 })

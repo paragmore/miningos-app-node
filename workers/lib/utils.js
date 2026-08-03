@@ -1,6 +1,7 @@
 'use strict'
 
 const async = require('async')
+const mingo = require('mingo')
 const { RPC_TIMEOUT } = require('./constants')
 const { getStartOfDay } = require('./period.utils')
 
@@ -180,6 +181,55 @@ function matchesFilter (item, filter, allowedFields) {
   return true
 }
 
+// scalar -> equality; array -> $in; object -> operator conditions (allow-listed).
+function normalizeFilterValue (value, allowedOpSet) {
+  if (Array.isArray(value)) return { $in: value }
+  if (isValidJsonObject(value)) {
+    const conds = Object.entries(value)
+    if (conds.length === 0) throw new Error('ERR_INVALID_FILTER')
+    const out = {}
+    for (const [op, opVal] of conds) {
+      if (!allowedOpSet.has(op)) throw new Error('ERR_INVALID_FILTER')
+      if ((op === '$in' || op === '$nin') && !Array.isArray(opVal)) {
+        throw new Error('ERR_INVALID_FILTER')
+      }
+      out[op] = opVal
+    }
+    return out
+  }
+  return value
+}
+
+// Validates a filter against allow-listed fields/operators and returns a mingo
+// query. Throws ERR_INVALID_FILTER on anything outside the allow-list.
+function validateFilter (filter, allowedFields, allowedOperators) {
+  if (filter == null) return {}
+  if (!isValidJsonObject(filter)) throw new Error('ERR_INVALID_FILTER')
+  const allowedFieldSet = new Set(allowedFields)
+  const allowedOpSet = new Set(allowedOperators)
+  const normalized = {}
+  for (const [field, value] of Object.entries(filter)) {
+    if (!allowedFieldSet.has(field)) throw new Error('ERR_INVALID_FILTER')
+    normalized[field] = normalizeFilterValue(value, allowedOpSet)
+  }
+  return normalized
+}
+
+// Applies a normalised filter to an in-memory array via mingo (no-op when empty).
+function applyMongoFilter (items, normalizedFilter) {
+  if (!normalizedFilter || Object.keys(normalizedFilter).length === 0) return items
+  return new mingo.Query(normalizedFilter).find(items).all()
+}
+
+// ANDs two mongo queries, dropping empty operands and only wrapping in $and when both exist.
+function combineAnd (a, b) {
+  const aEmpty = !a || Object.keys(a).length === 0
+  const bEmpty = !b || Object.keys(b).length === 0
+  if (aEmpty) return b || {}
+  if (bEmpty) return a
+  return { $and: [a, b] }
+}
+
 module.exports = {
   dateNowSec,
   extractIps,
@@ -194,6 +244,9 @@ module.exports = {
   runParallel,
   deduplicateAlerts,
   matchesFilter,
+  validateFilter,
+  applyMongoFilter,
+  combineAnd,
   escapeRegex,
   csvEscape,
   stableJsonString,

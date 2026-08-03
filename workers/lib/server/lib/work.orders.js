@@ -30,4 +30,13 @@ async function submitWorkOrderAction (ctx, req, action, paramObj, rackId) {
   })
 }
 
-module.exports = { getWorkOrderRackId, submitWorkOrderAction }
+function assertActionApplied (results, errCode) {
+  const errors = (results || []).flatMap(r => r?.errors || [])
+  if (errors.length) {
+    const err = new Error(`${errCode}:${errors.join(',')}`)
+    err.statusCode = 502
+    throw err
+  }
+}
+
+module.exports = { getWorkOrderRackId, submitWorkOrderAction, assertActionApplied }

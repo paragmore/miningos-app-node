@@ -9,6 +9,8 @@ const {
   getConsumption,
   getEfficiency,
   getMinerStatus,
+  getMinersByContainer,
+  getInventorySummary,
   getPowerMode,
   getPowerModeTimeline,
   getTemperature,
@@ -16,6 +18,8 @@ const {
   getContainerTelemetry,
   getContainerHistory
 } = require('../handlers/metrics.handlers')
+const { getSiteLiveStatus } = require('../handlers/site.handlers')
+const { getRevenueHourly } = require('../handlers/finance.handlers')
 const { createCachedAuthRoute } = require('../lib/routeHelpers')
 
 module.exports = (ctx) => {
@@ -34,7 +38,10 @@ module.exports = (ctx) => {
           'metrics/hashrate',
           req.query.start,
           req.query.end,
+          req.query.interval,
           req.query.groupBy,
+          req.query.container,
+          req.query.current,
           req.query.racks
         ],
         ENDPOINTS.METRICS_HASHRATE,
@@ -53,6 +60,7 @@ module.exports = (ctx) => {
           'metrics/consumption',
           req.query.start,
           req.query.end,
+          req.query.interval,
           req.query.groupBy,
           req.query.racks
         ],
@@ -71,7 +79,10 @@ module.exports = (ctx) => {
         (req) => [
           'metrics/efficiency',
           req.query.start,
-          req.query.end
+          req.query.end,
+          req.query.interval,
+          req.query.groupBy,
+          req.query.racks
         ],
         ENDPOINTS.METRICS_EFFICIENCY,
         getEfficiency
@@ -88,10 +99,63 @@ module.exports = (ctx) => {
         (req) => [
           'metrics/miner-status',
           req.query.start,
-          req.query.end
+          req.query.end,
+          req.query.groupBy
         ],
         ENDPOINTS.METRICS_MINER_STATUS,
         getMinerStatus
+      )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.METRICS_MINERS_BY_CONTAINER,
+      schema: {
+        querystring: schemas.query.minersByContainer
+      },
+      ...createCachedAuthRoute(
+        ctx,
+        () => ['metrics/miners/by-container'],
+        ENDPOINTS.METRICS_MINERS_BY_CONTAINER,
+        getMinersByContainer
+      )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.METRICS_SITE_SUMMARY,
+      schema: {
+        querystring: schemas.query.siteSummary
+      },
+      ...createCachedAuthRoute(
+        ctx,
+        () => ['metrics/site/summary'],
+        ENDPOINTS.METRICS_SITE_SUMMARY,
+        getSiteLiveStatus
+      )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.METRICS_INVENTORY_SUMMARY,
+      schema: {
+        querystring: schemas.query.inventorySummary
+      },
+      ...createCachedAuthRoute(
+        ctx,
+        () => ['metrics/inventory/summary'],
+        ENDPOINTS.METRICS_INVENTORY_SUMMARY,
+        getInventorySummary
+      )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.METRICS_REVENUE_HOURLY,
+      schema: {
+        querystring: schemas.query.revenueHourly
+      },
+      ...createCachedAuthRoute(
+        ctx,
+        (req) => ['metrics/revenue/hourly', req.query.start, req.query.end, req.query.pool],
+        ENDPOINTS.METRICS_REVENUE_HOURLY,
+        getRevenueHourly
       )
     },
     {
@@ -180,6 +244,7 @@ module.exports = (ctx) => {
           req.params.id,
           req.query.start,
           req.query.end,
+          req.query.interval,
           req.query.limit
         ],
         ENDPOINTS.METRICS_CONTAINER_HISTORY,

@@ -1,6 +1,7 @@
 'use strict'
 
 const { CONFIG_TYPES, RPC_METHODS, WORKER_TYPES } = require('../../constants')
+const { assertSafeMongoQuery } = require('../lib/queryUtils')
 
 const VALID_CONFIG_TYPES = Object.values(CONFIG_TYPES)
 
@@ -22,6 +23,7 @@ async function getConfigs (ctx, req) {
     } catch {
       throw new Error('ERR_QUERY_INVALID_JSON')
     }
+    assertSafeMongoQuery(payload.query)
   }
 
   if (req.query.fields) {

@@ -11,7 +11,10 @@ const {
   WORKER_TAGS,
   DEVICE_LIST_FIELDS,
   LOG_FIELDS,
-  COOLING_METRICS_AGGR_FIELDS
+  COOLING_METRICS_AGGR_FIELDS,
+  SPARE_PART_TYPES,
+  sparePartTag,
+  SITE_STATUS_LIVE_WINDOW_MS
 } = require('../../constants')
 const {
   getStartOfDay,
@@ -25,39 +28,73 @@ const {
   parseEntryTs,
   validateStartEnd,
   iterateRpcEntries,
-  forEachRangeAggrItem,
   sumObjectValues,
   extractContainerFromMinerKey,
   resolveInterval,
-  getIntervalConfig
+  getIntervalConfig,
+  mergeGroupedField,
+  extractKeyEntry,
+  mhsToThs
 } = require('../../metrics.utils')
 const { parseRacks } = require('../lib/queryUtils')
+
+function firstOrkEntries (res) {
+  return Array.isArray(res?.[0]) ? res[0] : []
+}
+
+function readHashrate (val, container) {
+  if (container) return Number(val?.[container]) || 0
+  return Number(val) || 0
+}
+
+// Latest stat-rtd sample, for charts that pair a series with a live value.
+async function getCurrentHashrate (ctx, aggrField, container) {
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    type: WORKER_TYPES.MINER,
+    tag: WORKER_TAGS.MINER,
+    key: LOG_KEYS.STAT_RTD,
+    limit: 1,
+    start: Date.now() - SITE_STATUS_LIVE_WINDOW_MS,
+    aggrFields: { [aggrField]: 1 }
+  })
+
+  const entry = firstOrkEntries(res)[0]
+
+  return entry ? readHashrate(entry[aggrField], container) : null
+}
 
 async function getHashrate (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
-  const startDate = new Date(start).toISOString()
-  const endDate = new Date(end).toISOString()
-
   if (req.query.groupBy) return getGoupedHashrate(ctx, req)
 
-  const results = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG_RANGE_AGGR, {
-    keys: [{
-      type: WORKER_TYPES.MINER,
-      startDate,
-      endDate,
-      fields: { [AGGR_FIELDS.HASHRATE_SUM]: 1 },
-      shouldReturnDailyData: 1
-    }]
+  const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
+  const container = req.query.container || null
+  const field = container ? LOG_FIELDS.HASHRATE_SUM_CONTAINER_GROUP : LOG_FIELDS.HASHRATE_SUM
+  const aggrField = container ? AGGR_FIELDS.HASHRATE_SUM_CONTAINER_GROUP_AGGR : AGGR_FIELDS.HASHRATE_SUM
+
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    type: WORKER_TYPES.MINER,
+    tag: WORKER_TAGS.MINER,
+    key,
+    groupRange,
+    shouldCalculateAvg: true,
+    start,
+    end,
+    fields: { [field]: 1 },
+    aggrFields: { [aggrField]: 1 }
   })
 
-  const daily = processHashrateData(results)
-  const log = Object.keys(daily).sort().map(dayTs => ({
-    ts: Number(dayTs),
-    hashrateMhs: daily[dayTs]
+  const log = firstOrkEntries(res).map(val => ({
+    ts: parseEntryTs(val.ts),
+    hashrateMhs: readHashrate(val[aggrField], container)
   }))
 
   const summary = calculateHashrateSummary(log)
+
+  if (req.query.current) {
+    summary.currentHashrateMhs = await getCurrentHashrate(ctx, aggrField, container)
+  }
 
   return { log, summary }
 }
@@ -91,7 +128,7 @@ async function getGoupedHashrate (ctx, req) {
     if (rackFilter && hashrateMhs && typeof hashrateMhs === 'object') {
       hashrateMhs = Object.fromEntries(Object.entries(hashrateMhs).filter(([rack]) => rackFilter.has(rack)))
     }
-    aggr.push({ ts: val.ts, hashrateMhs })
+    aggr.push({ ts: parseEntryTs(val.ts), hashrateMhs })
     return aggr
   }, [])
 
@@ -100,40 +137,16 @@ async function getGoupedHashrate (ctx, req) {
   return { log, summary }
 }
 
-function processHashrateData (results) {
-  const daily = {}
-  for (const entry of iterateRpcEntries(results)) {
-    forEachRangeAggrItem(entry, (ts, val) => {
-      const v = typeof val === 'object' ? (val[AGGR_FIELDS.HASHRATE_SUM] || 0) : (Number(val) || 0)
-      daily[ts] = (daily[ts] || 0) + v
-    })
-  }
-  return daily
-}
-
 function calculateHashrateSummary (log) {
-  if (!log.length) {
-    return {
-      avgHashrateMhs: null,
-      totalHashrateMhs: 0
-    }
-  }
+  if (!log.length) return { avgHashrateMhs: null }
 
   const total = log.reduce((sum, entry) => sum + (entry.hashrateMhs || 0), 0)
 
-  return {
-    avgHashrateMhs: safeDiv(total, log.length),
-    totalHashrateMhs: total
-  }
+  return { avgHashrateMhs: safeDiv(total, log.length) }
 }
 
 function calculateGroupedHashrateSummary (log, groupBy) {
-  if (!log.length) {
-    return {
-      avgHashrateMhs: null,
-      totalHashrateMhs: 0
-    }
-  }
+  if (!log.length) return { avgHashrateMhs: null }
 
   const groupTotals = {}
   const groupCounts = {}
@@ -152,18 +165,21 @@ function calculateGroupedHashrateSummary (log, groupBy) {
   const byGroup = {}
   let siteTotal = 0
   for (const [name, total] of Object.entries(groupTotals)) {
-    byGroup[name] = {
-      avgHashrateMhs: safeDiv(total, groupCounts[name]),
-      totalHashrateMhs: total
-    }
+    byGroup[name] = { avgHashrateMhs: safeDiv(total, groupCounts[name]) }
     siteTotal += total
   }
 
   return {
     avgHashrateMhs: safeDiv(siteTotal, log.length),
-    totalHashrateMhs: siteTotal,
     groupedBy: byGroup
   }
+}
+
+// getIntervalConfig always samples stat-3h, so an unbucketed entry spans 3 hours
+function bucketHours (groupRange) {
+  if (groupRange === '1D') return 24
+  if (groupRange === '1W') return 168
+  return 3
 }
 
 async function getConsumption (ctx, req) {
@@ -171,44 +187,46 @@ async function getConsumption (ctx, req) {
 
   if (req.query.groupBy) return getGroupedConsumption(ctx, req)
 
-  const startDate = new Date(start).toISOString()
-  const endDate = new Date(end).toISOString()
+  const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
 
-  const results = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG_RANGE_AGGR, {
-    keys: [{
-      type: WORKER_TYPES.POWERMETER,
-      startDate,
-      endDate,
-      fields: { [AGGR_FIELDS.SITE_POWER]: 1 },
-      shouldReturnDailyData: 1
-    }]
+  // Central-DCS sites report site power through the Siemens DCS worker's stat log
+  // (site_power_w), not a powermeter worker
+  const dcsEnabled = isCentralDCSEnabled(ctx)
+
+  const requestParams = dcsEnabled
+    ? {
+        type: WORKER_TYPES.DCS,
+        tag: getDCSTag(ctx)
+      }
+    : {
+        type: WORKER_TYPES.POWERMETER,
+        tag: WORKER_TAGS.POWERMETER
+      }
+
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    ...requestParams,
+    key,
+    groupRange,
+    shouldCalculateAvg: true,
+    start,
+    end,
+    fields: { [LOG_FIELDS.SITE_POWER]: 1 },
+    aggrFields: { [AGGR_FIELDS.SITE_POWER]: 1 }
   })
 
-  const daily = processConsumptionData(results)
-  const log = Object.keys(daily).sort().map(dayTs => {
-    const powerW = daily[dayTs]
+  const hours = bucketHours(groupRange)
+  const log = firstOrkEntries(res).map(val => {
+    const powerW = Number(val[AGGR_FIELDS.SITE_POWER]) || 0
     return {
-      ts: Number(dayTs),
+      ts: parseEntryTs(val.ts),
       powerW,
-      // powerW is avg watts for the day; W * 24h / 1,000,000 converts to daily MWh
-      consumptionMWh: (powerW * 24) / 1000000
+      consumptionMWh: (powerW * hours) / 1000000
     }
   })
 
   const summary = calculateConsumptionSummary(log)
 
   return { log, summary }
-}
-
-function processConsumptionData (results) {
-  const daily = {}
-  for (const entry of iterateRpcEntries(results)) {
-    forEachRangeAggrItem(entry, (ts, val) => {
-      const v = typeof val === 'object' ? (val[AGGR_FIELDS.SITE_POWER] || 0) : (Number(val) || 0)
-      daily[ts] = (daily[ts] || 0) + v
-    })
-  }
-  return daily
 }
 
 function calculateConsumptionSummary (log) {
@@ -258,7 +276,7 @@ async function getGroupedConsumption (ctx, req) {
       powerW = Object.fromEntries(Object.entries(powerW).filter(([rack]) => rackFilter.has(rack)))
     }
     aggr.push({
-      ts: val.ts,
+      ts: parseEntryTs(val.ts),
       powerW,
       consumptionMWh: typeof powerW === 'object' && powerW !== null
         ? Object.fromEntries(
@@ -317,23 +335,31 @@ function calculateGroupedConsumptionSummary (log, groupBy) {
 async function getEfficiency (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
-  const startDate = new Date(start).toISOString()
-  const endDate = new Date(end).toISOString()
+  if (req.query.groupBy) return getGroupedEfficiency(ctx, req)
 
-  const results = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG_RANGE_AGGR, {
-    keys: [{
-      type: WORKER_TYPES.MINER,
-      startDate,
-      endDate,
-      fields: { [AGGR_FIELDS.EFFICIENCY]: 1 },
-      shouldReturnDailyData: 1
-    }]
+  const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
+
+  // Central-DCS sites have no miner-reported site efficiency stat; derive it from
+  // the DCS site meter (site_power_w) over miner hashrate
+  if (isCentralDCSEnabled(ctx)) {
+    return getDCSEfficiency(ctx, { key, groupRange, start, end })
+  }
+
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    type: WORKER_TYPES.MINER,
+    tag: WORKER_TAGS.MINER,
+    key,
+    groupRange,
+    shouldCalculateAvg: true,
+    start,
+    end,
+    fields: { [LOG_FIELDS.EFFICIENCY]: 1 },
+    aggrFields: { [AGGR_FIELDS.EFFICIENCY]: 1 }
   })
 
-  const daily = processEfficiencyData(results)
-  const log = Object.keys(daily).sort().map(dayTs => ({
-    ts: Number(dayTs),
-    efficiencyWThs: daily[dayTs].total / daily[dayTs].count
+  const log = firstOrkEntries(res).map(val => ({
+    ts: parseEntryTs(val.ts),
+    efficiencyWThs: Number(val[AGGR_FIELDS.EFFICIENCY]) || 0
   }))
 
   const summary = calculateEfficiencySummary(log)
@@ -341,18 +367,52 @@ async function getEfficiency (ctx, req) {
   return { log, summary }
 }
 
-function processEfficiencyData (results) {
-  const daily = {}
-  for (const entry of iterateRpcEntries(results)) {
-    forEachRangeAggrItem(entry, (ts, val) => {
-      const eff = typeof val === 'object' ? (val[AGGR_FIELDS.EFFICIENCY] || 0) : (Number(val) || 0)
-      if (!eff) return
-      if (!daily[ts]) daily[ts] = { total: 0, count: 0 }
-      daily[ts].total += eff
-      daily[ts].count += 1
+// Site-meter efficiency (W/THs) per interval bucket: DCS site_power_w over total
+// miner hashrate for the same bucket. Both series share the interval/groupRange
+// so their timestamps align; we key hashrate by ts and divide per DCS power point.
+async function getDCSEfficiency (ctx, { key, groupRange, start, end }) {
+  const [powerRes, hashrateRes] = await Promise.all([
+    ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+      type: WORKER_TYPES.DCS,
+      tag: getDCSTag(ctx),
+      key,
+      groupRange,
+      shouldCalculateAvg: true,
+      start,
+      end,
+      fields: { [LOG_FIELDS.SITE_POWER]: 1 },
+      aggrFields: { [AGGR_FIELDS.SITE_POWER]: 1 }
+    }),
+    ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+      type: WORKER_TYPES.MINER,
+      tag: WORKER_TAGS.MINER,
+      key,
+      groupRange,
+      shouldCalculateAvg: true,
+      start,
+      end,
+      fields: { [LOG_FIELDS.HASHRATE_SUM]: 1 },
+      aggrFields: { [AGGR_FIELDS.HASHRATE_SUM]: 1 }
     })
+  ])
+
+  const hashrateByTs = new Map()
+  for (const val of firstOrkEntries(hashrateRes)) {
+    hashrateByTs.set(val.ts, Number(val[AGGR_FIELDS.HASHRATE_SUM]) || 0)
   }
-  return daily
+
+  const log = firstOrkEntries(powerRes).map(val => {
+    const powerW = Number(val[AGGR_FIELDS.SITE_POWER]) || 0
+    const hashrateThs = mhsToThs(hashrateByTs.get(val.ts) || 0)
+    return {
+      ts: val.ts,
+      efficiencyWThs: hashrateThs > 0 ? powerW / hashrateThs : 0
+    }
+  })
+
+  const summary = calculateEfficiencySummary(log)
+
+  return { log, summary }
 }
 
 function calculateEfficiencySummary (log) {
@@ -369,8 +429,88 @@ function calculateEfficiencySummary (log) {
   }
 }
 
+const EFFICIENCY_GROUP_FIELDS = {
+  miner: { field: LOG_FIELDS.EFFICIENCY_TYPE_GROUP_AVG, aggrField: AGGR_FIELDS.EFFICIENCY_TYPE_GROUP_AVG },
+  container: { field: LOG_FIELDS.EFFICIENCY_CONTAINER_GROUP_AVG, aggrField: AGGR_FIELDS.EFFICIENCY_CONTAINER_GROUP_AVG },
+  rack: { field: LOG_FIELDS.EFFICIENCY_RACK_GROUP_AVG, aggrField: AGGR_FIELDS.EFFICIENCY_RACK_GROUP_AVG }
+}
+
+async function getGroupedEfficiency (ctx, req) {
+  const { groupBy, start, end } = req.query
+
+  const { field, aggrField } = EFFICIENCY_GROUP_FIELDS[groupBy]
+
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    type: WORKER_TYPES.MINER,
+    tag: WORKER_TAGS.MINER,
+    key: LOG_KEYS.STAT_1D,
+    start,
+    end,
+    fields: { [field]: 1 },
+    aggrFields: { [aggrField]: 1 }
+  })
+
+  const racks = groupBy === 'rack' ? parseRacks(req) : null
+  const rackFilter = racks && racks.length ? new Set(racks) : null
+
+  const log = firstOrkEntries(res).map((val) => {
+    let efficiencyWThs = val[aggrField]
+    if (rackFilter && efficiencyWThs && typeof efficiencyWThs === 'object') {
+      efficiencyWThs = Object.fromEntries(Object.entries(efficiencyWThs).filter(([rack]) => rackFilter.has(rack)))
+    }
+    return { ts: parseEntryTs(val.ts), efficiencyWThs }
+  })
+
+  const summary = calculateGroupedEfficiencySummary(log, groupBy)
+
+  return { log, summary }
+}
+
+function calculateGroupedEfficiencySummary (log, groupBy) {
+  if (!log.length) {
+    return {
+      avgEfficiencyWThs: null
+    }
+  }
+
+  const groupTotals = {}
+  const groupCounts = {}
+
+  for (const entry of log) {
+    const efficiency = entry.efficiencyWThs
+    if (typeof efficiency === 'object' && efficiency !== null) {
+      for (const [name, val] of Object.entries(efficiency)) {
+        const v = Number(val) || 0
+        // efficiency is an average metric; skip empty readings so they
+        // don't drag the group/site averages towards zero
+        if (!v) continue
+        groupTotals[name] = (groupTotals[name] || 0) + v
+        groupCounts[name] = (groupCounts[name] || 0) + 1
+      }
+    }
+  }
+
+  const byGroup = {}
+  let siteTotal = 0
+  let siteCount = 0
+  for (const [name, total] of Object.entries(groupTotals)) {
+    byGroup[name] = {
+      avgEfficiencyWThs: safeDiv(total, groupCounts[name])
+    }
+    siteTotal += total
+    siteCount += groupCounts[name]
+  }
+
+  return {
+    avgEfficiencyWThs: safeDiv(siteTotal, siteCount),
+    groupedBy: byGroup
+  }
+}
+
 async function getMinerStatus (ctx, req) {
   const { start, end } = validateStartEnd(req)
+
+  if (req.query.groupBy) return getGroupedMinerStatus(ctx, req)
 
   const results = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
     key: LOG_KEYS.STAT_3H,
@@ -380,7 +520,8 @@ async function getMinerStatus (ctx, req) {
       [AGGR_FIELDS.TYPE_CNT]: 1,
       [AGGR_FIELDS.OFFLINE_CNT]: 1,
       [AGGR_FIELDS.SLEEP_CNT]: 1,
-      [AGGR_FIELDS.MAINTENANCE_CNT]: 1
+      [AGGR_FIELDS.MAINTENANCE_CNT]: 1,
+      [AGGR_FIELDS.ERROR_CNT]: 1
     },
     groupRange: '1D',
     shouldCalculateAvg: true,
@@ -406,20 +547,22 @@ function processMinerStatusData (results) {
     const ts = rawTs ? getStartOfDay(rawTs) : null
     if (!ts) continue
     if (!daily[ts]) {
-      daily[ts] = { online: 0, offline: 0, sleep: 0, maintenance: 0 }
+      daily[ts] = { online: 0, offline: 0, sleep: 0, maintenance: 0, error: 0 }
     }
 
     const offlineCnt = sumObjectValues(entry[AGGR_FIELDS.OFFLINE_CNT] || entry.aggrFields?.[AGGR_FIELDS.OFFLINE_CNT])
     const sleepCnt = sumObjectValues(entry[AGGR_FIELDS.SLEEP_CNT] || entry.aggrFields?.[AGGR_FIELDS.SLEEP_CNT])
     const maintenanceCnt = sumObjectValues(entry[AGGR_FIELDS.MAINTENANCE_CNT] || entry.aggrFields?.[AGGR_FIELDS.MAINTENANCE_CNT])
+    const errorCnt = sumObjectValues(entry[AGGR_FIELDS.ERROR_CNT] || entry.aggrFields?.[AGGR_FIELDS.ERROR_CNT])
 
     daily[ts].offline += offlineCnt
     daily[ts].sleep += sleepCnt
     daily[ts].maintenance += maintenanceCnt
+    daily[ts].error += errorCnt
 
     const totalCount = sumObjectValues(entry[AGGR_FIELDS.TYPE_CNT]) || entry.total_cnt || entry.count || 0
     if (totalCount > 0) {
-      daily[ts].online += Math.max(0, totalCount - offlineCnt - sleepCnt - maintenanceCnt)
+      daily[ts].online += Math.max(0, totalCount - offlineCnt - sleepCnt - maintenanceCnt - errorCnt)
     }
   }
   return daily
@@ -431,7 +574,8 @@ function calculateMinerStatusSummary (log) {
       avgOnline: null,
       avgOffline: null,
       avgSleep: null,
-      avgMaintenance: null
+      avgMaintenance: null,
+      avgError: null
     }
   }
 
@@ -440,15 +584,219 @@ function calculateMinerStatusSummary (log) {
     acc.offline += entry.offline || 0
     acc.sleep += entry.sleep || 0
     acc.maintenance += entry.maintenance || 0
+    acc.error += entry.error || 0
     return acc
-  }, { online: 0, offline: 0, sleep: 0, maintenance: 0 })
+  }, { online: 0, offline: 0, sleep: 0, maintenance: 0, error: 0 })
 
   return {
     avgOnline: safeDiv(totals.online, log.length),
     avgOffline: safeDiv(totals.offline, log.length),
     avgSleep: safeDiv(totals.sleep, log.length),
-    avgMaintenance: safeDiv(totals.maintenance, log.length)
+    avgMaintenance: safeDiv(totals.maintenance, log.length),
+    avgError: safeDiv(totals.error, log.length)
   }
+}
+
+const MINER_STATUS_TYPE_FIELDS = {
+  total: AGGR_FIELDS.TYPE_CNT,
+  offline: AGGR_FIELDS.OFFLINE_TYPE_CNT,
+  sleep: AGGR_FIELDS.SLEEP_TYPE_CNT,
+  maintenance: AGGR_FIELDS.MAINTENANCE_CNT,
+  error: AGGR_FIELDS.ERROR_TYPE_CNT
+}
+
+async function getGroupedMinerStatus (ctx, req) {
+  const { start, end } = req.query
+
+  const aggrFields = {}
+  for (const field of Object.values(MINER_STATUS_TYPE_FIELDS)) aggrFields[field] = 1
+
+  const results = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    key: LOG_KEYS.STAT_3H,
+    type: WORKER_TYPES.MINER,
+    tag: WORKER_TAGS.MINER,
+    aggrFields,
+    groupRange: '1D',
+    shouldCalculateAvg: true,
+    start,
+    end
+  })
+
+  const daily = processGroupedMinerStatusData(results)
+  const log = Object.keys(daily).sort().map(dayTs => ({
+    ts: Number(dayTs),
+    ...daily[dayTs]
+  }))
+
+  return { log }
+}
+
+function processGroupedMinerStatusData (results) {
+  const daily = {}
+  for (const entry of iterateRpcEntries(results)) {
+    const rawTs = parseEntryTs(entry.ts || entry.timestamp)
+    const ts = rawTs ? getStartOfDay(rawTs) : null
+    if (!ts) continue
+    if (!daily[ts]) {
+      daily[ts] = { total: {}, online: {}, offline: {}, sleep: {}, maintenance: {}, error: {} }
+    }
+    const bucket = daily[ts]
+    mergeGroupedField(bucket.total, entry[AGGR_FIELDS.TYPE_CNT])
+    mergeGroupedField(bucket.offline, entry[AGGR_FIELDS.OFFLINE_TYPE_CNT])
+    mergeGroupedField(bucket.sleep, entry[AGGR_FIELDS.SLEEP_TYPE_CNT])
+    mergeGroupedField(bucket.maintenance, entry[AGGR_FIELDS.MAINTENANCE_CNT])
+    mergeGroupedField(bucket.error, entry[AGGR_FIELDS.ERROR_TYPE_CNT])
+  }
+
+  for (const bucket of Object.values(daily)) {
+    for (const type of Object.keys(bucket.total)) {
+      const online = bucket.total[type] - (bucket.offline[type] || 0) - (bucket.sleep[type] || 0) - (bucket.maintenance[type] || 0) - (bucket.error[type] || 0)
+      bucket.online[type] = Math.max(0, online)
+    }
+  }
+  return daily
+}
+
+const MINERS_BY_CONTAINER_AGGR_FIELDS = {
+  [AGGR_FIELDS.HASHRATE_SUM_CONTAINER_GROUP_AGGR]: 1,
+  [AGGR_FIELDS.POWER_W_CONTAINER_GROUP_SUM]: 1,
+  [AGGR_FIELDS.EFFICIENCY_CONTAINER_GROUP_AVG]: 1,
+  [AGGR_FIELDS.TEMP_MAX]: 1,
+  [AGGR_FIELDS.TEMP_AVG]: 1,
+  [AGGR_FIELDS.ACTIVE_CONTAINER_CNT]: 1,
+  [AGGR_FIELDS.OFFLINE_CNT]: 1,
+  [AGGR_FIELDS.ERROR_CNT]: 1,
+  [AGGR_FIELDS.NOT_MINING_CNT]: 1,
+  [AGGR_FIELDS.SLEEP_CNT]: 1,
+  [AGGR_FIELDS.POWER_MODE_LOW_CNT]: 1,
+  [AGGR_FIELDS.POWER_MODE_NORMAL_CNT]: 1,
+  [AGGR_FIELDS.POWER_MODE_HIGH_CNT]: 1
+}
+
+async function getMinersByContainer (ctx, req) {
+  const results = await ctx.dataProxy.requestDataMap(RPC_METHODS.TAIL_LOG_MULTI, {
+    keys: [{ key: LOG_KEYS.STAT_RTD, type: WORKER_TYPES.MINER, tag: WORKER_TAGS.MINER }],
+    limit: 1,
+    aggrFields: MINERS_BY_CONTAINER_AGGR_FIELDS
+  })
+
+  return processMinersByContainer(results)
+}
+
+function processMinersByContainer (results) {
+  const f = {
+    hashrate: {},
+    power: {},
+    efficiency: {},
+    tempMax: {},
+    tempAvg: {},
+    active: {},
+    offline: {},
+    error: {},
+    notMining: {},
+    sleep: {},
+    low: {},
+    normal: {},
+    high: {}
+  }
+
+  for (const orkResult of results) {
+    const entry = extractKeyEntry(orkResult, 0)
+    if (!entry) continue
+    mergeGroupedField(f.hashrate, entry[AGGR_FIELDS.HASHRATE_SUM_CONTAINER_GROUP_AGGR])
+    mergeGroupedField(f.power, entry[AGGR_FIELDS.POWER_W_CONTAINER_GROUP_SUM])
+    mergeGroupedField(f.efficiency, entry[AGGR_FIELDS.EFFICIENCY_CONTAINER_GROUP_AVG], true)
+    mergeGroupedField(f.tempMax, entry[AGGR_FIELDS.TEMP_MAX], true)
+    mergeGroupedField(f.tempAvg, entry[AGGR_FIELDS.TEMP_AVG], true)
+    mergeGroupedField(f.active, entry[AGGR_FIELDS.ACTIVE_CONTAINER_CNT])
+    mergeGroupedField(f.offline, entry[AGGR_FIELDS.OFFLINE_CNT])
+    mergeGroupedField(f.error, entry[AGGR_FIELDS.ERROR_CNT])
+    mergeGroupedField(f.notMining, entry[AGGR_FIELDS.NOT_MINING_CNT])
+    mergeGroupedField(f.sleep, entry[AGGR_FIELDS.SLEEP_CNT])
+    mergeGroupedField(f.low, entry[AGGR_FIELDS.POWER_MODE_LOW_CNT])
+    mergeGroupedField(f.normal, entry[AGGR_FIELDS.POWER_MODE_NORMAL_CNT])
+    mergeGroupedField(f.high, entry[AGGR_FIELDS.POWER_MODE_HIGH_CNT])
+  }
+
+  const containerIds = new Set()
+  for (const field of Object.values(f)) {
+    for (const id of Object.keys(field)) containerIds.add(id)
+  }
+
+  const containers = {}
+  for (const id of containerIds) {
+    const offlineCount = f.offline[id] || 0
+    const errorCount = f.error[id] || 0
+    const notMiningCount = f.notMining[id] || 0
+    const sleepCount = f.sleep[id] || 0
+    const low = f.low[id] || 0
+    const normal = f.normal[id] || 0
+    const high = f.high[id] || 0
+
+    containers[id] = {
+      minerCount: offlineCount + errorCount + notMiningCount + sleepCount + low + normal + high,
+      onlineCount: f.active[id] || 0,
+      offlineCount,
+      errorCount,
+      notMiningCount,
+      sleepCount,
+      powerMode: { low, normal, high },
+      hashrateMhs: f.hashrate[id] || 0,
+      powerW: f.power[id] || 0,
+      efficiencyWThs: f.efficiency[id] || 0,
+      temperatureC: { max: f.tempMax[id] ?? null, avg: f.tempAvg[id] ?? null }
+    }
+  }
+
+  return { containers }
+}
+
+const INVENTORY_AGGR_FIELDS = {
+  [AGGR_FIELDS.MINER_INVENTORY_STATUS]: 1,
+  [AGGR_FIELDS.MINER_INVENTORY_LOCATION]: 1,
+  [AGGR_FIELDS.SPARE_PARTS_CNT]: 1,
+  [AGGR_FIELDS.SPARE_PART_INVENTORY_STATUS]: 1,
+  [AGGR_FIELDS.SPARE_PART_INVENTORY_LOCATION]: 1
+}
+
+async function getInventorySummary (ctx, req) {
+  const keys = [
+    { key: LOG_KEYS.STAT_5M, type: WORKER_TYPES.MINER, tag: WORKER_TAGS.MINER },
+    ...SPARE_PART_TYPES.map(type => ({ key: LOG_KEYS.STAT_5M, type: WORKER_TYPES.INVENTORY, tag: sparePartTag(type) }))
+  ]
+
+  const results = await ctx.dataProxy.requestDataMap(RPC_METHODS.TAIL_LOG_MULTI, {
+    keys,
+    limit: 1,
+    start: Date.now() - SITE_STATUS_LIVE_WINDOW_MS,
+    aggrFields: INVENTORY_AGGR_FIELDS
+  })
+
+  return processInventorySummary(results)
+}
+
+function processInventorySummary (results) {
+  const miners = { byStatus: {}, byLocation: {} }
+  const spareParts = {}
+  for (const type of SPARE_PART_TYPES) spareParts[type] = { total: 0, byStatus: {}, byLocation: {} }
+
+  for (const orkResult of results) {
+    const minerEntry = extractKeyEntry(orkResult, 0)
+    if (minerEntry) {
+      mergeGroupedField(miners.byStatus, minerEntry[AGGR_FIELDS.MINER_INVENTORY_STATUS])
+      mergeGroupedField(miners.byLocation, minerEntry[AGGR_FIELDS.MINER_INVENTORY_LOCATION])
+    }
+
+    SPARE_PART_TYPES.forEach((type, i) => {
+      const entry = extractKeyEntry(orkResult, i + 1)
+      if (!entry) return
+      spareParts[type].total += Number(entry[AGGR_FIELDS.SPARE_PARTS_CNT]) || 0
+      mergeGroupedField(spareParts[type].byStatus, entry[AGGR_FIELDS.SPARE_PART_INVENTORY_STATUS])
+      mergeGroupedField(spareParts[type].byLocation, entry[AGGR_FIELDS.SPARE_PART_INVENTORY_LOCATION])
+    })
+  }
+
+  return { miners, spareParts }
 }
 
 async function getPowerMode (ctx, req) {
@@ -800,6 +1148,17 @@ function processContainerSensorSnapshot (results, containerId) {
   return null
 }
 
+// Container racks schedule these timeframes on top of the thing defaults
+// (rack.container.wrk.js: 20s, 1m, rtd).
+const CONTAINER_HISTORY_KEYS = {
+  '20s': LOG_KEYS.STAT_20S,
+  '1m': LOG_KEYS.STAT_1M,
+  '5m': LOG_KEYS.STAT_5M,
+  '30m': LOG_KEYS.STAT_30M,
+  '3h': LOG_KEYS.STAT_3H,
+  '1d': LOG_KEYS.STAT_1D
+}
+
 async function getContainerHistory (ctx, req) {
   const containerId = req.params.id
 
@@ -817,7 +1176,7 @@ async function getContainerHistory (ctx, req) {
   }
 
   const results = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
-    key: LOG_KEYS.STAT_5M,
+    key: CONTAINER_HISTORY_KEYS[req.query.interval] || LOG_KEYS.STAT_5M,
     type: WORKER_TYPES.CONTAINER,
     tag: WORKER_TAGS.CONTAINER,
     aggrFields: {
@@ -953,19 +1312,24 @@ function calculateCoolingSummary (log) {
 module.exports = {
   ...require('../../metrics.utils'),
   getHashrate,
-  processHashrateData,
   calculateHashrateSummary,
   calculateGroupedHashrateSummary,
   getConsumption,
-  processConsumptionData,
   calculateConsumptionSummary,
   calculateGroupedConsumptionSummary,
   getEfficiency,
-  processEfficiencyData,
   calculateEfficiencySummary,
+  getGroupedEfficiency,
+  calculateGroupedEfficiencySummary,
   getMinerStatus,
   processMinerStatusData,
   calculateMinerStatusSummary,
+  getGroupedMinerStatus,
+  processGroupedMinerStatusData,
+  getMinersByContainer,
+  processMinersByContainer,
+  getInventorySummary,
+  processInventorySummary,
   getPowerMode,
   processPowerModeData,
   calculatePowerModeSummary,
