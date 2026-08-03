@@ -39,7 +39,7 @@ function renderRmaCsv (workOrders) {
     const info = wo.info || {}
     const moves = Array.isArray(info.partsMoves) ? info.partsMoves : []
     const repaired = moves.find(m => m.role === 'repaired') || moves.find(m => m.role === 'diagnosis') || moves[0] || {}
-    const replaced = moves.find(m => m.role === 'replacement') || repaired
+    const replaced = moves.find(m => m.role === 'replacement') || {}
     const repairTs = info.closedAt ?? info.createdAt
     const minerModel = displayMinerModel(info.deviceModel)
     return [
@@ -49,7 +49,7 @@ function renderRmaCsv (workOrders) {
       repaired.partCode,
       replaced.partCode,
       info.issue,
-      info.finalResult,
+      info.notes ?? info.finalResult,
       info.remarks,
       minerModel,
       repairTs ? new Date(repairTs).toISOString().slice(0, 10) : '',
