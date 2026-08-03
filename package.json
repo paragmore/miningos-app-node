@@ -1,6 +1,6 @@
 {
   "name": "@tetherto/miningos-app-node",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MiningOS App Node service",
   "main": "worker.js",
   "keywords": [

@@ -463,7 +463,7 @@ test('handlers: createWorkOrder merges info.notes, info.remarks, info.site, info
       info: {
         notes: 'batch registration',
         remarks: 'test remark',
-        site: 'Ivinhema',
+        site: 'Site-1',
         location: 'site.warehouse'
       }
     }
@@ -471,7 +471,7 @@ test('handlers: createWorkOrder merges info.notes, info.remarks, info.site, info
   const info = flow.lastPush.params[0].info
   t.is(info.notes, 'batch registration')
   t.is(info.remarks, 'test remark')
-  t.is(info.site, 'Ivinhema')
+  t.is(info.site, 'Site-1')
   t.is(info.location, 'site.warehouse')
   t.is(info.deviceType, 'psu', 'top-level fields still present')
   t.ok(!info.info, 'no nested info.info')
