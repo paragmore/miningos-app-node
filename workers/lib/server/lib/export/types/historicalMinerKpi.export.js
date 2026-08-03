@@ -24,18 +24,22 @@ const AGGR_FIELDS = {
   container_specific_stats_group_aggr: 1
 }
 
-function sumGabbaniStats (containerLog) {
+function sumSystemPowerStats (containerLog) {
   const sums = {
     sumProductionPower: 0,
     sumConsumptionPower: 0,
     sumSystemConsumptionPower: 0
   }
   const byContainer = containerLog?.container_specific_stats_group_aggr || {}
-  for (const [key, stats] of Object.entries(byContainer)) {
-    if (!String(key).toLowerCase().includes('gabbani')) continue
-    sums.sumProductionPower += stats?.production_power_w ?? 0
-    sums.sumConsumptionPower += stats?.consumption_power_w ?? 0
-    sums.sumSystemConsumptionPower += stats?.system_consumption_power_w ?? 0
+  for (const stats of Object.values(byContainer)) {
+    if (!stats || typeof stats !== 'object') continue
+    const hasPowerStats = 'production_power_w' in stats ||
+      'consumption_power_w' in stats ||
+      'system_consumption_power_w' in stats
+    if (!hasPowerStats) continue
+    sums.sumProductionPower += stats.production_power_w ?? 0
+    sums.sumConsumptionPower += stats.consumption_power_w ?? 0
+    sums.sumSystemConsumptionPower += stats.system_consumption_power_w ?? 0
   }
   return sums
 }
@@ -90,16 +94,16 @@ module.exports = {
 
     async function * rows () {
       for (const log of minerRows) {
-        const gabbani = sumGabbaniStats(containerByTs.get(log.ts))
+        const systemPower = sumSystemPowerStats(containerByTs.get(log.ts))
         yield {
           time: formatDateTime(new Date(log.ts), timezone),
           totalMinersHashrateMHS: log.hashrate_mhs_1m_sum_aggr,
           totalMinerPowerW: log.power_w_sum_aggr,
           ...attributeColumns(log.power_mode_group_aggr, 'Power Mode'),
           ...attributeColumns(log.status_group_aggr, 'Status'),
-          totalSystemConsumptionW: (log.power_w_sum_aggr || 0) + gabbani.sumSystemConsumptionPower,
-          gridExportPowerW: gabbani.sumProductionPower,
-          gridImportPowerW: gabbani.sumConsumptionPower
+          totalSystemConsumptionW: (log.power_w_sum_aggr || 0) + systemPower.sumSystemConsumptionPower,
+          gridExportPowerW: systemPower.sumProductionPower,
+          gridImportPowerW: systemPower.sumConsumptionPower
         }
       }
     }

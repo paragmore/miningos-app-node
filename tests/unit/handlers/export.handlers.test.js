@@ -351,8 +351,9 @@ test('historical-miner-kpi joins miner and container series by ts', async (t) =>
     {
       ts: 1000,
       container_specific_stats_group_aggr: {
-        'container-m221-gabbani-1': { production_power_w: 50, consumption_power_w: 20, system_consumption_power_w: 5 },
-        'container-other-1': { production_power_w: 999, consumption_power_w: 999, system_consumption_power_w: 999 }
+        'container-m221-1': { production_power_w: 30, consumption_power_w: 15, system_consumption_power_w: 5 },
+        'container-m221-2': { production_power_w: 20, consumption_power_w: 5, system_consumption_power_w: 0 },
+        'container-other-1': { some_other_stat: 999 }
       }
     }
   ]
