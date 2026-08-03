@@ -116,6 +116,9 @@ const ENDPOINTS = {
   ACTIONS_CANCEL: '/auth/actions/voting/cancel',
   DOWNLOAD_LOGS: '/auth/download-logs/:id',
 
+  // Generic data-export endpoint (type-discriminated, streams CSV/JSON)
+  EXPORT: '/auth/export',
+
   // Miner log download flow (start → poll status → stream file)
   MINER_DOWNLOAD_LOGS_START: '/auth/miners/:minerId/download-logs',
   MINER_DOWNLOAD_LOGS_STATUS: '/auth/miners/:minerId/download-logs/:jobId/status',
