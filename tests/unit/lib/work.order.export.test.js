@@ -100,6 +100,43 @@ test('work.order.export: RMA CSV maps a MicroBT Miner WO to the fixed columns', 
   t.is(row[10], 'eng@test', 'Engineer')
 })
 
+test('work.order.export: RMA CSV leaves the replaced column empty when no part was replaced', (t) => {
+  const wo = {
+    code: 'IVI-3-0002',
+    info: {
+      type: 3,
+      deviceModel: 'M63S++_VL28',
+      deviceIdentifier: 'MINER-SN-2',
+      issue: 'Does not turn on',
+      remarks: 'repaired in place',
+      assignedTo: 'eng@test',
+      closedAt: 1730764800000,
+      partsMoves: [{ role: 'diagnosis', partCode: 'HB-REPAIRED' }]
+    }
+  }
+  const row = renderRmaCsv([wo]).trim().split('\r\n')[1].split(',')
+  t.is(row[3], 'HB-REPAIRED', 'Repaired part identifier')
+  t.is(row[4], '', 'Replaced column stays empty instead of repeating the repaired part')
+})
+
+test('work.order.export: RMA CSV takes Repaired Treatment from the work order notes', (t) => {
+  const wo = {
+    code: 'IVI-3-0003',
+    info: {
+      type: 3,
+      deviceModel: 'M63S++_VL28',
+      deviceIdentifier: 'MINER-SN-3',
+      issue: 'Does not turn on',
+      notes: 'reflowed HB connector',
+      finalResult: null,
+      closedAt: 1730764800000,
+      partsMoves: [{ role: 'diagnosis', partCode: 'HB-1' }]
+    }
+  }
+  const row = renderRmaCsv([wo]).trim().split('\r\n')[1].split(',')
+  t.is(row[6], 'reflowed HB connector', 'Repaired Treatment comes from notes')
+})
+
 test('work.order.export: RMA CSV maps a known miner type slug to its friendly model name', (t) => {
   const wo = {
     code: 'IVI-1-0090',
