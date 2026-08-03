@@ -320,6 +320,197 @@ test('handlers: createWorkOrdersBatch Type 2 (move) applies per-device placement
   t.is(moves[1].toPos, '1_2')
 })
 
+const OUTGOING = { id: 'miner-1', code: 'MN-1', type: 'miner-whatsminer', rack: 'miner-rack-1', info: { serialNum: 'SN-OUT', location: 'miner.room', container: 'group-3', pos: '3_1', subnet: '10.0.3.0', status: 'in_operation' } }
+const SPARE = { id: 'miner-2', code: 'MN-2', type: 'miner-whatsminer', rack: 'miner-rack-2', info: { serialNum: 'SN-SPARE', location: 'site.warehouse', container: 'maintenance', pos: '', status: 'ok_brand_new' } }
+
+function buildReplacementCtx (pushed, things = [OUTGOING, SPARE]) {
+  const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
+    if (method === 'pushAction') { pushed.push(params); return { id: 'a', errors: [] } }
+    if (method === 'listThings') {
+      const wanted = (params.query?.$or || []).map(c => c.id || c.code || c['info.serialNum'] || c['info.macAddress']).find(Boolean)
+      return things.filter(t => [t.id, t.code, t.info?.serialNum, t.info?.macAddress].includes(wanted))
+    }
+    return null
+  })
+  ctx.authLib = mockAuthLib
+  ctx._workOrderRackId = RACK
+  return ctx
+}
+
+const moveOutBody = (extra = {}, device = {}) => ({
+  type: 2,
+  devices: [{ deviceType: 'miner', deviceModel: 'M56', deviceIdentifier: 'SN-OUT', ...device }],
+  info: { location: 'site.lab', ...extra }
+})
+
+const rejects = (t, body, code, things) => {
+  const pushed = []
+  const ctx = buildReplacementCtx(pushed, things)
+  return t.exception(
+    () => handlers.createWorkOrdersBatch(ctx, { ...userMeta(), body }),
+    code
+  ).then(() => t.is(pushed.length, 0, 'nothing is moved when the replacement is rejected'))
+}
+
+test('handlers: createWorkOrdersBatch Type 2 (move) installs the replacement miner into the vacated socket', async (t) => {
+  const pushed = []
+  const ctx = buildReplacementCtx(pushed)
+  await handlers.createWorkOrdersBatch(ctx, {
+    ...userMeta(),
+    body: moveOutBody({}, { replacementIdentifier: 'SN-SPARE' })
+  })
+  const [outPush, inPush] = pushed.filter(p => p.action === 'updateThing')
+  const regPush = pushed.find(p => p.action === 'registerThing')
+  t.is(outPush.params[0].id, 'miner-1', 'outgoing miner is pushed first, freeing the socket')
+  t.is(outPush.params[0].info.pos, '', 'outgoing pos cleared')
+  t.is(inPush.params[0].id, 'miner-2')
+  t.is(inPush.params[0].rackId, 'miner-rack-2', 'replacement is updated on its own rack')
+  t.is(inPush.params[0].info.location, 'miner.room')
+  t.is(inPush.params[0].info.container, 'group-3', 'replacement takes the vacated group')
+  t.is(inPush.params[0].info.pos, '3_1', 'replacement takes the vacated socket')
+  t.is(inPush.params[0].info.subnet, '10.0.3.0', 'replacement inherits the group subnet')
+  t.is(inPush.params[0].info.workOrderId, regPush.params[0].id, 'replacement references the created WO id')
+  t.is(inPush.params[0].info.status, undefined, 'replacement status is left untouched')
+
+  const moves = regPush.params[0].info.partsMoves
+  t.is(moves.length, 2, 'the move out and the replacement are both recorded')
+  t.is(moves[0].role, 'move')
+  t.alike(
+    {
+      role: moves[1].role,
+      partId: moves[1].partId,
+      partCode: moves[1].partCode,
+      deviceIdentifier: moves[1].deviceIdentifier,
+      replacesPartId: moves[1].replacesPartId,
+      replacesPartCode: moves[1].replacesPartCode,
+      fromLocation: moves[1].fromLocation,
+      toLocation: moves[1].toLocation,
+      toContainer: moves[1].toContainer,
+      toPos: moves[1].toPos
+    },
+    {
+      role: 'replacement',
+      partId: 'miner-2',
+      partCode: 'MN-2',
+      deviceIdentifier: 'SN-SPARE',
+      replacesPartId: 'miner-1',
+      replacesPartCode: 'MN-1',
+      fromLocation: 'site.warehouse',
+      toLocation: 'miner.room',
+      toContainer: 'group-3',
+      toPos: '3_1'
+    }
+  )
+})
+
+test('handlers: createWorkOrder Type 2 (move) accepts a replacement via info.replacementIdentifier', async (t) => {
+  const pushed = []
+  const ctx = buildReplacementCtx(pushed)
+  await handlers.createWorkOrder(ctx, {
+    ...userMeta(),
+    body: {
+      type: 2,
+      deviceType: 'miner',
+      deviceModel: 'M56',
+      deviceIdentifier: 'SN-OUT',
+      info: { location: 'site.lab', replacementIdentifier: 'SN-SPARE' }
+    }
+  })
+  const [outPush, inPush] = pushed.filter(p => p.action === 'updateThing')
+  t.is(outPush.params[0].id, 'miner-1')
+  t.is(inPush.params[0].id, 'miner-2')
+  t.is(inPush.params[0].info.pos, '3_1')
+  const moves = pushed.find(p => p.action === 'registerThing').params[0].info.partsMoves
+  t.is(moves[1].role, 'replacement')
+})
+
+test('handlers: replacement 400s when the WO is not a move', async (t) => {
+  await rejects(t, {
+    type: 3,
+    devices: [{ deviceType: 'miner', deviceModel: 'M56', deviceIdentifier: 'SN-OUT', replacementIdentifier: 'SN-SPARE' }],
+    issue: 'fan stopped'
+  }, /ERR_WO_REPLACEMENT_NOT_ALLOWED/)
+})
+
+test('handlers: replacement 400s for non-miner devices', async (t) => {
+  const psu = { id: 'part-1', code: 'PS-1', type: 'inventory-miner_part-psu', rack: 'psu-rack-1', info: { serialNum: 'SN-PSU', location: 'miner.room', container: 'group-3', pos: '3_1' } }
+  await rejects(t, {
+    type: 2,
+    devices: [{ deviceType: 'psu', deviceModel: 'P', deviceIdentifier: 'SN-PSU', replacementIdentifier: 'SN-SPARE' }],
+    info: { location: 'site.lab' }
+  }, /ERR_WO_REPLACEMENT_DEVICE_TYPE_INVALID/, [psu, SPARE])
+})
+
+test('handlers: replacement 400s when the move does not empty a socket', async (t) => {
+  await rejects(
+    t,
+    moveOutBody({ location: 'miner.room', container: 'group-4', pos: '4_1' }, { replacementIdentifier: 'SN-SPARE', container: 'group-4', pos: '4_1' }),
+    /ERR_WO_REPLACEMENT_NOT_LEAVING_MINER_ROOM/
+  )
+  const parked = { ...OUTGOING, info: { ...OUTGOING.info, location: 'site.warehouse' } }
+  await rejects(t, moveOutBody({}, { replacementIdentifier: 'SN-SPARE' }), /ERR_WO_REPLACEMENT_NOT_LEAVING_MINER_ROOM/, [parked, SPARE])
+
+  const noSocket = { ...OUTGOING, info: { ...OUTGOING.info, container: 'maintenance', pos: '' } }
+  await rejects(t, moveOutBody({}, { replacementIdentifier: 'SN-SPARE' }), /ERR_WO_REPLACEMENT_POSITION_UNKNOWN/, [noSocket, SPARE])
+})
+
+test('handlers: replacement 400s when the replacement miner cannot be used', async (t) => {
+  await rejects(t, moveOutBody({}, { replacementIdentifier: 'SN-NOPE' }), /ERR_WO_REPLACEMENT_NOT_FOUND/, [OUTGOING])
+
+  const psu = { id: 'part-1', code: 'PS-1', type: 'inventory-miner_part-psu', rack: 'psu-rack-1', info: { serialNum: 'SN-PSU', location: 'site.warehouse' } }
+  await rejects(t, moveOutBody({}, { replacementIdentifier: 'SN-PSU' }), /ERR_WO_REPLACEMENT_DEVICE_TYPE_INVALID/, [OUTGOING, psu])
+
+  const inRoom = { ...SPARE, info: { ...SPARE.info, location: 'miner.room', container: 'group-9', pos: '9_1' } }
+  await rejects(t, moveOutBody({}, { replacementIdentifier: 'SN-SPARE' }), /ERR_WO_REPLACEMENT_NOT_AVAILABLE/, [OUTGOING, inRoom])
+
+  const socketed = { ...SPARE, info: { serialNum: 'SN-SPARE', container: 'group-9', pos: '9_1' } }
+  await rejects(t, moveOutBody({}, { replacementIdentifier: 'SN-SPARE' }), /ERR_WO_REPLACEMENT_NOT_AVAILABLE/, [OUTGOING, socketed])
+})
+
+test('handlers: replacement 400s when it is itself moving out or reused twice', async (t) => {
+  const second = { id: 'miner-3', code: 'MN-3', type: 'miner-whatsminer', rack: 'miner-rack-1', info: { serialNum: 'SN-OUT-2', location: 'miner.room', container: 'group-3', pos: '3_2' } }
+  await rejects(t, {
+    type: 2,
+    devices: [
+      { deviceType: 'miner', deviceModel: 'M56', deviceIdentifier: 'SN-OUT', replacementIdentifier: 'SN-OUT-2' },
+      { deviceType: 'miner', deviceModel: 'M56', deviceIdentifier: 'SN-OUT-2' }
+    ],
+    info: { location: 'site.lab' }
+  }, /ERR_WO_REPLACEMENT_IS_MOVING/, [OUTGOING, second])
+
+  await rejects(t, {
+    type: 2,
+    devices: [
+      { deviceType: 'miner', deviceModel: 'M56', deviceIdentifier: 'SN-OUT', replacementIdentifier: 'SN-SPARE' },
+      { deviceType: 'miner', deviceModel: 'M56', deviceIdentifier: 'SN-OUT-2', replacementIdentifier: 'SN-SPARE' }
+    ],
+    info: { location: 'site.lab' }
+  }, /ERR_WO_REPLACEMENT_DUPLICATE/, [OUTGOING, second, SPARE])
+})
+
+test('handlers: replacement surfaces a failed push instead of swallowing it', async (t) => {
+  const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
+    if (method === 'pushAction') {
+      if (params.params[0].id === 'miner-2') return { id: null, errors: ['ERR_ORK_ACTION_CALLS_EMPTY'] }
+      return { id: 'a', errors: [] }
+    }
+    if (method === 'listThings') {
+      const wanted = (params.query?.$or || []).map(c => c.id || c.code || c['info.serialNum']).find(Boolean)
+      return [OUTGOING, SPARE].filter(t => [t.id, t.code, t.info?.serialNum].includes(wanted))
+    }
+    return null
+  })
+  ctx.authLib = mockAuthLib
+  ctx._workOrderRackId = RACK
+  await t.exception(
+    () => handlers.createWorkOrdersBatch(ctx, {
+      ...userMeta(),
+      body: moveOutBody({}, { replacementIdentifier: 'SN-SPARE' })
+    }),
+    /ERR_WO_REPLACEMENT_PUSH_FAILED/
+  )
+})
+
 test('handlers: createWorkOrder Type 3 applies deviceStatus to the device and records it in the diagnosis move', async (t) => {
   const pushed = []
   const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {

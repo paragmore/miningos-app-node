@@ -36,7 +36,8 @@ const create = {
           deviceStatus: { type: 'string', maxLength: 100 },
           pos: { type: 'string', maxLength: 200 },
           container: { type: 'string', maxLength: 200 },
-          subnet: { type: 'string', maxLength: 200 }
+          subnet: { type: 'string', maxLength: 200 },
+          replacementIdentifier: { type: 'string', minLength: 1, maxLength: 200 }
         }
       }
     },
@@ -67,7 +68,8 @@ const createBatch = {
             deviceIdentifier: { type: 'string', minLength: 1, maxLength: 200 },
             pos: { type: 'string', maxLength: 200 },
             container: { type: 'string', maxLength: 200 },
-            subnet: { type: 'string', maxLength: 200 }
+            subnet: { type: 'string', maxLength: 200 },
+            replacementIdentifier: { type: 'string', minLength: 1, maxLength: 200 }
           }
         }
       },
