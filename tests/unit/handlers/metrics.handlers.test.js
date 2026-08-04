@@ -6,6 +6,7 @@ const {
   calculateHashrateSummary,
   getConsumption,
   calculateConsumptionSummary,
+  calculateByMeterConsumptionSummary,
   calculateGroupedConsumptionSummary,
   getEfficiency,
   calculateEfficiencySummary,
@@ -408,7 +409,8 @@ test('getHashrate - interval selects the bucket range', async (t) => {
   await getHashrate(mockCtx, { query: { ...query, interval: '1d' } })
   await getHashrate(mockCtx, { query: { ...query, interval: '1w' } })
 
-  t.is(captured[0].groupRange, null, '1h should not bucket')
+  t.is(captured[0].groupRange, '1H', '1h should bucket hourly')
+  t.is(captured[0].key, 'stat-30m', '1h should sample the stat-30m log')
   t.is(captured[1].groupRange, '1D', '1d should bucket daily')
   t.is(captured[2].groupRange, '1W', '1w should bucket weekly')
   t.pass()
@@ -457,7 +459,7 @@ test('getConsumption - happy path', async (t) => {
   t.ok(Array.isArray(result.log), 'log should be array')
   t.ok(result.log.length > 0, 'log should have entries')
   t.is(result.log[0].powerW, 5000000, 'should have power value')
-  t.is(result.log[0].consumptionMWh, (5000000 * 3) / 1000000, 'should convert to MWh over the bucket span')
+  t.is(result.log[0].consumptionMWh, (5000000 * 1) / 1000000, 'should convert to MWh over the bucket span')
   t.ok(result.summary.avgPowerW !== null, 'should have avg power')
   t.ok(result.summary.totalConsumptionMWh > 0, 'should have total consumption')
   t.pass()
@@ -506,6 +508,76 @@ test('getConsumption - non-DCS reads site power from the powermeter worker', asy
 
   t.is(capturedPayload.type, 'powermeter', 'should tail the powermeter worker type')
   t.is(capturedPayload.tag, 't-powermeter', 'should use the powermeter tag')
+  t.pass()
+})
+
+test('getConsumption - byMeter reads by_meter_power_w and breaks down per meter', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{ ts: 1700006400000, by_meter_power_w: { 'PM-1': 3000000, 'PM-2': 2000000 } }]
+      }
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, byMeter: true }
+  })
+
+  t.ok('by_meter_power_w' in capturedPayload.fields, 'should project the by_meter_power_w field')
+  t.ok('by_meter_power_w' in capturedPayload.aggrFields, 'should aggregate the by_meter_power_w field')
+  t.alike(result.log[0].powerW, { 'PM-1': 3000000, 'PM-2': 2000000 }, 'log carries per-meter power')
+  // default interval for this range is 1h -> 1h bucket span
+  t.alike(result.log[0].consumptionMWh, { 'PM-1': 3, 'PM-2': 2 }, 'per-meter consumption over the bucket span')
+  t.alike(result.summary.groupedBy, {
+    'PM-1': { avgPowerW: 3000000, totalConsumptionMWh: 3 },
+    'PM-2': { avgPowerW: 2000000, totalConsumptionMWh: 2 }
+  }, 'summary breaks down per meter')
+  t.is(result.summary.avgPowerW, 5000000, 'site avg power sums the meters')
+  t.is(result.summary.totalConsumptionMWh, 5, 'site total consumption sums the meters')
+  t.pass()
+})
+
+test('getConsumption - byMeter throws when central DCS disabled', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: { jRequest: async () => [] }
+  })
+
+  try {
+    await getConsumption(mockCtx, {
+      query: { start: 1700000000000, end: 1700100000000, byMeter: true }
+    })
+    t.fail('should have thrown')
+  } catch (err) {
+    t.is(err.message, 'ERR_BY_METER_REQUIRES_CENTRAL_DCS', 'should reject byMeter without central DCS')
+  }
+  t.pass()
+})
+
+test('getConsumption - byMeter empty results', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: { jRequest: async () => ({}) }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, byMeter: true }
+  })
+
+  t.is(result.log.length, 0, 'log should be empty with no data')
+  t.is(result.summary.totalConsumptionMWh, 0, 'total should be zero')
+  t.is(result.summary.avgPowerW, null, 'avg should be null')
+  t.alike(result.summary.groupedBy, {}, 'no meters grouped')
   t.pass()
 })
 
@@ -565,7 +637,7 @@ test('getConsumption - MWh scales with the bucket span', async (t) => {
   const hourly = await getConsumption(mockCtx, { query: { ...query, interval: '1h' } })
   const daily = await getConsumption(mockCtx, { query: { ...query, interval: '1d' } })
 
-  t.is(hourly.log[0].consumptionMWh, 15, '3h bucket at 5 MW is 15 MWh')
+  t.is(hourly.log[0].consumptionMWh, 5, '1h bucket at 5 MW is 5 MWh')
   t.is(daily.log[0].consumptionMWh, 120, '24h bucket at 5 MW is 120 MWh')
   t.is(hourly.log[0].powerW, daily.log[0].powerW, 'average power is unaffected by bucket span')
   t.pass()
@@ -587,6 +659,29 @@ test('calculateConsumptionSummary - handles empty log', (t) => {
   const summary = calculateConsumptionSummary([])
   t.is(summary.totalConsumptionMWh, 0, 'should be zero')
   t.is(summary.avgPowerW, null, 'should be null')
+  t.pass()
+})
+
+test('calculateByMeterConsumptionSummary - averages power and sums consumption per meter', (t) => {
+  const log = [
+    { ts: 1, powerW: { 'PM-1': 4000000, 'PM-2': 2000000 }, consumptionMWh: { 'PM-1': 4, 'PM-2': 2 } },
+    { ts: 2, powerW: { 'PM-1': 2000000, 'PM-2': 2000000 }, consumptionMWh: { 'PM-1': 2, 'PM-2': 2 } }
+  ]
+
+  const summary = calculateByMeterConsumptionSummary(log)
+  t.is(summary.groupedBy['PM-1'].avgPowerW, 3000000, 'averages PM-1 power across buckets')
+  t.is(summary.groupedBy['PM-1'].totalConsumptionMWh, 6, 'sums PM-1 consumption')
+  t.is(summary.groupedBy['PM-2'].avgPowerW, 2000000, 'averages PM-2 power')
+  t.is(summary.totalConsumptionMWh, 10, 'site total sums all meters')
+  t.is(summary.avgPowerW, 5000000, 'site avg power is total meter power over bucket count')
+  t.pass()
+})
+
+test('calculateByMeterConsumptionSummary - handles empty log', (t) => {
+  const summary = calculateByMeterConsumptionSummary([])
+  t.is(summary.totalConsumptionMWh, 0, 'should be zero')
+  t.is(summary.avgPowerW, null, 'should be null')
+  t.alike(summary.groupedBy, {}, 'no meters grouped')
   t.pass()
 })
 
@@ -1434,8 +1529,8 @@ test('resolveInterval - uses requested interval when provided', (t) => {
 
 test('getIntervalConfig - returns correct configs', (t) => {
   const h = getIntervalConfig('1h')
-  t.is(h.key, 'stat-3h', '1h key should be stat-3h')
-  t.is(h.groupRange, null, '1h should have no groupRange')
+  t.is(h.key, 'stat-30m', '1h key should be stat-30m')
+  t.is(h.groupRange, '1H', '1h groupRange should be 1H')
 
   const d = getIntervalConfig('1d')
   t.is(d.key, 'stat-3h', '1d key should be stat-3h')

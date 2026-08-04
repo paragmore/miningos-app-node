@@ -180,18 +180,19 @@ function calculateGroupedHashrateSummary (log, groupBy) {
   }
 }
 
-// getIntervalConfig always samples stat-3h, so an unbucketed entry spans 3 hours
+// getIntervalConfig always buckets samples into a fixed window, so translate
+// that window into the number of hours a single entry represents.
 function bucketHours (groupRange) {
   if (groupRange === '1D') return 24
   if (groupRange === '1W') return 168
-  return 3
+  return 1 // '1H'
 }
 
 async function getConsumption (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
   if (req.query.groupBy) return getGroupedConsumption(ctx, req)
-
+  
   const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
 
   // Central-DCS sites report site power through the Siemens DCS worker's stat log
@@ -208,6 +209,26 @@ async function getConsumption (ctx, req) {
         tag: WORKER_TAGS.POWERMETER
       }
 
+  // by_meter_power_w is a per-meter breakdown only produced by the DCS worker,
+  // so it's only meaningful when Central-DCS is enabled.
+  const byMeter = req.query.byMeter === true || req.query.byMeter === 'true'
+  if (byMeter && !dcsEnabled) {
+    throw new Error('ERR_BY_METER_REQUIRES_CENTRAL_DCS')
+  }
+
+  const requestParams = dcsEnabled
+    ? {
+        type: WORKER_TYPES.DCS,
+        tag: getDCSTag(ctx)
+      }
+    : {
+        type: WORKER_TYPES.POWERMETER,
+        tag: WORKER_TAGS.POWERMETER
+      }
+
+  const field = byMeter ? LOG_FIELDS.BY_METER_POWER : LOG_FIELDS.SITE_POWER
+  const aggrField = byMeter ? AGGR_FIELDS.BY_METER_POWER : AGGR_FIELDS.SITE_POWER
+
   const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
     ...requestParams,
     key,
@@ -215,14 +236,18 @@ async function getConsumption (ctx, req) {
     shouldCalculateAvg: true,
     start,
     end,
-    fields: { [LOG_FIELDS.SITE_POWER]: 1 },
-    aggrFields: { [AGGR_FIELDS.SITE_POWER]: 1 }
+    fields: { [field]: 1 },
+    aggrFields: { [aggrField]: 1 }
   })
 
   const hours = bucketHours(groupRange)
+
+  if (byMeter) return buildByMeterConsumption(firstOrkEntries(res), aggrField, hours)
+
   const log = firstOrkEntries(res).map(val => {
-    const powerW = Number(val[AGGR_FIELDS.SITE_POWER]) || 0
+    const powerW = Number(val[aggrField]) || 0
     const timeRange = parseEntryTimeRange(val.ts)
+    
     return {
       ts: parseEntryTs(val.ts),
       ...(timeRange && { timeRange }),
@@ -234,6 +259,74 @@ async function getConsumption (ctx, req) {
   const summary = calculateConsumptionSummary(log)
 
   return { log, summary }
+}
+
+// by_meter_power_w arrives as a { meter: powerW } map per bucket. Mirror the
+// grouped-consumption shape so each entry carries per-meter power/consumption.
+function buildByMeterConsumption (entries, aggrField, hours) {
+  const log = entries.map(val => {
+    const raw = val[aggrField]
+    const powerW = raw && typeof raw === 'object' ? raw : {}
+    return {
+      ts: val.ts,
+      powerW,
+      consumptionMWh: Object.fromEntries(
+        Object.entries(powerW).map(([meter, w]) => [meter, ((Number(w) || 0) * hours) / 1000000])
+      )
+    }
+  })
+
+  const summary = calculateByMeterConsumptionSummary(log)
+
+  return { log, summary }
+}
+
+function calculateByMeterConsumptionSummary (log) {
+  if (!log.length) {
+    return {
+      avgPowerW: null,
+      totalConsumptionMWh: 0,
+      groupedBy: {}
+    }
+  }
+
+  const powerTotals = {}
+  const powerCounts = {}
+  const consumptionTotals = {}
+
+  for (const entry of log) {
+    const powerW = entry.powerW
+    if (typeof powerW === 'object' && powerW !== null) {
+      for (const [meter, val] of Object.entries(powerW)) {
+        powerTotals[meter] = (powerTotals[meter] || 0) + (Number(val) || 0)
+        powerCounts[meter] = (powerCounts[meter] || 0) + 1
+      }
+    }
+    const consumptionMWh = entry.consumptionMWh
+    if (typeof consumptionMWh === 'object' && consumptionMWh !== null) {
+      for (const [meter, val] of Object.entries(consumptionMWh)) {
+        consumptionTotals[meter] = (consumptionTotals[meter] || 0) + (Number(val) || 0)
+      }
+    }
+  }
+
+  const byGroup = {}
+  let sitePowerTotal = 0
+  let siteConsumptionTotal = 0
+  for (const [meter, total] of Object.entries(powerTotals)) {
+    byGroup[meter] = {
+      avgPowerW: safeDiv(total, powerCounts[meter]),
+      totalConsumptionMWh: consumptionTotals[meter] || 0
+    }
+    sitePowerTotal += total
+    siteConsumptionTotal += consumptionTotals[meter] || 0
+  }
+
+  return {
+    avgPowerW: safeDiv(sitePowerTotal, log.length),
+    totalConsumptionMWh: siteConsumptionTotal,
+    groupedBy: byGroup
+  }
 }
 
 function calculateConsumptionSummary (log) {
@@ -867,8 +960,9 @@ function processPowerModeData (results, groupRange) {
   const emptyPoint = () => ({ low: 0, normal: 0, high: 0, sleep: 0, offline: 0, notMining: 0, maintenance: 0, error: 0 })
 
   for (const entry of iterateRpcEntries(results)) {
-    const rawTs = parseEntryTs(entry.ts || entry.timestamp)
-    const ts = groupRange && rawTs ? getStartOfDay(rawTs) : rawTs
+    // Grouped entries carry the bucket-start ts (already aligned to the group
+    // range), so use it directly rather than collapsing to the start of the day.
+    const ts = parseEntryTs(entry.ts || entry.timestamp)
     if (!ts) continue
 
     if (!timePoints[ts]) {
@@ -1039,8 +1133,9 @@ function processTemperatureData (results, groupRange, containerFilter) {
   const avgCounts = {}
 
   for (const entry of iterateRpcEntries(results)) {
-    const rawTs = parseEntryTs(entry.ts || entry.timestamp)
-    const ts = groupRange && rawTs ? getStartOfDay(rawTs) : rawTs
+    // Grouped entries carry the bucket-start ts (already aligned to the group
+    // range), so use it directly rather than collapsing to the start of the day.
+    const ts = parseEntryTs(entry.ts || entry.timestamp)
     if (!ts) continue
 
     const maxObj = entry[AGGR_FIELDS.TEMP_MAX] || entry.aggrFields?.[AGGR_FIELDS.TEMP_MAX] || {}
@@ -1285,8 +1380,9 @@ async function getCooling (ctx, req) {
 function processCoolingData (results, groupRange) {
   const points = []
   for (const entry of iterateRpcEntries(results)) {
-    const rawTs = parseEntryTs(entry.ts || entry.timestamp)
-    const ts = groupRange && rawTs ? getStartOfDay(rawTs) : rawTs
+    // Grouped entries carry the bucket-start ts (already aligned to the group
+    // range), so use it directly rather than collapsing to the start of the day.
+    const ts = parseEntryTs(entry.ts || entry.timestamp)
     if (!ts) continue
 
     const read = (field) => {
@@ -1341,6 +1437,7 @@ module.exports = {
   calculateGroupedHashrateSummary,
   getConsumption,
   calculateConsumptionSummary,
+  calculateByMeterConsumptionSummary,
   calculateGroupedConsumptionSummary,
   getEfficiency,
   calculateEfficiencySummary,

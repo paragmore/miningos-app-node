@@ -23,6 +23,7 @@ const schemas = {
         end: { type: 'integer', minimum: 0 },
         interval: { type: 'string', enum: ['1h', '1d', '1w'] },
         groupBy: { type: 'string', enum: ['miner', 'container', 'rack'] },
+        byMeter: { type: 'boolean' },
         racks: { type: 'string' },
         overwriteCache: { type: 'boolean' }
       },
