@@ -192,14 +192,17 @@ async function getConsumption (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
   if (req.query.groupBy) return getGroupedConsumption(ctx, req)
-  
+
+  // by_meter_power_w is a per-meter breakdown only produced by the DCS worker,
+  // so it gets its own DCS-only flow.
+  const byMeter = req.query.byMeter === true || req.query.byMeter === 'true'
+  if (byMeter) return getByMeterConsumption(ctx, req)
+
   const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
 
   // Central-DCS sites report site power through the Siemens DCS worker's stat log
   // (site_power_w), not a powermeter worker
-  const dcsEnabled = isCentralDCSEnabled(ctx)
-
-  const requestParams = dcsEnabled
+  const requestParams = isCentralDCSEnabled(ctx)
     ? {
         type: WORKER_TYPES.DCS,
         tag: getDCSTag(ctx)
@@ -208,26 +211,6 @@ async function getConsumption (ctx, req) {
         type: WORKER_TYPES.POWERMETER,
         tag: WORKER_TAGS.POWERMETER
       }
-
-  // by_meter_power_w is a per-meter breakdown only produced by the DCS worker,
-  // so it's only meaningful when Central-DCS is enabled.
-  const byMeter = req.query.byMeter === true || req.query.byMeter === 'true'
-  if (byMeter && !dcsEnabled) {
-    throw new Error('ERR_BY_METER_REQUIRES_CENTRAL_DCS')
-  }
-
-  const requestParams = dcsEnabled
-    ? {
-        type: WORKER_TYPES.DCS,
-        tag: getDCSTag(ctx)
-      }
-    : {
-        type: WORKER_TYPES.POWERMETER,
-        tag: WORKER_TAGS.POWERMETER
-      }
-
-  const field = byMeter ? LOG_FIELDS.BY_METER_POWER : LOG_FIELDS.SITE_POWER
-  const aggrField = byMeter ? AGGR_FIELDS.BY_METER_POWER : AGGR_FIELDS.SITE_POWER
 
   const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
     ...requestParams,
@@ -236,18 +219,16 @@ async function getConsumption (ctx, req) {
     shouldCalculateAvg: true,
     start,
     end,
-    fields: { [field]: 1 },
-    aggrFields: { [aggrField]: 1 }
+    fields: { [LOG_FIELDS.SITE_POWER]: 1 },
+    aggrFields: { [AGGR_FIELDS.SITE_POWER]: 1 }
   })
 
   const hours = bucketHours(groupRange)
 
-  if (byMeter) return buildByMeterConsumption(firstOrkEntries(res), aggrField, hours)
-
   const log = firstOrkEntries(res).map(val => {
-    const powerW = Number(val[aggrField]) || 0
+    const powerW = Number(val[AGGR_FIELDS.SITE_POWER]) || 0
     const timeRange = parseEntryTimeRange(val.ts)
-    
+
     return {
       ts: parseEntryTs(val.ts),
       ...(timeRange && { timeRange }),
@@ -261,14 +242,44 @@ async function getConsumption (ctx, req) {
   return { log, summary }
 }
 
+// by_meter_power_w is only produced by the DCS worker, so the per-meter breakdown
+// is only meaningful when Central-DCS is enabled.
+async function getByMeterConsumption (ctx, req) {
+  const { start, end } = validateStartEnd(req)
+
+  if (!isCentralDCSEnabled(ctx)) {
+    throw new Error('ERR_BY_METER_REQUIRES_CENTRAL_DCS')
+  }
+
+  const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
+
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    type: WORKER_TYPES.DCS,
+    tag: getDCSTag(ctx),
+    key,
+    groupRange,
+    shouldCalculateAvg: true,
+    start,
+    end,
+    fields: { [LOG_FIELDS.BY_METER_POWER]: 1 },
+    aggrFields: { [AGGR_FIELDS.BY_METER_POWER]: 1 }
+  })
+
+  const hours = bucketHours(groupRange)
+
+  return buildByMeterConsumption(firstOrkEntries(res), AGGR_FIELDS.BY_METER_POWER, hours)
+}
+
 // by_meter_power_w arrives as a { meter: powerW } map per bucket. Mirror the
 // grouped-consumption shape so each entry carries per-meter power/consumption.
 function buildByMeterConsumption (entries, aggrField, hours) {
   const log = entries.map(val => {
     const raw = val[aggrField]
     const powerW = raw && typeof raw === 'object' ? raw : {}
+    const timeRange = parseEntryTimeRange(val.ts)
     return {
-      ts: val.ts,
+      ts: parseEntryTs(val.ts),
+      ...(timeRange && { timeRange }),
       powerW,
       consumptionMWh: Object.fromEntries(
         Object.entries(powerW).map(([meter, w]) => [meter, ((Number(w) || 0) * hours) / 1000000])
