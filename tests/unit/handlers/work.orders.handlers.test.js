@@ -141,6 +141,7 @@ test('handlers: createWorkOrdersBatch Type 2 (move) relocates every part', async
 function buildMinerMoveCtx (pushed, minerInfo) {
   const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
     if (method === 'pushAction') { pushed.push(params); return { id: 'a', errors: [] } }
+    if (method === 'listThings' && params.query?.['info.parentDeviceId']) return []
     if (method === 'listThings') return [{ id: 'miner-1', code: 'MN-1', type: 'miner-whatsminer', rack: 'miner-rack-1', info: minerInfo }]
     return null
   })
@@ -148,6 +149,56 @@ function buildMinerMoveCtx (pushed, minerInfo) {
   ctx._workOrderRackId = RACK
   return ctx
 }
+
+function buildAttachedPartsCtx (pushed, parts) {
+  const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
+    if (method === 'pushAction') { pushed.push(params); return { id: 'a', errors: [] } }
+    if (method === 'listThings' && params.query?.['info.parentDeviceId']) return parts
+    if (method === 'listThings') return [{ id: 'miner-1', code: 'MN-1', type: 'miner-whatsminer', rack: 'miner-rack-1', info: { serialNum: 'SN-1', location: 'miner.room', container: 'group-3', pos: '3_1' } }]
+    return null
+  })
+  ctx.authLib = mockAuthLib
+  ctx._workOrderRackId = RACK
+  return ctx
+}
+
+const ATTACHED = [
+  { id: 'part-1', code: 'CB-1', type: 'inventory-miner_part-controller', rack: 'cb-rack-1', info: { location: 'miner.room', parentDeviceId: 'miner-1' } },
+  { id: 'part-2', code: 'PS-1', type: 'inventory-miner_part-psu', rack: 'psu-rack-1', info: { location: 'miner.room', parentDeviceId: 'miner-1' } }
+]
+
+test('handlers: createWorkOrder Type 2 (move) relocates every attached part with the miner', async (t) => {
+  const pushed = []
+  const ctx = buildAttachedPartsCtx(pushed, ATTACHED)
+  await handlers.createWorkOrder(ctx, {
+    ...userMeta(),
+    body: { type: 2, deviceType: 'miner', deviceModel: 'M56', deviceIdentifier: 'SN-1', info: { location: 'site.lab' } }
+  })
+  const regPush = pushed.find(p => p.action === 'registerThing')
+  const partPushes = pushed.filter(p => p.action === 'updateThing' && p.params[0].rackId !== 'miner-rack-1')
+  t.is(partPushes.length, 2, 'one relocation per attached part')
+  t.alike(partPushes.map(p => p.params[0].rackId), ['cb-rack-1', 'psu-rack-1'], 'each part moves on its own rack')
+  t.ok(partPushes.every(p => p.params[0].info.location === 'site.lab'))
+  t.ok(partPushes.every(p => p.params[0].info.workOrderId === regPush.params[0].id), 'relocations carry the WO id')
+  const attached = regPush.params[0].info.partsMoves.filter(m => m.role === 'attached')
+  t.is(attached.length, 2, 'one movement record per part, written once')
+  t.alike(attached.map(m => m.partCode), ['CB-1', 'PS-1'])
+  t.is(attached[0].fromLocation, 'miner.room')
+  t.is(attached[0].toLocation, 'site.lab')
+  t.is(attached[0].parentDeviceId, 'miner-1')
+})
+
+test('handlers: createWorkOrder Type 2 (move) leaves unattached parts alone and moves a miner with none', async (t) => {
+  const pushed = []
+  const ctx = buildAttachedPartsCtx(pushed, [])
+  await handlers.createWorkOrder(ctx, {
+    ...userMeta(),
+    body: { type: 2, deviceType: 'miner', deviceModel: 'M56', deviceIdentifier: 'SN-1', info: { location: 'site.lab' } }
+  })
+  const regPush = pushed.find(p => p.action === 'registerThing')
+  t.is(pushed.filter(p => p.action === 'updateThing').length, 1, 'only the miner moves')
+  t.is(regPush.params[0].info.partsMoves.length, 1)
+})
 
 test('handlers: createWorkOrder Type 2 (move) miner leaving miner.room clears pos and parks it in maintenance', async (t) => {
   const pushed = []
@@ -229,6 +280,7 @@ test('handlers: createWorkOrdersBatch Type 2 (move) applies the shared deviceSta
   const pushed = []
   const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
     if (method === 'pushAction') { pushed.push(params); return { id: 'a', errors: [] } }
+    if (method === 'listThings' && params.query?.['info.parentDeviceId']) return []
     if (method === 'listThings') {
       const sn = (params.query?.$or || []).map(c => c['info.serialNum']).find(Boolean)
       return [{ id: sn, code: sn, type: 'miner-whatsminer', rack: 'miner-rack-1', info: { location: 'miner.room', status: 'in_operation' } }]
@@ -289,6 +341,7 @@ test('handlers: createWorkOrdersBatch Type 2 (move) applies per-device placement
   const pushed = []
   const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
     if (method === 'pushAction') { pushed.push(params); return { id: 'a', errors: [] } }
+    if (method === 'listThings' && params.query?.['info.parentDeviceId']) return []
     if (method === 'listThings') {
       const sn = (params.query?.$or || []).map(c => c['info.serialNum']).find(Boolean)
       return [{ id: sn, code: sn, type: 'miner-whatsminer', rack: 'miner-rack-1', info: { location: 'site.warehouse' } }]
@@ -326,6 +379,7 @@ const SPARE = { id: 'miner-2', code: 'MN-2', type: 'miner-whatsminer', rack: 'mi
 function buildReplacementCtx (pushed, things = [OUTGOING, SPARE]) {
   const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
     if (method === 'pushAction') { pushed.push(params); return { id: 'a', errors: [] } }
+    if (method === 'listThings' && params.query?.['info.parentDeviceId']) return []
     if (method === 'listThings') {
       const wanted = (params.query?.$or || []).map(c => c.id || c.code || c['info.serialNum'] || c['info.macAddress']).find(Boolean)
       return things.filter(t => [t.id, t.code, t.info?.serialNum, t.info?.macAddress].includes(wanted))

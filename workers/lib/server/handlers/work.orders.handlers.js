@@ -97,6 +97,36 @@ function _replacementInfo (replacement, woId) {
   }
 }
 
+async function _moveAttachedParts (ctx, req, { miner, deviceType, toLocation, woId, voter, ts }) {
+  if (deviceType !== 'miner' || toLocation == null) return []
+
+  const results = await ctx.dataProxy.requestData('listThings', {
+    query: { 'info.parentDeviceId': miner.id }
+  })
+  const parts = flattenRpcResults(results).filter(t => t?.type !== WORK_ORDER_THING_TYPE)
+
+  const moves = []
+  for (const part of parts) {
+    const partResults = await submitWorkOrderAction(ctx, req, 'updateThing', {
+      id: part.id,
+      info: { location: toLocation, workOrderId: woId }
+    }, part.rack)
+    assertActionApplied(partResults, `ERR_ATTACHED_PART_MOVE_PUSH_FAILED:${part.id}`)
+    moves.push({
+      partId: part.id,
+      partCode: part.code,
+      parentDeviceId: miner.id,
+      parentDeviceCode: miner.code,
+      role: 'attached',
+      fromLocation: part.info?.location ?? null,
+      toLocation,
+      ts,
+      user: voter
+    })
+  }
+  return moves
+}
+
 function _buildReplacementMove (replacement, part, voter, ts) {
   const { thing, vacated } = replacement
   return {
@@ -222,6 +252,9 @@ async function createWorkOrder (ctx, req) {
         }
       }, part.rack)
       assertActionApplied(partResults, 'ERR_PART_MOVE_PUSH_FAILED')
+      info.partsMoves.push(...await _moveAttachedParts(ctx, req, {
+        miner: part, deviceType, toLocation: info.location, woId, voter, ts
+      }))
     }
     if (replacement) {
       info.partsMoves.push(_buildReplacementMove(replacement, part, voter, ts))
@@ -349,6 +382,9 @@ async function createWorkOrdersBatch (ctx, req) {
         }
       }, part.rack)
       assertActionApplied(partResults, 'ERR_PART_MOVE_PUSH_FAILED')
+      partsMoves.push(...await _moveAttachedParts(ctx, req, {
+        miner: part, deviceType: device.deviceType, toLocation: info.location, woId, voter, ts
+      }))
     }
     if (replacement) {
       partsMoves.push(_buildReplacementMove(replacement, part, voter, ts))
