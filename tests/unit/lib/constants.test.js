@@ -44,7 +44,8 @@ test('constants - GLOBAL_DATA_TYPES', (t) => {
   t.is(GLOBAL_DATA_TYPES.FEATURES, 'features', 'should have FEATURES')
   t.is(GLOBAL_DATA_TYPES.SITE_ENERGY, 'siteEnergy', 'should have SITE_ENERGY')
   t.is(GLOBAL_DATA_TYPES.CONTAINER_SETTINGS, 'containerSettings', 'should have CONTAINER_SETTINGS')
-  t.is(Object.keys(GLOBAL_DATA_TYPES).length, 4, 'should have 4 types')
+  t.is(GLOBAL_DATA_TYPES.COST_PARAMETERS, 'costParameters', 'should have COST_PARAMETERS')
+  t.is(Object.keys(GLOBAL_DATA_TYPES).length, 5, 'should have 5 types')
   t.pass()
 })
 

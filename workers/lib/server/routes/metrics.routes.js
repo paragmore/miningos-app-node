@@ -42,6 +42,7 @@ module.exports = (ctx) => {
           req.query.groupBy,
           req.query.container,
           req.query.current,
+          req.query.nominal,
           req.query.racks
         ],
         ENDPOINTS.METRICS_HASHRATE,

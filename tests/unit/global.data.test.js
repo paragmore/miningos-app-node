@@ -573,3 +573,150 @@ test('GlobalDataLib - getGlobalData with containerSettings filters out invalid e
 
   t.pass()
 })
+
+test('GlobalDataLib - setCostParametersData with valid data', async function (t) {
+  const globalDataLib = new GlobalDataLib(mockGlobalDataBee, 'test-site')
+
+  const result = await globalDataLib.setCostParametersData({
+    minerAmortizationUsd: 45000,
+    infraAmortizationUsd: 23000,
+    marginPct: 8,
+    lcoe: { source: 'current', customUsdPerMwh: null, effectiveUsdPerMwh: 42 }
+  })
+
+  t.is(result, true, 'should return true')
+
+  t.pass()
+})
+
+test('GlobalDataLib - setCostParametersData rejects invalid values', async function (t) {
+  const globalDataLib = new GlobalDataLib(mockGlobalDataBee, 'test-site')
+
+  const cases = [
+    [{ minerAmortizationUsd: -1 }, 'ERR_INVALID_AMORTIZATION'],
+    [{ infraAmortizationUsd: 'free' }, 'ERR_INVALID_AMORTIZATION'],
+    [{ marginPct: 101 }, 'ERR_INVALID_MARGIN'],
+    [{ marginPct: -1 }, 'ERR_INVALID_MARGIN'],
+    [{ lcoe: 'cheap' }, 'ERR_INVALID_LCOE'],
+    [{ lcoe: { source: 'guess' } }, 'ERR_INVALID_LCOE_SOURCE'],
+    [{ lcoe: { source: 'current', customUsdPerMwh: -5 } }, 'ERR_INVALID_LCOE_COST'],
+    [{ lcoe: { source: 'custom' } }, 'ERR_LCOE_COST_REQUIRED']
+  ]
+
+  for (const [data, expected] of cases) {
+    try {
+      await globalDataLib.setCostParametersData(data)
+      t.fail(`should throw for ${JSON.stringify(data)}`)
+    } catch (err) {
+      t.is(err.message, expected, `should throw ${expected}`)
+    }
+  }
+
+  t.pass()
+})
+
+test('GlobalDataLib - setCostParametersData allows partial and zero values', async function (t) {
+  const globalDataLib = new GlobalDataLib(mockGlobalDataBee, 'test-site')
+
+  t.is(await globalDataLib.setCostParametersData({ marginPct: 0 }), true, 'zero margin is valid')
+  t.is(await globalDataLib.setCostParametersData({ minerAmortizationUsd: 0 }), true, 'zero amortization is valid')
+  t.is(await globalDataLib.setCostParametersData({}), true, 'empty object is valid')
+
+  t.pass()
+})
+
+test('GlobalDataLib - setGlobalData routes cost parameters', async function (t) {
+  const globalDataLib = new GlobalDataLib(mockGlobalDataBee, 'test-site')
+
+  const result = await globalDataLib.setGlobalData(
+    { marginPct: 8 },
+    GLOBAL_DATA_TYPES.COST_PARAMETERS
+  )
+
+  t.is(result, true, 'should return true')
+
+  t.pass()
+})
+
+test('GlobalDataLib - cost parameters round-trip through a real hyperbee', async function (t) {
+  const Corestore = require('corestore')
+  const Hyperbee = require('hyperbee')
+  const os = require('os')
+  const path = require('path')
+  const fs = require('fs')
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mos-global-data-'))
+  const store = new Corestore(dir)
+  const bee = new Hyperbee(store.get({ name: 'global-data' }), { keyEncoding: 'utf-8' })
+  await bee.ready()
+
+  t.teardown(async () => {
+    await bee.close()
+    await store.close()
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  const globalDataLib = new GlobalDataLib(bee, 'test-site')
+
+  const params = {
+    minerAmortizationUsd: 45000,
+    infraAmortizationUsd: 23000,
+    marginPct: 8,
+    lcoe: { source: 'custom', customUsdPerMwh: 42, effectiveUsdPerMwh: 42 }
+  }
+
+  await globalDataLib.setGlobalData(params, GLOBAL_DATA_TYPES.COST_PARAMETERS)
+
+  const read = await globalDataLib.getGlobalData({ type: GLOBAL_DATA_TYPES.COST_PARAMETERS })
+
+  t.alike(read, { ...params, site: 'test-site' }, 'reads back exactly what was written, site-stamped')
+
+  await globalDataLib.setGlobalData({ marginPct: 12 }, GLOBAL_DATA_TYPES.COST_PARAMETERS)
+  const overwritten = await globalDataLib.getGlobalData({ type: GLOBAL_DATA_TYPES.COST_PARAMETERS })
+  t.alike(overwritten, { marginPct: 12, site: 'test-site' }, 'a later save replaces the singleton')
+
+  const missing = await new GlobalDataLib(bee, 'test-site').getGlobalData({ type: GLOBAL_DATA_TYPES.FEATURES })
+  t.alike(missing, {}, 'an unwritten singleton type still reads as empty')
+
+  t.pass()
+})
+
+test('GlobalDataLib - production costs are unaffected by the cost parameters type', async function (t) {
+  const Corestore = require('corestore')
+  const Hyperbee = require('hyperbee')
+  const os = require('os')
+  const path = require('path')
+  const fs = require('fs')
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mos-global-data-'))
+  const store = new Corestore(dir)
+  const bee = new Hyperbee(store.get({ name: 'global-data' }), { keyEncoding: 'utf-8' })
+  await bee.ready()
+
+  t.teardown(async () => {
+    await bee.close()
+    await store.close()
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  const globalDataLib = new GlobalDataLib(bee, 'test-site')
+
+  await globalDataLib.setGlobalData(
+    { year: 2026, month: 1, energyCost: 1000, operationalCost: 2000 },
+    GLOBAL_DATA_TYPES.PRODUCTION_COSTS
+  )
+  await globalDataLib.setGlobalData({ marginPct: 8 }, GLOBAL_DATA_TYPES.COST_PARAMETERS)
+
+  const costs = await globalDataLib.getGlobalData({ type: GLOBAL_DATA_TYPES.PRODUCTION_COSTS })
+
+  t.is(costs.length, 1, 'production costs still list-shaped')
+  t.alike(costs[0], {
+    site: 'test-site',
+    year: 2026,
+    month: 1,
+    energyCost: 1000,
+    operationalCost: 2000
+  }, 'production cost row is untouched by the new type')
+
+  t.pass()
+})

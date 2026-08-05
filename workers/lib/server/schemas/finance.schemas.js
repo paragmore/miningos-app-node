@@ -17,7 +17,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
-        period: { type: 'string', enum: ['daily', 'monthly', 'yearly'] },
+        period: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly'] },
         overwriteCache: { type: 'boolean' }
       },
       required: ['start', 'end']

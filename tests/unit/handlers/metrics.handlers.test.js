@@ -3374,3 +3374,108 @@ test('getTemperature - exposes the aggregation window as timeRange on grouped bu
   t.alike(result.log[0].timeRange, { startTs: RANGE_START, endTs: RANGE_END }, 'timeRange should cover the full window')
   t.is(result.log[0].siteMaxC, 80, 'values should be preserved')
 })
+
+// --- nominal hashrate (opt-in) -------------------------------------------------
+
+test('getHashrate - without nominal the payload and response are unchanged', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{ ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 100000, nominal_hashrate_mhs_sum_aggr: 200000 }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, { query: { start: 1700000000000, end: 1700100000000 } })
+
+  t.absent('nominal_hashrate_mhs_sum' in capturedPayload.fields, 'should not project the nominal field')
+  t.absent('nominal_hashrate_mhs_sum_aggr' in capturedPayload.aggrFields, 'should not aggregate the nominal field')
+  t.alike(result.log[0], { ts: 1700006400000, hashrateMhs: 100000 }, 'log entry shape is untouched')
+  t.alike(result.summary, { avgHashrateMhs: 100000 }, 'summary shape is untouched')
+  t.pass()
+})
+
+test('getHashrate - nominal adds per-bucket nominal and pct', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [
+          { ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 75310000000, nominal_hashrate_mhs_sum_aggr: 78275000000 },
+          { ts: 1700010000000, hashrate_mhs_5m_sum_aggr: 55730000000, nominal_hashrate_mhs_sum_aggr: 78275000000 }
+        ]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, nominal: true }
+  })
+
+  t.ok('nominal_hashrate_mhs_sum' in capturedPayload.fields, 'should project the nominal field')
+  t.ok('nominal_hashrate_mhs_sum_aggr' in capturedPayload.aggrFields, 'should aggregate the nominal field')
+  t.is(result.log[0].nominalHashrateMhs, 78275000000, 'carries per-bucket nominal')
+  // 75.31 PH/s against a 78.275 PH/s nominal is the 96.2 % in the design
+  t.is(Math.round(result.log[0].pctOfNominal * 10) / 10, 96.2, 'first bucket pct matches the design')
+  t.is(Math.round(result.log[1].pctOfNominal * 10) / 10, 71.2, 'second bucket pct matches the design')
+  t.is(result.summary.nominalHashrateMhs, 78275000000, 'summary carries nominal')
+  t.is(Math.round(result.summary.avgPctOfNominal * 10) / 10, 83.7, 'summary averages the pct')
+  t.pass()
+})
+
+test('getHashrate - nominal accepts the string form and tolerates a zero nominal', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [
+        { ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 100000 },
+        { ts: 1700010000000, hashrate_mhs_5m_sum_aggr: 100000, nominal_hashrate_mhs_sum_aggr: 0 }
+      ]
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, nominal: 'true' }
+  })
+
+  t.is(result.log[0].nominalHashrateMhs, 0, 'a missing nominal reads as 0')
+  t.is(result.log[0].pctOfNominal, null, 'and yields no percentage rather than Infinity')
+  t.is(result.log[1].pctOfNominal, null, 'an explicit zero nominal also yields null')
+  t.is(result.summary.avgPctOfNominal, null, 'summary pct is null when nothing is installed')
+  t.pass()
+})
+
+test('getHashrate - nominal on an empty log', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: { jRequest: async () => [] }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, nominal: true }
+  })
+
+  t.is(result.log.length, 0, 'no entries')
+  t.alike(result.summary, {
+    avgHashrateMhs: null,
+    nominalHashrateMhs: null,
+    avgPctOfNominal: null
+  }, 'summary carries the nominal keys as null')
+  t.pass()
+})
+
+test('calculateHashrateSummary - stays backwards compatible without the flag', (t) => {
+  const log = [
+    { ts: 1, hashrateMhs: 100, nominalHashrateMhs: 200 },
+    { ts: 2, hashrateMhs: 300, nominalHashrateMhs: 200 }
+  ]
+
+  t.alike(calculateHashrateSummary(log), { avgHashrateMhs: 200 }, 'no nominal keys are emitted')
+  t.alike(calculateHashrateSummary([]), { avgHashrateMhs: null }, 'empty log unchanged')
+  t.pass()
+})

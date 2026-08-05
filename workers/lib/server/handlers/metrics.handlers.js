@@ -73,6 +73,10 @@ async function getHashrate (ctx, req) {
   const container = req.query.container || null
   const field = container ? LOG_FIELDS.HASHRATE_SUM_CONTAINER_GROUP : LOG_FIELDS.HASHRATE_SUM
   const aggrField = container ? AGGR_FIELDS.HASHRATE_SUM_CONTAINER_GROUP_AGGR : AGGR_FIELDS.HASHRATE_SUM
+  // Invoicing needs delivered hashrate against the capacity installed at the time of each
+  // bucket, which only the per-bucket aggregate carries. Opt-in: the site nominal alone is
+  // served by /auth/site/status/live.
+  const withNominal = req.query.nominal === true || req.query.nominal === 'true'
 
   const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
     type: WORKER_TYPES.MINER,
@@ -82,20 +86,32 @@ async function getHashrate (ctx, req) {
     shouldCalculateAvg: true,
     start,
     end,
-    fields: { [field]: 1 },
-    aggrFields: { [aggrField]: 1 }
+    fields: { [field]: 1, ...(withNominal && { [LOG_FIELDS.NOMINAL_HASHRATE_SUM]: 1 }) },
+    aggrFields: { [aggrField]: 1, ...(withNominal && { [AGGR_FIELDS.NOMINAL_HASHRATE_SUM]: 1 }) }
   })
 
   const log = firstOrkEntries(res).map(val => {
     const timeRange = parseEntryTimeRange(val.ts)
+    const hashrateMhs = readHashrate(val[aggrField], container)
+    if (!withNominal) {
+      return {
+        ts: parseEntryTs(val.ts),
+        ...(timeRange && { timeRange }),
+        hashrateMhs
+      }
+    }
+
+    const nominalHashrateMhs = Number(val[AGGR_FIELDS.NOMINAL_HASHRATE_SUM]) || 0
     return {
       ts: parseEntryTs(val.ts),
       ...(timeRange && { timeRange }),
-      hashrateMhs: readHashrate(val[aggrField], container)
+      hashrateMhs,
+      nominalHashrateMhs,
+      pctOfNominal: nominalHashrateMhs ? (hashrateMhs / nominalHashrateMhs) * 100 : null
     }
   })
 
-  const summary = calculateHashrateSummary(log)
+  const summary = calculateHashrateSummary(log, withNominal)
 
   if (req.query.current) {
     summary.currentHashrateMhs = await getCurrentHashrate(ctx, aggrField, container)
@@ -142,12 +158,25 @@ async function getGoupedHashrate (ctx, req) {
   return { log, summary }
 }
 
-function calculateHashrateSummary (log) {
-  if (!log.length) return { avgHashrateMhs: null }
+function calculateHashrateSummary (log, withNominal = false) {
+  if (!log.length) {
+    return withNominal
+      ? { avgHashrateMhs: null, nominalHashrateMhs: null, avgPctOfNominal: null }
+      : { avgHashrateMhs: null }
+  }
 
   const total = log.reduce((sum, entry) => sum + (entry.hashrateMhs || 0), 0)
+  const summary = { avgHashrateMhs: safeDiv(total, log.length) }
 
-  return { avgHashrateMhs: safeDiv(total, log.length) }
+  if (!withNominal) return summary
+
+  const nominalTotal = log.reduce((sum, entry) => sum + (entry.nominalHashrateMhs || 0), 0)
+  const avgNominal = safeDiv(nominalTotal, log.length)
+
+  summary.nominalHashrateMhs = avgNominal
+  summary.avgPctOfNominal = avgNominal ? (summary.avgHashrateMhs / avgNominal) * 100 : null
+
+  return summary
 }
 
 function calculateGroupedHashrateSummary (log, groupBy) {

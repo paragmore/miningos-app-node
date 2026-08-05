@@ -36,7 +36,8 @@ async function getEnergyBalance (ctx, req) {
     productionCosts,
     activeEnergyInResults,
     uteEnergyResults,
-    globalConfigResults
+    globalConfigResults,
+    costParameters
   ] = await runParallel([
     (cb) => ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG_RANGE_AGGR, {
       keys: [{
@@ -77,6 +78,9 @@ async function getEnergyBalance (ctx, req) {
     }).then(r => cb(null, r)).catch(cb),
 
     (cb) => ctx.dataProxy.requestData(RPC_METHODS.GLOBAL_CONFIG, {})
+      .then(r => cb(null, r)).catch(cb),
+
+    (cb) => getCostParameters(ctx)
       .then(r => cb(null, r)).catch(cb)
   ])
 
@@ -85,6 +89,7 @@ async function getEnergyBalance (ctx, req) {
   const dailyPrices = processPriceData(priceResults)
   const currentBtcPrice = extractCurrentPrice(currentPriceResults)
   const costsByMonth = processCostsData(productionCosts)
+  const lcoeUsdPerMwh = resolveLcoeUsdPerMwh(costParameters)
   const dailyActiveEnergyIn = processEnergyData(activeEnergyInResults, AGGR_FIELDS.ACTIVE_ENERGY_IN)
   const dailyUteEnergy = processEnergyData(uteEnergyResults, AGGR_FIELDS.UTE_ENERGY)
   const nominalPowerMW = extractNominalPower(globalConfigResults)
@@ -109,7 +114,7 @@ async function getEnergyBalance (ctx, req) {
 
     const monthKey = `${new Date(ts).getFullYear()}-${String(new Date(ts).getMonth() + 1).padStart(2, '0')}`
     const costs = costsByMonth[monthKey] || {}
-    const energyCostUSD = costs.energyCostPerDay || 0
+    const energyCostUSD = resolveEnergyCostsUSD(costs, powerMWh, lcoeUsdPerMwh)
     const totalCostUSD = energyCostUSD + (costs.operationalCostPerDay || 0)
 
     const activeEnergyIn = dailyActiveEnergyIn[dayTs] || 0
@@ -344,7 +349,7 @@ async function getEbitda (ctx, req) {
   const startDate = new Date(start).toISOString()
   const endDate = new Date(end).toISOString()
 
-  const [transactionResults, tailLogResults, priceResults, currentPriceResults, productionCosts] = await runParallel([
+  const [transactionResults, tailLogResults, priceResults, currentPriceResults, productionCosts, costParameters] = await runParallel([
     (cb) => ctx.dataProxy.requestData(RPC_METHODS.GET_WRK_EXT_DATA, {
       type: WORKER_TYPES.MINERPOOL,
       query: { key: MINERPOOL_EXT_DATA_KEYS.TRANSACTIONS, start, end }
@@ -380,6 +385,9 @@ async function getEbitda (ctx, req) {
     }).then(r => cb(null, r)).catch(cb),
 
     (cb) => getProductionCosts(ctx, start, end)
+      .then(r => cb(null, r)).catch(cb),
+
+    (cb) => getCostParameters(ctx)
       .then(r => cb(null, r)).catch(cb)
   ])
 
@@ -388,6 +396,7 @@ async function getEbitda (ctx, req) {
   const dailyPrices = processEbitdaPrices(priceResults)
   const currentBtcPrice = extractCurrentPrice(currentPriceResults)
   const costsByMonth = processCostsData(productionCosts)
+  const lcoeUsdPerMwh = resolveLcoeUsdPerMwh(costParameters)
 
   const allDays = new Set([
     ...Object.keys(dailyTransactions),
@@ -409,7 +418,7 @@ async function getEbitda (ctx, req) {
 
     const monthKey = `${new Date(ts).getFullYear()}-${String(new Date(ts).getMonth() + 1).padStart(2, '0')}`
     const costs = costsByMonth[monthKey] || {}
-    const energyCostsUSD = costs.energyCostPerDay || 0
+    const energyCostsUSD = resolveEnergyCostsUSD(costs, powerMWh, lcoeUsdPerMwh)
     const operationalCostsUSD = costs.operationalCostPerDay || 0
     const totalCostsUSD = energyCostsUSD + operationalCostsUSD
 
@@ -545,7 +554,7 @@ async function getCostSummary (ctx, req) {
   const startDate = new Date(start).toISOString()
   const endDate = new Date(end).toISOString()
 
-  const [productionCosts, priceResults, consumptionResults] = await runParallel([
+  const [productionCosts, priceResults, consumptionResults, costParameters] = await runParallel([
     (cb) => getProductionCosts(ctx, start, end)
       .then(r => cb(null, r)).catch(cb),
 
@@ -562,10 +571,14 @@ async function getCostSummary (ctx, req) {
         fields: { [AGGR_FIELDS.SITE_POWER]: 1 },
         shouldReturnDailyData: 1
       }]
-    }).then(r => cb(null, r)).catch(cb)
+    }).then(r => cb(null, r)).catch(cb),
+
+    (cb) => getCostParameters(ctx)
+      .then(r => cb(null, r)).catch(cb)
   ])
 
   const costsByMonth = processCostsData(productionCosts)
+  const lcoeUsdPerMwh = resolveLcoeUsdPerMwh(costParameters)
   const dailyPrices = processEbitdaPrices(priceResults)
   const dailyConsumption = processConsumptionData(consumptionResults)
 
@@ -585,7 +598,7 @@ async function getCostSummary (ctx, req) {
 
     const monthKey = `${new Date(ts).getFullYear()}-${String(new Date(ts).getMonth() + 1).padStart(2, '0')}`
     const costs = costsByMonth[monthKey] || {}
-    const energyCostsUSD = costs.energyCostPerDay || 0
+    const energyCostsUSD = resolveEnergyCostsUSD(costs, consumptionMWh, lcoeUsdPerMwh)
     const operationalCostsUSD = costs.operationalCostPerDay || 0
     const totalCostsUSD = energyCostsUSD + operationalCostsUSD
 
@@ -826,7 +839,8 @@ async function getRevenueSummary (ctx, req) {
     blockResults,
     activeEnergyInResults,
     uteEnergyResults,
-    globalConfigResults
+    globalConfigResults,
+    costParameters
   ] = await runParallel([
     (cb) => ctx.dataProxy.requestData(RPC_METHODS.GET_WRK_EXT_DATA, {
       type: WORKER_TYPES.MINERPOOL,
@@ -881,6 +895,9 @@ async function getRevenueSummary (ctx, req) {
     }).then(r => cb(null, r)).catch(cb),
 
     (cb) => ctx.dataProxy.requestData(RPC_METHODS.GLOBAL_CONFIG, {})
+      .then(r => cb(null, r)).catch(cb),
+
+    (cb) => getCostParameters(ctx)
       .then(r => cb(null, r)).catch(cb)
   ])
 
@@ -889,6 +906,7 @@ async function getRevenueSummary (ctx, req) {
   const currentBtcPrice = extractCurrentPrice(currentPriceResults)
   const dailyTailLog = processTailLogData(tailLogResults)
   const costsByMonth = processCostsData(productionCosts)
+  const lcoeUsdPerMwh = resolveLcoeUsdPerMwh(costParameters)
   const dailyBlocks = processBlockData(blockResults)
   const dailyActiveEnergyIn = processEnergyData(activeEnergyInResults, AGGR_FIELDS.ACTIVE_ENERGY_IN)
   const dailyUteEnergy = processEnergyData(uteEnergyResults, AGGR_FIELDS.UTE_ENERGY)
@@ -920,7 +938,7 @@ async function getRevenueSummary (ctx, req) {
 
     const monthKey = `${new Date(ts).getFullYear()}-${String(new Date(ts).getMonth() + 1).padStart(2, '0')}`
     const costs = costsByMonth[monthKey] || {}
-    const energyCostsUSD = costs.energyCostPerDay || 0
+    const energyCostsUSD = resolveEnergyCostsUSD(costs, consumptionMWh, lcoeUsdPerMwh)
     const operationalCostsUSD = costs.operationalCostPerDay || 0
     const totalCostsUSD = energyCostsUSD + operationalCostsUSD
 
@@ -1323,12 +1341,37 @@ function processCostsData (costs) {
     if (!entry || !entry.year || !entry.month) continue
     const key = `${entry.year}-${String(entry.month).padStart(2, '0')}`
     const daysInMonth = new Date(entry.year, entry.month, 0).getDate()
+    // A month saved by the Cost Input page carries no energy cost — it is derived from
+    // consumption x LCOE by the caller. null marks "derive it", 0 marks "it is zero".
+    const rawEnergyCost = entry.energyCost ?? entry.energyCostsUSD ?? null
     byMonth[key] = {
-      energyCostPerDay: (entry.energyCost || entry.energyCostsUSD || 0) / daysInMonth,
+      energyCostPerDay: rawEnergyCost === null ? null : rawEnergyCost / daysInMonth,
       operationalCostPerDay: (entry.operationalCost || entry.operationalCostsUSD || 0) / daysInMonth
     }
   }
   return byMonth
+}
+
+// Cost Input pins the LCOE it used at save time, so no forecast-settings lookup is needed here.
+async function getCostParameters (ctx) {
+  if (!ctx.globalDataLib) return {}
+  const params = await ctx.globalDataLib.getGlobalData({
+    type: GLOBAL_DATA_TYPES.COST_PARAMETERS
+  })
+  return (params && typeof params === 'object') ? params : {}
+}
+
+function resolveLcoeUsdPerMwh (costParameters) {
+  const lcoe = costParameters?.lcoe
+  const value = Number(lcoe?.effectiveUsdPerMwh)
+  return Number.isFinite(value) && value >= 0 ? value : 0
+}
+
+// energyCostPerDay is null only when a saved month carries no energy cost — derive those from the
+// day's consumption. A month with no row at all stays 0, exactly as before.
+function resolveEnergyCostsUSD (costs, consumptionMWh, lcoeUsdPerMwh) {
+  if (costs.energyCostPerDay === null) return consumptionMWh * lcoeUsdPerMwh
+  return costs.energyCostPerDay || 0
 }
 
 module.exports = {
@@ -1343,6 +1386,9 @@ module.exports = {
   getRevenueSummary,
   getHashRevenue,
   getProductionCosts,
+  getCostParameters,
+  resolveLcoeUsdPerMwh,
+  resolveEnergyCostsUSD,
   processConsumptionData,
   processPriceData,
   processEnergyData,

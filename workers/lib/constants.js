@@ -2,10 +2,13 @@
 
 const GLOBAL_DATA_TYPES = {
   PRODUCTION_COSTS: 'productionCosts',
+  COST_PARAMETERS: 'costParameters',
   FEATURES: 'features',
   SITE_ENERGY: 'siteEnergy',
   CONTAINER_SETTINGS: 'containerSettings'
 }
+
+const LCOE_SOURCES = ['current', 'custom']
 
 const USER_SETTINGS_TYPE = 'userSettings'
 
@@ -642,6 +645,7 @@ const DCS_EFFICIENCY_FIELDS = {
 
 const LOG_FIELDS = {
   HASHRATE_SUM: 'hashrate_mhs_5m_sum',
+  NOMINAL_HASHRATE_SUM: 'nominal_hashrate_mhs_sum',
   SITE_POWER: 'site_power_w',
   BY_METER_POWER: 'by_meter_power_w',
   EFFICIENCY: 'efficiency_w_ths_avg',
@@ -658,6 +662,7 @@ const LOG_FIELDS = {
 
 const AGGR_FIELDS = {
   HASHRATE_SUM: 'hashrate_mhs_5m_sum_aggr',
+  NOMINAL_HASHRATE_SUM: 'nominal_hashrate_mhs_sum_aggr',
   HASHRATE_SUM_TYPE_GROUP_AGGR: 'hashrate_mhs_5m_type_group_sum_aggr',
   HASHRATE_SUM_CONTAINER_GROUP_AGGR: 'hashrate_mhs_5m_container_group_sum_aggr',
   HASHRATE_SUM_RACK_GROUP_AGGR: 'hashrate_mhs_5m_pdu_rack_group_sum_aggr',
@@ -907,6 +912,7 @@ const MICROSOFT_AUTH_SCOPE = ['openid', 'profile', 'email', 'User.Read']
 module.exports = {
   SUPER_ADMIN_ROLE,
   GLOBAL_DATA_TYPES,
+  LCOE_SOURCES,
   SUPER_ADMIN_ID,
   MIGRATED_USER_ROLES,
   COMMENT_ACTION,

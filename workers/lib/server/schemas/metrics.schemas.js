@@ -11,6 +11,7 @@ const schemas = {
         groupBy: { type: 'string', enum: ['miner', 'container', 'rack'] },
         container: { type: 'string' },
         current: { type: 'boolean' },
+        nominal: { type: 'boolean' },
         racks: { type: 'string' },
         overwriteCache: { type: 'boolean' }
       },

@@ -3,6 +3,9 @@
 const test = require('brittle')
 const {
   getEnergyBalance,
+  getCostParameters,
+  resolveLcoeUsdPerMwh,
+  resolveEnergyCostsUSD,
   processConsumptionData,
   processPriceData,
   processCostsData,
@@ -1346,5 +1349,176 @@ test('getRevenueHourly - no pool param falls back to the generic minerpool type'
   const result = await getRevenueHourly(mockCtx, { query: { start: 1, end: 2 } })
   t.is(payload.type, 'minerpool', 'defaults to the generic minerpool type')
   t.alike(result, { log: [], summary: { totalRevenueBTC: 0 } }, 'empty source yields an empty shape')
+  t.pass()
+})
+
+// --- LCOE-derived energy cost (Cost Input) -------------------------------------
+
+test('processCostsData - an explicit zero energy cost stays zero, not derived', (t) => {
+  const result = processCostsData([
+    { site: 'site1', year: 2023, month: 11, energyCost: 0, operationalCost: 6000 }
+  ])
+
+  t.is(result['2023-11'].energyCostPerDay, 0, 'zero is a real value')
+  t.is(result['2023-11'].operationalCostPerDay, 200, 'operational cost unchanged')
+  t.pass()
+})
+
+test('processCostsData - a month with no energy cost is marked for derivation', (t) => {
+  const result = processCostsData([
+    { site: 'site1', year: 2023, month: 11, operationalCost: 6000 }
+  ])
+
+  t.is(result['2023-11'].energyCostPerDay, null, 'null marks "derive from consumption"')
+  t.is(result['2023-11'].operationalCostPerDay, 200, 'operational cost still computed')
+  t.pass()
+})
+
+test('resolveEnergyCostsUSD - existing rows behave exactly as before', (t) => {
+  t.is(resolveEnergyCostsUSD({ energyCostPerDay: 1000 }, 24, 42), 1000, 'a stored cost wins over the LCOE')
+  t.is(resolveEnergyCostsUSD({ energyCostPerDay: 0 }, 24, 42), 0, 'an explicit zero stays zero')
+  t.is(resolveEnergyCostsUSD({}, 24, 42), 0, 'a month with no row stays zero, as today')
+  t.pass()
+})
+
+test('resolveEnergyCostsUSD - derives from consumption when the month has no energy cost', (t) => {
+  t.is(resolveEnergyCostsUSD({ energyCostPerDay: null }, 24, 42), 1008, '24 MWh x 42 $/MWh')
+  t.is(resolveEnergyCostsUSD({ energyCostPerDay: null }, 24, 0), 0, 'no LCOE configured yields zero')
+  t.pass()
+})
+
+test('resolveLcoeUsdPerMwh - reads the pinned effective value', (t) => {
+  t.is(resolveLcoeUsdPerMwh({ lcoe: { source: 'current', effectiveUsdPerMwh: 42 } }), 42, 'reads effective')
+  t.is(resolveLcoeUsdPerMwh({ lcoe: { source: 'custom', effectiveUsdPerMwh: 55 } }), 55, 'source does not matter here')
+  t.is(resolveLcoeUsdPerMwh({ lcoe: { effectiveUsdPerMwh: 0 } }), 0, 'zero is valid')
+  t.pass()
+})
+
+test('resolveLcoeUsdPerMwh - falls back to zero on anything unusable', (t) => {
+  t.is(resolveLcoeUsdPerMwh(undefined), 0, 'no parameters')
+  t.is(resolveLcoeUsdPerMwh({}), 0, 'no lcoe')
+  t.is(resolveLcoeUsdPerMwh({ lcoe: {} }), 0, 'no effective value')
+  t.is(resolveLcoeUsdPerMwh({ lcoe: { effectiveUsdPerMwh: 'cheap' } }), 0, 'non-numeric')
+  t.is(resolveLcoeUsdPerMwh({ lcoe: { effectiveUsdPerMwh: -5 } }), 0, 'negative')
+  t.pass()
+})
+
+test('getCostParameters - returns an empty object without globalDataLib', async (t) => {
+  t.alike(await getCostParameters({}), {}, 'no lib, no parameters')
+  t.alike(await getCostParameters({ globalDataLib: { getGlobalData: async () => null } }), {}, 'null reads as empty')
+  t.alike(await getCostParameters({ globalDataLib: { getGlobalData: async () => ({ marginPct: 8 }) } }), { marginPct: 8 }, 'passes the stored object through')
+  t.pass()
+})
+
+test('getEbitda - derives energy cost from consumption when the month carries none', async (t) => {
+  const dayTs = 1700006400000
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    globalDataLib: {
+      getGlobalData: async ({ type }) => {
+        if (type === 'costParameters') {
+          return { lcoe: { source: 'custom', customUsdPerMwh: 42, effectiveUsdPerMwh: 42 } }
+        }
+        return [{ site: 's', year: 2023, month: 11, operationalCost: 3000 }]
+      }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload?.keys) {
+          return [[{ ts: dayTs, site_power_w: 1000000, hashrate_mhs_5m_sum_aggr: 100 }]]
+        }
+        return []
+      }
+    }
+  })
+
+  const result = await getEbitda(mockCtx, {
+    query: { start: 1698710400000, end: 1700200000000, period: 'daily' }
+  })
+
+  const entry = result.log[0]
+  // 1 MW over 24 h = 24 MWh; 24 x 42 = 1008
+  t.is(entry.consumptionMWh, 24, 'daily consumption from site power')
+  t.is(entry.energyCostsUSD, 1008, 'energy cost derived from consumption x LCOE')
+  t.is(entry.operationalCostsUSD, 100, 'operational cost still comes from the stored month (3000/30)')
+  t.is(entry.totalCostsUSD, 1108, 'total combines both')
+  t.pass()
+})
+
+test('getEbitda - a stored energy cost is untouched by the fallback', async (t) => {
+  const dayTs = 1700006400000
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    globalDataLib: {
+      getGlobalData: async ({ type }) => {
+        if (type === 'costParameters') return { lcoe: { effectiveUsdPerMwh: 42 } }
+        return [{ site: 's', year: 2023, month: 11, energyCost: 30000, operationalCost: 3000 }]
+      }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload?.keys) return [[{ ts: dayTs, site_power_w: 1000000 }]]
+        return []
+      }
+    }
+  })
+
+  const result = await getEbitda(mockCtx, {
+    query: { start: 1698710400000, end: 1700200000000, period: 'daily' }
+  })
+
+  t.is(result.log[0].energyCostsUSD, 1000, 'stored 30000/30 wins over the LCOE derivation')
+  t.pass()
+})
+
+test('getEbitda - no cost parameters configured leaves behaviour as it is today', async (t) => {
+  const dayTs = 1700006400000
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    globalDataLib: {
+      getGlobalData: async ({ type }) => {
+        if (type === 'costParameters') return {}
+        return [{ site: 's', year: 2023, month: 11, operationalCost: 3000 }]
+      }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload?.keys) return [[{ ts: dayTs, site_power_w: 1000000 }]]
+        return []
+      }
+    }
+  })
+
+  const result = await getEbitda(mockCtx, {
+    query: { start: 1698710400000, end: 1700200000000, period: 'daily' }
+  })
+
+  t.is(result.log[0].energyCostsUSD, 0, 'no LCOE, no derived cost — same as before this change')
+  t.pass()
+})
+
+test('getEbitda - accepts the weekly period', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    globalDataLib: { getGlobalData: async () => [] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload?.keys) {
+          return [[
+            { ts: 1700006400000, site_power_w: 1000000 },
+            { ts: 1700092800000, site_power_w: 2000000 }
+          ]]
+        }
+        return []
+      }
+    }
+  })
+
+  const result = await getEbitda(mockCtx, {
+    query: { start: 1700000000000, end: 1700200000000, period: 'weekly' }
+  })
+
+  t.ok(Array.isArray(result.log), 'returns a log')
+  t.is(result.log.length, 1, 'both days collapse into one weekly bucket')
   t.pass()
 })
