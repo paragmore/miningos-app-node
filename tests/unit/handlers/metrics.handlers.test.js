@@ -6,6 +6,7 @@ const {
   calculateHashrateSummary,
   getConsumption,
   calculateConsumptionSummary,
+  calculateByMeterConsumptionSummary,
   calculateGroupedConsumptionSummary,
   getEfficiency,
   calculateEfficiencySummary,
@@ -408,7 +409,8 @@ test('getHashrate - interval selects the bucket range', async (t) => {
   await getHashrate(mockCtx, { query: { ...query, interval: '1d' } })
   await getHashrate(mockCtx, { query: { ...query, interval: '1w' } })
 
-  t.is(captured[0].groupRange, null, '1h should not bucket')
+  t.is(captured[0].groupRange, '1H', '1h should bucket hourly')
+  t.is(captured[0].key, 'stat-30m', '1h should sample the stat-30m log')
   t.is(captured[1].groupRange, '1D', '1d should bucket daily')
   t.is(captured[2].groupRange, '1W', '1w should bucket weekly')
   t.pass()
@@ -457,7 +459,7 @@ test('getConsumption - happy path', async (t) => {
   t.ok(Array.isArray(result.log), 'log should be array')
   t.ok(result.log.length > 0, 'log should have entries')
   t.is(result.log[0].powerW, 5000000, 'should have power value')
-  t.is(result.log[0].consumptionMWh, (5000000 * 3) / 1000000, 'should convert to MWh over the bucket span')
+  t.is(result.log[0].consumptionMWh, (5000000 * 1) / 1000000, 'should convert to MWh over the bucket span')
   t.ok(result.summary.avgPowerW !== null, 'should have avg power')
   t.ok(result.summary.totalConsumptionMWh > 0, 'should have total consumption')
   t.pass()
@@ -506,6 +508,433 @@ test('getConsumption - non-DCS reads site power from the powermeter worker', asy
 
   t.is(capturedPayload.type, 'powermeter', 'should tail the powermeter worker type')
   t.is(capturedPayload.tag, 't-powermeter', 'should use the powermeter tag')
+  t.pass()
+})
+
+test('getConsumption - byMeter reads by_meter_power_w and breaks down per meter', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [{ ts: 1700006400000, by_meter_power_w: { 'PM-1': 3000000, 'PM-2': 2000000 } }]
+      }
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, byMeter: true }
+  })
+
+  t.ok('by_meter_power_w' in capturedPayload.fields, 'should project the by_meter_power_w field')
+  t.ok('by_meter_power_w' in capturedPayload.aggrFields, 'should aggregate the by_meter_power_w field')
+  t.alike(result.log[0].powerW, { 'PM-1': 3000000, 'PM-2': 2000000 }, 'log carries per-meter power')
+  // default interval for this range is 1h -> 1h bucket span
+  t.alike(result.log[0].consumptionMWh, { 'PM-1': 3, 'PM-2': 2 }, 'per-meter consumption over the bucket span')
+  t.alike(result.summary.groupedBy, {
+    'PM-1': { avgPowerW: 3000000, totalConsumptionMWh: 3 },
+    'PM-2': { avgPowerW: 2000000, totalConsumptionMWh: 2 }
+  }, 'summary breaks down per meter')
+  t.is(result.summary.avgPowerW, 5000000, 'site avg power sums the meters')
+  t.is(result.summary.totalConsumptionMWh, 5, 'site total consumption sums the meters')
+  t.pass()
+})
+
+test('getConsumption - byMeter throws when central DCS disabled', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: { jRequest: async () => [] }
+  })
+
+  try {
+    await getConsumption(mockCtx, {
+      query: { start: 1700000000000, end: 1700100000000, byMeter: true }
+    })
+    t.fail('should have thrown')
+  } catch (err) {
+    t.is(err.message, 'ERR_BY_METER_REQUIRES_CENTRAL_DCS', 'should reject byMeter without central DCS')
+  }
+  t.pass()
+})
+
+test('getConsumption - byMeter empty results', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: { jRequest: async () => ({}) }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, byMeter: true }
+  })
+
+  t.is(result.log.length, 0, 'log should be empty with no data')
+  t.is(result.summary.totalConsumptionMWh, 0, 'total should be zero')
+  t.is(result.summary.avgPowerW, null, 'avg should be null')
+  t.alike(result.summary.groupedBy, {}, 'no meters grouped')
+  t.pass()
+})
+
+// Builds a Central-DCS ctx whose single ork returns the given by-meter rows.
+const byMeterCtx = (rows) => withDataProxy({
+  conf: {
+    orks: [{ rpcPublicKey: 'key1' }],
+    featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+  },
+  net_r0: { jRequest: async () => rows }
+})
+
+// This range resolves to the default 1h interval, so each bucket spans 1 hour
+// and per-meter MWh equals watts / 1e6.
+const BY_METER_QUERY = { start: 1700000000000, end: 1700100000000, byMeter: true }
+
+test('getConsumption - byMeter aggregates multiple buckets per meter', async (t) => {
+  const mockCtx = byMeterCtx([
+    { ts: 1700006400000, by_meter_power_w: { 'PM-1': 4000000, 'PM-2': 2000000 } },
+    { ts: 1700010000000, by_meter_power_w: { 'PM-1': 2000000, 'PM-2': 2000000 } }
+  ])
+
+  const result = await getConsumption(mockCtx, { query: BY_METER_QUERY })
+
+  t.is(result.log.length, 2, 'one log entry per ork row')
+  t.alike(result.log[1].powerW, { 'PM-1': 2000000, 'PM-2': 2000000 }, 'second bucket carries its own power')
+  t.is(result.summary.groupedBy['PM-1'].avgPowerW, 3000000, 'PM-1 avg power across both buckets')
+  t.is(result.summary.groupedBy['PM-1'].totalConsumptionMWh, 6, 'PM-1 consumption sums both buckets')
+  t.is(result.summary.avgPowerW, 5000000, 'site avg power is total meter power over bucket count')
+  t.is(result.summary.totalConsumptionMWh, 10, 'site total sums every meter across buckets')
+  t.pass()
+})
+
+test('getConsumption - byMeter handles a meter absent from some buckets', async (t) => {
+  const mockCtx = byMeterCtx([
+    { ts: 1700006400000, by_meter_power_w: { 'PM-1': 3000000, 'PM-2': 1000000 } },
+    { ts: 1700010000000, by_meter_power_w: { 'PM-1': 1000000 } }
+  ])
+
+  const result = await getConsumption(mockCtx, { query: BY_METER_QUERY })
+
+  t.alike(result.log[1].powerW, { 'PM-1': 1000000 }, 'absent meter is not fabricated on the bucket')
+  t.is(result.summary.groupedBy['PM-1'].avgPowerW, 2000000, 'PM-1 averages over the 2 buckets it appears in')
+  t.is(result.summary.groupedBy['PM-2'].avgPowerW, 1000000, 'PM-2 averages only over its single bucket')
+  t.is(result.summary.groupedBy['PM-2'].totalConsumptionMWh, 1, 'PM-2 consumption counts only its bucket')
+  t.pass()
+})
+
+test('getConsumption - byMeter tolerates a bucket with no by_meter_power_w', async (t) => {
+  const mockCtx = byMeterCtx([
+    { ts: 1700006400000, by_meter_power_w: { 'PM-1': 2000000 } },
+    { ts: 1700010000000 }
+  ])
+
+  const result = await getConsumption(mockCtx, { query: BY_METER_QUERY })
+
+  t.is(result.log.length, 2, 'the field-less row still yields a log entry')
+  t.alike(result.log[1].powerW, {}, 'missing field becomes an empty per-meter map')
+  t.alike(result.log[1].consumptionMWh, {}, 'and no per-meter consumption')
+  // the empty bucket still counts toward the denominator, dragging the site average
+  t.is(result.summary.avgPowerW, 1000000, 'site avg divides 2 MW across both buckets')
+  t.is(result.summary.groupedBy['PM-1'].avgPowerW, 2000000, 'PM-1 averages only over the bucket it reported in')
+  t.pass()
+})
+
+test('getConsumption - byMeter coerces null or non-object payloads to empty maps', async (t) => {
+  const mockCtx = byMeterCtx([
+    { ts: 1700006400000, by_meter_power_w: null },
+    { ts: 1700010000000, by_meter_power_w: 5 }
+  ])
+
+  const result = await getConsumption(mockCtx, { query: BY_METER_QUERY })
+
+  t.is(result.log.length, 2, 'both rows still produce log entries')
+  t.alike(result.log[0].powerW, {}, 'null payload becomes an empty map')
+  t.alike(result.log[1].powerW, {}, 'non-object payload becomes an empty map')
+  t.alike(result.summary.groupedBy, {}, 'no meters are grouped')
+  t.is(result.summary.totalConsumptionMWh, 0, 'no consumption accrues')
+  t.is(result.summary.avgPowerW, 0, 'site avg is zero over the empty buckets')
+  t.pass()
+})
+
+test('getConsumption - byMeter treats non-numeric meter power as zero consumption', async (t) => {
+  const mockCtx = byMeterCtx([
+    { ts: 1700006400000, by_meter_power_w: { 'PM-1': 'n/a', 'PM-2': 3000000 } }
+  ])
+
+  const result = await getConsumption(mockCtx, { query: BY_METER_QUERY })
+
+  t.is(result.log[0].consumptionMWh['PM-1'], 0, 'unparseable power yields zero consumption')
+  t.is(result.log[0].consumptionMWh['PM-2'], 3, 'the numeric meter still converts to MWh')
+  t.is(result.summary.groupedBy['PM-1'].avgPowerW, 0, 'unparseable power averages to zero')
+  t.pass()
+})
+
+test('getConsumption - byMeter yields an empty log when the ork errors', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: { jRequest: async () => { throw new Error('ork down') } }
+  })
+
+  const result = await getConsumption(mockCtx, { query: BY_METER_QUERY })
+
+  t.is(result.log.length, 0, 'a non-array ork result is treated as no data')
+  t.is(result.summary.avgPowerW, null, 'avg is null with no data')
+  t.alike(result.summary.groupedBy, {}, 'no meters grouped')
+  t.pass()
+})
+
+test('getConsumption - aggregates multiple site-power buckets', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [
+        { ts: 1700006400000, site_power_w: 6000000 },
+        { ts: 1700010000000, site_power_w: 4000000 }
+      ]
+    }
+  })
+
+  const result = await getConsumption(mockCtx, { query: { start: 1700000000000, end: 1700100000000 } })
+
+  t.is(result.log.length, 2, 'one entry per bucket')
+  t.is(result.log[0].consumptionMWh, 6, 'first bucket consumption over its 1h span')
+  t.is(result.log[1].consumptionMWh, 4, 'second bucket consumption over its 1h span')
+  t.is(result.summary.avgPowerW, 5000000, 'summary averages power across buckets')
+  t.is(result.summary.totalConsumptionMWh, 10, 'summary sums consumption across buckets')
+  t.pass()
+})
+
+test('getConsumption - treats a bucket with no site_power_w as zero', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [
+        { ts: 1700006400000, site_power_w: 5000000 },
+        { ts: 1700010000000 }
+      ]
+    }
+  })
+
+  const result = await getConsumption(mockCtx, { query: { start: 1700000000000, end: 1700100000000 } })
+
+  t.is(result.log[1].powerW, 0, 'missing site_power_w reads as zero power')
+  t.is(result.log[1].consumptionMWh, 0, 'and zero consumption')
+  t.is(result.summary.avgPowerW, 2500000, 'the zero bucket still counts toward the average')
+  t.is(result.summary.totalConsumptionMWh, 5, 'total consumption sums only the reported bucket')
+  t.pass()
+})
+
+test('getConsumption - byMeter honours an explicit 1h interval', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [
+          { ts: 1700006400000, by_meter_power_w: { 'PM-1': 4000000 } },
+          { ts: 1700010000000, by_meter_power_w: { 'PM-1': 2000000 } }
+        ]
+      }
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, byMeter: true, interval: '1h' }
+  })
+
+  t.is(capturedPayload.key, 'stat-30m', 'hourly interval samples the finer 30m stat log')
+  t.is(capturedPayload.groupRange, '1H', 'bucketed into 1h windows')
+  t.is(result.log.length, 2, 'one log entry per bucket')
+  t.alike(result.log[0].consumptionMWh, { 'PM-1': 4 }, '4 MW over a 1h bucket is 4 MWh')
+  t.alike(result.log[1].consumptionMWh, { 'PM-1': 2 }, '2 MW over a 1h bucket is 2 MWh')
+  t.is(result.summary.groupedBy['PM-1'].totalConsumptionMWh, 6, 'PM-1 consumption sums both hourly buckets')
+  t.pass()
+})
+
+test('getConsumption - byMeter applies the 1d interval to the ork query and MWh scaling', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [
+          { ts: 1700006400000, by_meter_power_w: { 'PM-1': 3000000, 'PM-2': 2000000 } },
+          { ts: 1700092800000, by_meter_power_w: { 'PM-1': 1000000, 'PM-2': 2000000 } }
+        ]
+      }
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, byMeter: true, interval: '1d' }
+  })
+
+  t.is(capturedPayload.key, 'stat-3h', 'daily interval tails the 3h stat log')
+  t.is(capturedPayload.groupRange, '1D', 'and buckets into 1-day windows')
+  t.is(result.log.length, 2, 'one log entry per daily bucket')
+  t.alike(result.log[0].consumptionMWh, { 'PM-1': 72, 'PM-2': 48 }, 'first bucket per-meter MWh over the 24h span')
+  t.alike(result.log[1].consumptionMWh, { 'PM-1': 24, 'PM-2': 48 }, 'second bucket per-meter MWh over the 24h span')
+  t.is(result.summary.groupedBy['PM-1'].avgPowerW, 2000000, 'PM-1 avg power across both days')
+  t.is(result.summary.groupedBy['PM-1'].totalConsumptionMWh, 96, 'PM-1 consumption sums both days')
+  t.is(result.summary.totalConsumptionMWh, 192, 'site total over both days')
+  t.is(result.summary.avgPowerW, 4000000, 'site avg power is total meter power over bucket count')
+  t.pass()
+})
+
+test('getConsumption - byMeter applies the 1w interval to the ork query and MWh scaling', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [
+          { ts: 1700006400000, by_meter_power_w: { 'PM-1': 1000000 } },
+          { ts: 1700611200000, by_meter_power_w: { 'PM-1': 2000000 } }
+        ]
+      }
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, byMeter: true, interval: '1w' }
+  })
+
+  t.is(capturedPayload.key, 'stat-3h', 'weekly interval tails the 3h stat log')
+  t.is(capturedPayload.groupRange, '1W', 'and buckets into 1-week windows')
+  t.is(result.log.length, 2, 'one log entry per weekly bucket')
+  t.alike(result.log[0].consumptionMWh, { 'PM-1': 168 }, '1 MW over a 168h bucket is 168 MWh')
+  t.alike(result.log[1].consumptionMWh, { 'PM-1': 336 }, '2 MW over a 168h bucket is 336 MWh')
+  t.is(result.summary.groupedBy['PM-1'].totalConsumptionMWh, 504, 'PM-1 consumption sums both weekly buckets')
+  t.pass()
+})
+
+test('getConsumption - site power applies the 1w interval to the ork query and MWh scaling', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [
+          { ts: 1700006400000, site_power_w: 2000000 },
+          { ts: 1700611200000, site_power_w: 1000000 }
+        ]
+      }
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, interval: '1w' }
+  })
+
+  t.is(capturedPayload.key, 'stat-3h', 'weekly interval tails the 3h stat log')
+  t.is(capturedPayload.groupRange, '1W', 'and buckets into 1-week windows')
+  t.is(result.log.length, 2, 'one entry per weekly bucket')
+  t.is(result.log[0].consumptionMWh, 336, '2 MW over a 168h bucket is 336 MWh')
+  t.is(result.log[1].consumptionMWh, 168, '1 MW over a 168h bucket is 168 MWh')
+  t.is(result.summary.avgPowerW, 1500000, 'summary averages power across both weekly buckets')
+  t.is(result.summary.totalConsumptionMWh, 504, 'summary sums consumption across both buckets')
+  t.pass()
+})
+
+// A requested interval makes the ork group raw samples into interval-aligned
+// buckets, each returned with a "<start>-<end>" range-string ts. These consts
+// model two consecutive grouped buckets returned from a single ork.
+const DAY1_TS = '1770854400000-1770940799999'
+const DAY1_START = 1770854400000
+const DAY1_END = 1770940799999
+const DAY2_TS = '1770940800000-1771027199999'
+const DAY2_START = 1770940800000
+const DAY2_END = 1771027199999
+
+const WEEK1_TS = '1770854400000-1771459199999'
+const WEEK1_START = 1770854400000
+const WEEK1_END = 1771459199999
+const WEEK2_TS = '1771459200000-1772063999999'
+const WEEK2_START = 1771459200000
+const WEEK2_END = 1772063999999
+
+test('getConsumption - byMeter groups ork entries into interval-aligned buckets', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [
+          { ts: DAY1_TS, by_meter_power_w: { 'PM-1': 3000000, 'PM-2': 2000000 } },
+          { ts: DAY2_TS, by_meter_power_w: { 'PM-1': 1000000, 'PM-2': 2000000 } }
+        ]
+      }
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: DAY1_START, end: DAY2_END, byMeter: true, interval: '1d' }
+  })
+
+  t.is(capturedPayload.groupRange, '1D', 'ork is asked to group into 1-day buckets')
+  t.is(result.log.length, 2, 'one log entry per grouped bucket')
+  t.is(result.log[0].ts, DAY1_START, 'bucket ts is normalized to its range start')
+  t.is(typeof result.log[0].ts, 'number', 'ts is a number, not the range string')
+  t.alike(result.log[0].timeRange, { startTs: DAY1_START, endTs: DAY1_END }, 'first bucket exposes its aggregation window')
+  t.alike(result.log[1].timeRange, { startTs: DAY2_START, endTs: DAY2_END }, 'second bucket exposes its aggregation window')
+  t.alike(result.log[0].consumptionMWh, { 'PM-1': 72, 'PM-2': 48 }, 'first bucket per-meter MWh over its 24h window')
+  t.alike(result.log[1].consumptionMWh, { 'PM-1': 24, 'PM-2': 48 }, 'second bucket per-meter MWh over its 24h window')
+  t.is(result.summary.groupedBy['PM-1'].totalConsumptionMWh, 96, 'PM-1 consumption sums both buckets')
+  t.is(result.summary.totalConsumptionMWh, 192, 'site total sums both buckets')
+  t.pass()
+})
+
+test('getConsumption - site power groups ork entries into interval-aligned buckets', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [
+          { ts: WEEK1_TS, site_power_w: 2000000 },
+          { ts: WEEK2_TS, site_power_w: 1000000 }
+        ]
+      }
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: WEEK1_START, end: WEEK2_END, interval: '1w' }
+  })
+
+  t.is(capturedPayload.groupRange, '1W', 'ork is asked to group into 1-week buckets')
+  t.is(result.log.length, 2, 'one entry per grouped bucket')
+  t.is(result.log[0].ts, WEEK1_START, 'bucket ts is normalized to its range start')
+  t.alike(result.log[0].timeRange, { startTs: WEEK1_START, endTs: WEEK1_END }, 'first bucket exposes its aggregation window')
+  t.alike(result.log[1].timeRange, { startTs: WEEK2_START, endTs: WEEK2_END }, 'second bucket exposes its aggregation window')
+  t.is(result.log[0].consumptionMWh, 336, '2 MW over a 168h bucket is 336 MWh')
+  t.is(result.log[1].consumptionMWh, 168, '1 MW over a 168h bucket is 168 MWh')
+  t.is(result.summary.totalConsumptionMWh, 504, 'total sums both weekly buckets')
   t.pass()
 })
 
@@ -565,7 +994,7 @@ test('getConsumption - MWh scales with the bucket span', async (t) => {
   const hourly = await getConsumption(mockCtx, { query: { ...query, interval: '1h' } })
   const daily = await getConsumption(mockCtx, { query: { ...query, interval: '1d' } })
 
-  t.is(hourly.log[0].consumptionMWh, 15, '3h bucket at 5 MW is 15 MWh')
+  t.is(hourly.log[0].consumptionMWh, 5, '1h bucket at 5 MW is 5 MWh')
   t.is(daily.log[0].consumptionMWh, 120, '24h bucket at 5 MW is 120 MWh')
   t.is(hourly.log[0].powerW, daily.log[0].powerW, 'average power is unaffected by bucket span')
   t.pass()
@@ -587,6 +1016,29 @@ test('calculateConsumptionSummary - handles empty log', (t) => {
   const summary = calculateConsumptionSummary([])
   t.is(summary.totalConsumptionMWh, 0, 'should be zero')
   t.is(summary.avgPowerW, null, 'should be null')
+  t.pass()
+})
+
+test('calculateByMeterConsumptionSummary - averages power and sums consumption per meter', (t) => {
+  const log = [
+    { ts: 1, powerW: { 'PM-1': 4000000, 'PM-2': 2000000 }, consumptionMWh: { 'PM-1': 4, 'PM-2': 2 } },
+    { ts: 2, powerW: { 'PM-1': 2000000, 'PM-2': 2000000 }, consumptionMWh: { 'PM-1': 2, 'PM-2': 2 } }
+  ]
+
+  const summary = calculateByMeterConsumptionSummary(log)
+  t.is(summary.groupedBy['PM-1'].avgPowerW, 3000000, 'averages PM-1 power across buckets')
+  t.is(summary.groupedBy['PM-1'].totalConsumptionMWh, 6, 'sums PM-1 consumption')
+  t.is(summary.groupedBy['PM-2'].avgPowerW, 2000000, 'averages PM-2 power')
+  t.is(summary.totalConsumptionMWh, 10, 'site total sums all meters')
+  t.is(summary.avgPowerW, 5000000, 'site avg power is total meter power over bucket count')
+  t.pass()
+})
+
+test('calculateByMeterConsumptionSummary - handles empty log', (t) => {
+  const summary = calculateByMeterConsumptionSummary([])
+  t.is(summary.totalConsumptionMWh, 0, 'should be zero')
+  t.is(summary.avgPowerW, null, 'should be null')
+  t.alike(summary.groupedBy, {}, 'no meters grouped')
   t.pass()
 })
 
@@ -1434,8 +1886,8 @@ test('resolveInterval - uses requested interval when provided', (t) => {
 
 test('getIntervalConfig - returns correct configs', (t) => {
   const h = getIntervalConfig('1h')
-  t.is(h.key, 'stat-3h', '1h key should be stat-3h')
-  t.is(h.groupRange, null, '1h should have no groupRange')
+  t.is(h.key, 'stat-30m', '1h key should be stat-30m')
+  t.is(h.groupRange, '1H', '1h groupRange should be 1H')
 
   const d = getIntervalConfig('1d')
   t.is(d.key, 'stat-3h', '1d key should be stat-3h')

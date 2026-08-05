@@ -101,7 +101,9 @@ function resolveInterval (start, end, requested) {
 function getIntervalConfig (interval) {
   switch (interval) {
     case '1h':
-      return { key: LOG_KEYS.STAT_3H, groupRange: null }
+      // Sample the finer-grained stat-30m log and bucket it into 1h windows,
+      // so hourly views aren't coarsened to the 3h stat cadence.
+      return { key: LOG_KEYS.STAT_30M, groupRange: '1H' }
     case '1w':
       return { key: LOG_KEYS.STAT_3H, groupRange: '1W' }
     case '1d':

@@ -62,6 +62,7 @@ module.exports = (ctx) => {
           req.query.end,
           req.query.interval,
           req.query.groupBy,
+          req.query.byMeter,
           req.query.racks
         ],
         ENDPOINTS.METRICS_CONSUMPTION,
