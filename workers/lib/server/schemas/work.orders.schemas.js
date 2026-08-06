@@ -148,6 +148,7 @@ const update = {
           remarks: { type: 'string', maxLength: 4000 },
           site: { type: 'string', maxLength: 200 },
           location: { type: 'string', maxLength: 200 },
+          deviceStatus: { type: 'string', maxLength: 100 },
           partsMoves: {
             type: 'array',
             items: {
