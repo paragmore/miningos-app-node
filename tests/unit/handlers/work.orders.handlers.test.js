@@ -648,6 +648,67 @@ test('handlers: createWorkOrdersBatch Type 3 updates the miner named by info.min
   t.is(diagnosisMoves.length, 1, 'parts keep their diagnosis moves')
 })
 
+test('handlers: createWorkOrdersBatch Type 3 keeps the miner as the root subject, not the first spare part', async (t) => {
+  const pushed = []
+  const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
+    if (method === 'pushAction') { pushed.push(params); return { id: 'a', errors: [] } }
+    if (method === 'listThings') {
+      const or = params.query?.$or || []
+      if (or.some(c => c.id === 'pirxAnVkFzZLTEZ')) {
+        return [{ id: 'pirxAnVkFzZLTEZ', code: 'MN-750', type: 'miner-wm-m63spp', rack: 'miner-rack-1', info: { serialNum: 'WM63SPP00750' } }]
+      }
+      const sn = or.map(c => c.id).find(Boolean)
+      return [{ id: sn, code: sn, type: 'inventory-miner_part-hashboard', rack: 'hb-rack-1', info: {} }]
+    }
+    return null
+  })
+  ctx.authLib = mockAuthLib
+  ctx._workOrderRackId = RACK
+  await handlers.createWorkOrdersBatch(ctx, {
+    ...userMeta(),
+    body: {
+      type: 3,
+      issue: 'Boot but no hashrate',
+      devices: [
+        { deviceType: 'hashboard', deviceModel: 'miner-wm-m63spp', deviceIdentifier: 'QAHB01-WM63SPP00750' },
+        { deviceType: 'hashboard', deviceModel: 'miner-wm-m63spp', deviceIdentifier: 'QAHB02-WM63SPP00750' }
+      ],
+      info: { notes: 'Miner SN: WM63SPP00750', minerIdentifier: 'pirxAnVkFzZLTEZ' }
+    }
+  })
+  const info = pushed.find(p => p.action === 'registerThing').params[0].info
+  t.is(info.deviceType, 'miner', 'root subject is the miner, not the hashboard')
+  t.is(info.deviceModel, 'miner-wm-m63spp')
+  t.is(info.deviceIdentifier, 'WM63SPP00750', 'root identifier is the miner SN, not the spare part SN')
+  t.alike(
+    info.partsMoves.map(m => m.deviceIdentifier),
+    ['QAHB01-WM63SPP00750', 'QAHB02-WM63SPP00750'],
+    'spare parts stay confined to partsMoves'
+  )
+})
+
+test('handlers: createWorkOrdersBatch Type 3 400s when info.minerIdentifier resolves to nothing', async (t) => {
+  const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method) => {
+    if (method === 'pushAction') return { id: 'a', errors: [] }
+    if (method === 'listThings') return []
+    return null
+  })
+  ctx.authLib = mockAuthLib
+  ctx._workOrderRackId = RACK
+  await t.exception(
+    () => handlers.createWorkOrdersBatch(ctx, {
+      ...userMeta(),
+      body: {
+        type: 3,
+        issue: 'i',
+        devices: [{ deviceType: 'hashboard', deviceModel: 'M56', deviceIdentifier: 'HB-1' }],
+        info: { minerIdentifier: 'ghost-miner' }
+      }
+    }),
+    /ERR_PART_NOT_FOUND/
+  )
+})
+
 test('handlers: createWorkOrdersBatch Type 3 without deviceStatus leaves the miner untouched', async (t) => {
   const pushed = []
   const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {

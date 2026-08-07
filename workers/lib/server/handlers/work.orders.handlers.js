@@ -321,9 +321,28 @@ async function createWorkOrdersBatch (ctx, req) {
   const voter = req._info.user.metadata.email
   const woId = randomUUID()
   const ts = Date.now()
-  const [summary] = devices
 
-  // First device is the summary used by the thing-side validator, RMA export, and single-device views.
+  // A MicroBT repair is about the miner, and `devices` carries the spare parts
+  // swapped into it — so devices[0] is a part, not the subject. The rack still
+  // demands root device* fields, so they come from info.minerIdentifier here and
+  // the parts stay confined to partsMoves.
+  const isMinerRepair = type === WORK_ORDER_TYPES.MICROBT_MINER
+  const hasRepairMinerIdentifier = isMinerRepair && Boolean(extraInfo?.minerIdentifier)
+  const minerToRepair = hasRepairMinerIdentifier
+    ? await _resolvePartByIdentifier(ctx, extraInfo.minerIdentifier)
+    : null
+  if (hasRepairMinerIdentifier && !minerToRepair) throw _badRequest('ERR_PART_NOT_FOUND')
+
+  // Everywhere else a batch is homogeneous, so the first device is the summary
+  // used by the thing-side validator, RMA export, and single-device views.
+  const summary = minerToRepair
+    ? {
+        deviceType: 'miner',
+        deviceModel: minerToRepair.type ?? devices[0].deviceModel,
+        deviceIdentifier: minerToRepair.info?.serialNum ?? minerToRepair.code ?? extraInfo.minerIdentifier
+      }
+    : devices[0]
+
   const info = {
     type,
     ...rest,
@@ -398,23 +417,17 @@ async function createWorkOrdersBatch (ctx, req) {
 
   // MicroBT repair WOs list only the repaired parts as devices; the miner
   // itself rides in info.minerIdentifier, so its status change lands here.
-  if (type === WORK_ORDER_TYPES.MICROBT_MINER && info.deviceStatus && info.minerIdentifier) {
-    const miner = await _resolvePartByIdentifier(ctx, info.minerIdentifier)
-    if (!miner) {
-      const err = new Error('ERR_PART_NOT_FOUND')
-      err.statusCode = 400
-      throw err
-    }
+  if (minerToRepair && info.deviceStatus) {
     partsMoves.push({
-      partId: miner.id,
-      partCode: miner.code,
+      partId: minerToRepair.id,
+      partCode: minerToRepair.code,
       role: 'status_change',
-      fromStatus: miner.info?.status ?? null,
+      fromStatus: minerToRepair.info?.status ?? null,
       toStatus: info.deviceStatus,
       ts,
       user: voter
     })
-    const minerResults = await submitWorkOrderAction(ctx, req, 'updateThing', { id: miner.id, info: { status: info.deviceStatus, workOrderId: woId } }, miner.rack)
+    const minerResults = await submitWorkOrderAction(ctx, req, 'updateThing', { id: minerToRepair.id, info: { status: info.deviceStatus, workOrderId: woId } }, minerToRepair.rack)
     assertActionApplied(minerResults, 'ERR_PART_MOVE_PUSH_FAILED')
   }
 
