@@ -1,13 +1,16 @@
 'use strict'
 
-const { parseJsonQueryParam } = require('../../utils')
+const { parseJsonQueryParam, flattenRpcResults } = require('../../utils')
 const {
   MINER_FIELD_MAP,
   MINER_PROJECTION_MAP,
   MINER_SEARCH_FIELDS,
   MINER_DEFAULT_FIELDS,
   MINER_MAX_LIMIT,
-  MINER_DEFAULT_LIMIT
+  MINER_DEFAULT_LIMIT,
+  MINER_CATEGORIES,
+  CONTAINER_MINER_FIELDS,
+  WORKER_TAGS
 } = require('../../constants')
 const {
   mapFilterFields,
@@ -172,12 +175,64 @@ async function listMiners (ctx, req) {
   }
 }
 
+function sanitizeIncludeFields (fields) {
+  if (!fields || typeof fields !== 'object') return null
+  const clean = {}
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === 1) clean[key] = 1
+  }
+  return Object.keys(clean).length ? clean : null
+}
+
+function summarizeMinerActivity (miners) {
+  const summary = { total: miners.length, offline: 0, powerModes: {} }
+  for (const miner of miners) {
+    const snap = miner.last?.snap || {}
+    if (snap.stats?.status === MINER_CATEGORIES.OFFLINE) {
+      summary.offline++
+      continue
+    }
+    const mode = snap.config?.power_mode || 'unknown'
+    summary.powerModes[mode] = (summary.powerModes[mode] || 0) + 1
+  }
+  return summary
+}
+
+async function listContainerMiners (ctx, req) {
+  const requested = req.query.fields
+    ? sanitizeIncludeFields(parseJsonQueryParam(req.query.fields, 'ERR_FIELDS_INVALID_JSON'))
+    : null
+  const fields = requested ? { id: 1, type: 1, ...requested } : CONTAINER_MINER_FIELDS
+
+  const results = await ctx.dataProxy.requestDataAllPages('listThings', {
+    query: {
+      $and: [
+        { tags: { $in: [`container-${req.params.id}`] } },
+        { tags: { $in: [WORKER_TAGS.MINER] } }
+      ]
+    },
+    fields,
+    status: 1
+  })
+
+  const miners = sortItems(flattenRpcResults(results), { id: 1 })
+
+  return {
+    miners,
+    total: miners.length,
+    summary: summarizeMinerActivity(miners)
+  }
+}
+
 async function listFirmwares (ctx, req) {
   return await ctx.dataProxy.requestDataMap('listFirmwares', {})
 }
 
 module.exports = {
   listMiners,
+  listContainerMiners,
+  summarizeMinerActivity,
+  sanitizeIncludeFields,
   formatMiner,
   extractPoolWorkers,
   buildOrkProjection,

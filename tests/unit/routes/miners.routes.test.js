@@ -16,6 +16,7 @@ test('miners routes - route definitions', (t) => {
 
   const routeUrls = routes.map(route => route.url)
   t.ok(routeUrls.includes('/auth/miners'), 'should have miners route')
+  t.ok(routeUrls.includes('/auth/containers/:id/miners'), 'should have container miners route')
   t.ok(routeUrls.includes('/auth/list-firmwares'), 'should have list-firmwares route')
 
   t.pass()
