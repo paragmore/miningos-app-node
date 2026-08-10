@@ -195,6 +195,7 @@ const ENDPOINTS = {
   ALERTS_HISTORY: '/auth/alerts/history',
 
   MINERS: '/auth/miners',
+  CONTAINER_MINERS: '/auth/containers/:id/miners',
   LIST_FIRMWARES: '/auth/list-firmwares',
   // Cooling System endpoints
   COOLING_SYSTEM: '/auth/dcs/cooling-system',
@@ -930,6 +931,33 @@ const MINER_DEFAULT_FIELDS = {
 const MINER_MAX_LIMIT = 200
 const MINER_DEFAULT_LIMIT = 50
 
+// Raw-doc projection for the container-scoped miners list. Matches the
+// fields the container view reads so the response stays lean.
+const CONTAINER_MINER_FIELDS = {
+  id: 1,
+  type: 1,
+  code: 1,
+  info: 1,
+  tags: 1,
+  rack: 1,
+  address: 1,
+  'opts.address': 1,
+  'last.alerts': 1,
+  'last.snap.stats.status': 1,
+  'last.snap.stats.are_all_errors_minor': 1,
+  'last.snap.stats.hashrate': 1,
+  'last.snap.stats.hashrate_mhs': 1,
+  'last.snap.stats.temperature_c': 1,
+  'last.snap.stats.frequency_mhz': 1,
+  'last.snap.stats.power_w': 1,
+  'last.snap.stats.miner_specific.power_pct': 1,
+  'last.snap.stats.uptime_ms': 1,
+  'last.snap.config.power_mode': 1,
+  'last.snap.config.led_status': 1,
+  'last.snap.config.firmware_ver': 1,
+  'last.snap.config.pool_config': 1
+}
+
 // Explorer racks aggregation fields
 const EXPLORER_RACK_AGGR_FIELDS = {
   hashrate_mhs_5m_pdu_rack_group_avg_aggr: 1,
@@ -1014,6 +1042,7 @@ module.exports = {
   MINER_DEFAULT_FIELDS,
   MINER_MAX_LIMIT,
   MINER_DEFAULT_LIMIT,
+  CONTAINER_MINER_FIELDS,
   COOLING_SYSTEM_PROJECTIONS,
   ENERGY_SYSTEM_PROJECTIONS,
   SITE_OVERVIEW_AGGR_FIELDS,

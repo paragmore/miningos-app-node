@@ -6,7 +6,7 @@ const {
   AUTH_CAPS,
   AUTH_LEVELS
 } = require('../../constants')
-const { listMiners, listFirmwares } = require('../handlers/miners.handlers')
+const { listMiners, listContainerMiners, listFirmwares } = require('../handlers/miners.handlers')
 const { createCachedAuthRoute } = require('../lib/routeHelpers')
 
 module.exports = (ctx) => [
@@ -39,6 +39,30 @@ module.exports = (ctx) => [
       ],
       ENDPOINTS.MINERS,
       listMiners,
+      [`${AUTH_CAPS.m}:${AUTH_LEVELS.READ}`]
+    )
+  },
+  {
+    method: HTTP_METHODS.GET,
+    url: ENDPOINTS.CONTAINER_MINERS,
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          fields: { type: 'string' },
+          overwriteCache: { type: 'boolean' }
+        }
+      }
+    },
+    ...createCachedAuthRoute(
+      ctx,
+      (req) => [
+        'containers/miners',
+        req.params.id,
+        req.query.fields
+      ],
+      ENDPOINTS.CONTAINER_MINERS,
+      listContainerMiners,
       [`${AUTH_CAPS.m}:${AUTH_LEVELS.READ}`]
     )
   },

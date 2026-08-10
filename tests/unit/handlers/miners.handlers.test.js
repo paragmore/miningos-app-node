@@ -1,8 +1,12 @@
 'use strict'
 
 const test = require('brittle')
+const { createMockCtxWithOrks } = require('../helpers/mockHelpers')
 const {
   listMiners,
+  listContainerMiners,
+  summarizeMinerActivity,
+  sanitizeIncludeFields,
   formatMiner,
   extractPoolWorkers,
   buildOrkProjection,
@@ -582,5 +586,122 @@ test('listFirmwares - returns empty array when no firmwares exist', async (t) =>
   const result = await listFirmwares(ctx, {})
 
   t.alike(result, [[]])
+  t.pass()
+})
+
+// --- listContainerMiners ---
+
+function createMockContainerMiner (id, overrides = {}) {
+  return {
+    id,
+    type: 'antminer-s19xp',
+    tags: ['t-miner', 'container-bitdeer-4b'],
+    last: {
+      snap: {
+        stats: { status: 'mining' },
+        config: { power_mode: 'normal' }
+      }
+    },
+    ...overrides
+  }
+}
+
+test('listContainerMiners - returns all miners of the container sorted by id', async (t) => {
+  let capturedParams = null
+  const mockCtx = createMockCtxWithOrks(
+    [{ rpcPublicKey: 'key1' }],
+    async (key, method, params) => {
+      capturedParams = params
+      return [
+        createMockContainerMiner('m2'),
+        createMockContainerMiner('m1')
+      ]
+    }
+  )
+
+  const result = await listContainerMiners(mockCtx, { params: { id: 'bitdeer-4b' }, query: {} })
+  t.is(result.total, 2, 'should report total')
+  t.is(result.miners[0].id, 'm1', 'should sort by id')
+  t.is(result.miners[1].id, 'm2', 'should sort by id')
+  t.alike(
+    capturedParams.query.$and[0],
+    { tags: { $in: ['container-bitdeer-4b'] } },
+    'should scope query to the container tag'
+  )
+  t.alike(
+    capturedParams.query.$and[1],
+    { tags: { $in: ['t-miner'] } },
+    'should restrict query to miners'
+  )
+  t.is(capturedParams.status, 1, 'should request active things')
+  t.is(capturedParams.fields['last.snap.stats.status'], 1, 'should project container view fields by default')
+  t.is(capturedParams.fields['last.snap.config.pool_config'], 1, 'should project container view fields by default')
+  t.pass()
+})
+
+test('listContainerMiners - honors inclusion fields and ignores exclusions', async (t) => {
+  let capturedParams = null
+  const mockCtx = createMockCtxWithOrks(
+    [{ rpcPublicKey: 'key1' }],
+    async (key, method, params) => {
+      capturedParams = params
+      return []
+    }
+  )
+
+  await listContainerMiners(mockCtx, {
+    params: { id: 'c1' },
+    query: { fields: '{"code":1,"info":0}' }
+  })
+  t.is(capturedParams.fields.code, 1, 'should keep requested inclusion field')
+  t.is(capturedParams.fields.id, 1, 'should always include id')
+  t.absent(capturedParams.fields.info, 'should drop exclusion entries')
+  t.pass()
+})
+
+test('listContainerMiners - falls back to defaults when fields are all exclusions', async (t) => {
+  let capturedParams = null
+  const mockCtx = createMockCtxWithOrks(
+    [{ rpcPublicKey: 'key1' }],
+    async (key, method, params) => {
+      capturedParams = params
+      return []
+    }
+  )
+
+  await listContainerMiners(mockCtx, { params: { id: 'c1' }, query: { fields: '{"info":0}' } })
+  t.is(capturedParams.fields['last.snap.stats.status'], 1, 'should use default projection')
+  t.pass()
+})
+
+test('listContainerMiners - empty container', async (t) => {
+  const mockCtx = createMockCtxWithOrks([{ rpcPublicKey: 'key1' }], async () => [])
+
+  const result = await listContainerMiners(mockCtx, { params: { id: 'c9' }, query: {} })
+  t.is(result.miners.length, 0, 'should return empty array')
+  t.is(result.total, 0, 'total should be 0')
+  t.alike(result.summary, { total: 0, offline: 0, powerModes: {} }, 'summary should be empty')
+  t.pass()
+})
+
+test('summarizeMinerActivity - counts offline apart and power modes for the rest', (t) => {
+  const summary = summarizeMinerActivity([
+    createMockContainerMiner('m1'),
+    createMockContainerMiner('m2', { last: { snap: { stats: { status: 'offline' }, config: { power_mode: 'normal' } } } }),
+    createMockContainerMiner('m3', { last: { snap: { stats: { status: 'mining' }, config: { power_mode: 'sleep' } } } }),
+    createMockContainerMiner('m4', { last: { snap: { stats: { status: 'mining' }, config: {} } } })
+  ])
+  t.alike(summary, {
+    total: 4,
+    offline: 1,
+    powerModes: { normal: 1, sleep: 1, unknown: 1 }
+  }, 'should mirror the container home tab grouping')
+  t.pass()
+})
+
+test('sanitizeIncludeFields - keeps only inclusion entries', (t) => {
+  t.alike(sanitizeIncludeFields({ a: 1, b: 0, c: 'x' }), { a: 1 })
+  t.is(sanitizeIncludeFields({ b: 0 }), null, 'all-exclusion input returns null')
+  t.is(sanitizeIncludeFields(null), null)
   t.pass()
 })
