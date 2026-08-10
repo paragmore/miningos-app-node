@@ -95,6 +95,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
+        interval: { type: 'string', enum: ['1m', '5m', '30m', '3h'] },
         container: { type: 'string' },
         overwriteCache: { type: 'boolean' }
       }

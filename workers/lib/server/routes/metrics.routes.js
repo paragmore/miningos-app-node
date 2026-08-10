@@ -190,6 +190,7 @@ module.exports = (ctx) => {
           'metrics/power-mode/timeline',
           req.query.start,
           req.query.end,
+          req.query.interval,
           req.query.container
         ],
         ENDPOINTS.METRICS_POWER_MODE_TIMELINE,

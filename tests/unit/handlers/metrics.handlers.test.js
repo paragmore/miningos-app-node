@@ -28,6 +28,7 @@ const {
   categorizeMiner,
   getPowerModeTimeline,
   processPowerModeTimelineData,
+  resolvePowerModeTimelineInterval,
   getTemperature,
   processTemperatureData,
   calculateTemperatureSummary,
@@ -2510,6 +2511,132 @@ test('processPowerModeTimelineData - filters by container post-RPC', (t) => {
   const log = processPowerModeTimelineData(results, 'cont1')
   t.is(log.length, 1, 'should only include miners from cont1')
   t.is(log[0].container, 'cont1', 'should be cont1')
+  t.pass()
+})
+
+test('resolvePowerModeTimelineInterval - picks resolution by range', (t) => {
+  const start = 1700000000000
+  t.is(resolvePowerModeTimelineInterval(start, start + 7 * 24 * 60 * 60 * 1000), '1m', '7d range uses 1m')
+  t.is(resolvePowerModeTimelineInterval(start, start + 30 * 24 * 60 * 60 * 1000), '30m', '30d range uses 30m')
+  t.is(resolvePowerModeTimelineInterval(start, start + 60 * 24 * 60 * 60 * 1000), '3h', 'longer range uses 3h')
+  t.is(resolvePowerModeTimelineInterval(start, start + 60 * 24 * 60 * 60 * 1000, '1m'), '1m', 'explicit interval wins')
+  t.is(resolvePowerModeTimelineInterval(start, start + 1000, 'bogus'), '1m', 'unknown interval falls back to range')
+  t.pass()
+})
+
+test('getPowerModeTimeline - fetches a 7d range as bounded 1m windows', async (t) => {
+  const capturedPayloads = []
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayloads.push(payload)
+        return []
+      }
+    }
+  })
+
+  const start = 1700000000000
+  const end = start + 7 * 24 * 60 * 60 * 1000
+  const result = await getPowerModeTimeline(mockCtx, { query: { start, end } })
+
+  t.is(capturedPayloads.length, 14, 'should split 7d of 1m samples into 720-sample windows')
+  t.is(capturedPayloads[0].key, 'stat-1m', 'should request the 1m stat log')
+  t.is(capturedPayloads[0].start, start, 'first window should start at range start')
+  t.is(capturedPayloads[13].end, end, 'last window should end at range end')
+  t.is(capturedPayloads[0].limit, 721, 'window limit should cover the window samples')
+  for (let i = 1; i < capturedPayloads.length; i++) {
+    t.is(capturedPayloads[i].start, capturedPayloads[i - 1].end, `window ${i} should be contiguous`)
+  }
+  t.is(result.interval, '1m', 'should report the resolved interval')
+  t.pass()
+})
+
+test('getPowerModeTimeline - folds segments across window boundaries', async (t) => {
+  let call = 0
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        call++
+        return [{
+          ts: payload.start,
+          power_mode_group_aggr: { 'cont1-miner1': call === 3 ? 'low' : 'normal' },
+          status_group_aggr: { 'cont1-miner1': 'mining' }
+        }]
+      }
+    }
+  })
+
+  const start = 1700000000000
+  const end = start + 3 * 720 * 60 * 1000
+  const result = await getPowerModeTimeline(mockCtx, { query: { start, end } })
+
+  t.is(call, 3, 'should fetch three windows')
+  t.is(result.log.length, 1, 'should keep one miner entry across windows')
+  t.is(result.log[0].segments.length, 2, 'unchanged mode should merge across windows')
+  t.is(result.log[0].segments[0].powerMode, 'normal', 'first segment spans first two windows')
+  t.is(result.log[0].segments[1].powerMode, 'low', 'mode change opens a new segment')
+  t.pass()
+})
+
+test('getPowerModeTimeline - explicit interval overrides range resolution', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return []
+      }
+    }
+  })
+
+  const start = 1700000000000
+  const end = start + 24 * 60 * 60 * 1000
+  const result = await getPowerModeTimeline(mockCtx, { query: { start, end, interval: '3h' } })
+
+  t.is(capturedPayload.key, 'stat-3h', 'should request the 3h stat log')
+  t.is(result.interval, '3h', 'should report the requested interval')
+  t.pass()
+})
+
+test('processPowerModeTimelineData - includes miners with status but no power mode', (t) => {
+  const results = [[
+    {
+      ts: 1700000000000,
+      power_mode_group_aggr: { 'cont1-miner1': 'normal' },
+      status_group_aggr: { 'cont1-miner1': 'mining', 'cont1-miner2': 'offline' }
+    },
+    {
+      ts: 1700000060000,
+      power_mode_group_aggr: { 'cont1-miner1': 'normal', 'cont1-miner2': 'low' },
+      status_group_aggr: { 'cont1-miner1': 'mining', 'cont1-miner2': 'mining' }
+    }
+  ]]
+
+  const log = processPowerModeTimelineData(results, null)
+  t.is(log.length, 2, 'should include both miners')
+
+  const miner2 = log.find(e => e.minerId === 'cont1-miner2')
+  t.is(miner2.segments.length, 2, 'status-only sample should form its own segment')
+  t.is(miner2.segments[0].powerMode, 'offline', 'power mode should fall back to status')
+  t.is(miner2.segments[1].powerMode, 'low', 'later sample should use the reported power mode')
+  t.pass()
+})
+
+test('processPowerModeTimelineData - falls back to status when power mode is empty', (t) => {
+  const results = [[
+    {
+      ts: 1700000000000,
+      power_mode_group_aggr: { 'cont1-miner1': '' },
+      status_group_aggr: { 'cont1-miner1': 'degraded' }
+    }
+  ]]
+
+  const log = processPowerModeTimelineData(results, null)
+  t.is(log[0].segments[0].powerMode, 'degraded', 'empty power mode should fall back to status')
+  t.is(log[0].segments[0].status, 'degraded', 'status should be preserved')
   t.pass()
 })
 

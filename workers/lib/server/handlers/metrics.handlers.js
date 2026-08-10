@@ -1050,6 +1050,21 @@ function calculatePowerModeSummary (log) {
   return summary
 }
 
+const POWER_MODE_TIMELINE_INTERVALS = {
+  '1m': { key: LOG_KEYS.STAT_1M, stepMs: 60 * 1000 },
+  '5m': { key: LOG_KEYS.STAT_5M, stepMs: 5 * 60 * 1000 },
+  '30m': { key: LOG_KEYS.STAT_30M, stepMs: 30 * 60 * 1000 },
+  '3h': { key: LOG_KEYS.STAT_3H, stepMs: METRICS_TIME.THREE_HOURS_MS }
+}
+
+function resolvePowerModeTimelineInterval (start, end, requested) {
+  if (requested && POWER_MODE_TIMELINE_INTERVALS[requested]) return requested
+  const range = end - start
+  if (range <= METRICS_TIME.SEVEN_DAYS_MS) return '1m'
+  if (range <= METRICS_TIME.ONE_MONTH_MS) return '30m'
+  return '3h'
+}
+
 async function getPowerModeTimeline (ctx, req) {
   const now = Date.now()
   const start = Number(req.query.start) || (now - METRICS_TIME.ONE_MONTH_MS)
@@ -1060,75 +1075,116 @@ async function getPowerModeTimeline (ctx, req) {
     throw new Error('ERR_INVALID_DATE_RANGE')
   }
 
-  const rpcPayload = {
-    key: LOG_KEYS.STAT_3H,
-    type: WORKER_TYPES.MINER,
-    tag: WORKER_TAGS.MINER,
-    aggrFields: {
-      [AGGR_FIELDS.POWER_MODE_GROUP]: 1,
-      [AGGR_FIELDS.STATUS_GROUP]: 1
-    },
-    start,
-    end
+  const interval = resolvePowerModeTimelineInterval(start, end, req.query.interval)
+  const { key, stepMs } = POWER_MODE_TIMELINE_INTERVALS[interval]
+  const windowMs = stepMs * METRICS_DEFAULTS.POWER_MODE_TIMELINE_WINDOW_SAMPLES
+
+  const aggregator = createPowerModeTimelineAggregator(container)
+
+  for (let windowStart = start; windowStart < end; windowStart += windowMs) {
+    const windowEnd = Math.min(windowStart + windowMs, end)
+
+    const results = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+      key,
+      type: WORKER_TYPES.MINER,
+      tag: WORKER_TAGS.MINER,
+      aggrFields: {
+        [AGGR_FIELDS.POWER_MODE_GROUP]: 1,
+        [AGGR_FIELDS.STATUS_GROUP]: 1
+      },
+      start: windowStart,
+      end: windowEnd,
+      limit: Math.ceil((windowEnd - windowStart) / stepMs) + 1
+    })
+
+    aggregator.addResults(results)
   }
 
-  const results = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, rpcPayload)
+  return { log: aggregator.build(), interval }
+}
 
-  const log = processPowerModeTimelineData(results, container)
+// Segments are folded incrementally so memory scales with the number of mode
+// changes, not with samples x fleet size. Callers must feed results in
+// ascending time-window order.
+function createPowerModeTimelineAggregator (containerFilter) {
+  const minerStates = new Map()
+  const minerContainers = new Map()
 
-  return { log }
+  const minerContainer = (minerId) => {
+    let container = minerContainers.get(minerId)
+    if (container === undefined) {
+      container = extractContainerFromMinerKey(minerId)
+      minerContainers.set(minerId, container)
+    }
+    return container
+  }
+
+  const addSample = (minerId, ts, powerMode, status) => {
+    if (containerFilter && minerContainer(minerId) !== containerFilter) return
+
+    let state = minerStates.get(minerId)
+    if (!state) {
+      state = { segments: [], current: null }
+      minerStates.set(minerId, state)
+    }
+
+    const current = state.current
+    if (!current || current.powerMode !== powerMode || current.status !== status) {
+      if (current) {
+        current.to = ts
+        state.segments.push(current)
+      }
+      state.current = { from: ts, to: ts, powerMode, status }
+    } else {
+      current.to = ts
+    }
+  }
+
+  return {
+    addResults (results) {
+      const entries = []
+      for (const entry of iterateRpcEntries(results)) {
+        const ts = parseEntryTs(entry.ts || entry.timestamp)
+        if (!ts) continue
+        entries.push({ ts, entry })
+      }
+      entries.sort((a, b) => a.ts - b.ts)
+
+      for (const { ts, entry } of entries) {
+        const powerModeObj = entry[AGGR_FIELDS.POWER_MODE_GROUP] || entry.aggrFields?.[AGGR_FIELDS.POWER_MODE_GROUP] || {}
+        const statusObj = entry[AGGR_FIELDS.STATUS_GROUP] || entry.aggrFields?.[AGGR_FIELDS.STATUS_GROUP] || {}
+
+        const powerModes = (typeof powerModeObj === 'object' && powerModeObj !== null) ? powerModeObj : {}
+        const statuses = (typeof statusObj === 'object' && statusObj !== null) ? statusObj : {}
+
+        for (const minerId of Object.keys(statuses)) {
+          addSample(minerId, ts, powerModes[minerId] || statuses[minerId] || 'unknown', statuses[minerId] || 'unknown')
+        }
+        for (const minerId of Object.keys(powerModes)) {
+          if (!(minerId in statuses)) {
+            addSample(minerId, ts, powerModes[minerId] || 'unknown', 'unknown')
+          }
+        }
+      }
+    },
+
+    build () {
+      const log = []
+      for (const [minerId, state] of minerStates) {
+        const segments = state.current
+          ? [...state.segments, state.current]
+          : state.segments
+        log.push({ minerId, container: minerContainer(minerId), segments })
+      }
+      return log
+    }
+  }
 }
 
 function processPowerModeTimelineData (results, containerFilter) {
-  const minerTimelines = {}
-
-  for (const entry of iterateRpcEntries(results)) {
-    const ts = parseEntryTs(entry.ts || entry.timestamp)
-    if (!ts) continue
-
-    const powerModeObj = entry[AGGR_FIELDS.POWER_MODE_GROUP] || entry.aggrFields?.[AGGR_FIELDS.POWER_MODE_GROUP] || {}
-    const statusObj = entry[AGGR_FIELDS.STATUS_GROUP] || entry.aggrFields?.[AGGR_FIELDS.STATUS_GROUP] || {}
-
-    if (typeof powerModeObj === 'object' && powerModeObj !== null) {
-      for (const [minerId, powerMode] of Object.entries(powerModeObj)) {
-        if (!minerTimelines[minerId]) minerTimelines[minerId] = []
-        minerTimelines[minerId].push({
-          ts,
-          powerMode: powerMode || 'unknown',
-          status: statusObj[minerId] || 'unknown'
-        })
-      }
-    }
-  }
-
-  const log = []
-  for (const [minerId, entries] of Object.entries(minerTimelines)) {
-    entries.sort((a, b) => a.ts - b.ts)
-
-    const container = extractContainerFromMinerKey(minerId)
-
-    if (containerFilter && container !== containerFilter) continue
-
-    const segments = []
-    let current = null
-
-    for (const entry of entries) {
-      if (!current || current.powerMode !== entry.powerMode || current.status !== entry.status) {
-        if (current) {
-          current.to = entry.ts
-          segments.push(current)
-        }
-        current = { from: entry.ts, to: entry.ts, powerMode: entry.powerMode, status: entry.status }
-      } else {
-        current.to = entry.ts
-      }
-    }
-    if (current) segments.push(current)
-
-    log.push({ minerId, container, segments })
-  }
-
-  return log
+  const aggregator = createPowerModeTimelineAggregator(containerFilter)
+  aggregator.addResults(results)
+  return aggregator.build()
 }
 
 async function getTemperature (ctx, req) {
@@ -1498,6 +1554,7 @@ module.exports = {
   categorizeMiner,
   getPowerModeTimeline,
   processPowerModeTimelineData,
+  resolvePowerModeTimelineInterval,
   getTemperature,
   processTemperatureData,
   calculateTemperatureSummary,
