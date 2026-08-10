@@ -6,7 +6,9 @@ const {
   PERIOD_TYPES,
   MINERPOOL_EXT_DATA_KEYS,
   RPC_METHODS,
-  GLOBAL_DATA_TYPES
+  GLOBAL_DATA_TYPES,
+  METRICS_TIME,
+  BTC_SATS
 } = require('../../constants')
 const { getStartOfDay, safeDiv, runParallel } = require('../../utils')
 const { parseEntryTs } = require('../../metrics.utils')
@@ -1318,6 +1320,209 @@ function calculateHashRevenueSummary (log) {
 
 // ==================== Shared ====================
 
+// ==================== Avg All-in Power Cost ====================
+
+const WATTS_PER_MW = 1e6
+const HOURS_PER_DAY = 24
+
+function getStartOfMonthUtc (ts) {
+  const date = new Date(ts)
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)
+}
+
+async function getPowerCost (ctx, req) {
+  const { start, end } = validateStartEnd(req)
+  const startDate = new Date(start).toISOString()
+  const endDate = new Date(end).toISOString()
+  const startMonthTs = getStartOfMonthUtc(start)
+  const endMonthTs = getStartOfMonthUtc(end)
+
+  const [
+    powerResults,
+    transactionResults,
+    priceResults,
+    productionCosts
+  ] = await runParallel([
+    (cb) => ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG_RANGE_AGGR, {
+      keys: [{
+        type: WORKER_TYPES.POWERMETER,
+        startDate,
+        endDate,
+        fields: { [AGGR_FIELDS.SITE_POWER]: 1 },
+        aggrFields: { [AGGR_FIELDS.SITE_POWER]: 1 },
+        shouldReturnDailyData: 1
+      }]
+    }).then(r => cb(null, r)).catch(cb),
+
+    (cb) => ctx.dataProxy.requestData(RPC_METHODS.GET_WRK_EXT_DATA, {
+      type: WORKER_TYPES.MINERPOOL,
+      query: { key: MINERPOOL_EXT_DATA_KEYS.TRANSACTIONS, start, end }
+    }).then(r => cb(null, r)).catch(cb),
+
+    (cb) => ctx.dataProxy.requestData(RPC_METHODS.GET_WRK_EXT_DATA, {
+      type: WORKER_TYPES.MEMPOOL,
+      query: { key: 'HISTORICAL_PRICES', start, end }
+    }).then(r => cb(null, r)).catch(cb),
+
+    // Widened by a day on each side because getProductionCosts compares
+    // local-time month starts; the month filter below is the precise one.
+    (cb) => getProductionCosts(ctx, startMonthTs - METRICS_TIME.ONE_DAY_MS, end + METRICS_TIME.ONE_DAY_MS)
+      .then(r => cb(null, r)).catch(cb)
+  ])
+
+  const dailyAvgPowerW = processDailyAvgPower(powerResults, start, end)
+  const dailyRevenueBTC = processDailyRevenueBtc(transactionResults, start, end)
+  const dailyAvgPrices = processDailyAvgPrices(priceResults, start, end)
+  const costsByMonth = sumCostsByMonth(productionCosts, startMonthTs, endMonthTs)
+
+  const monthly = {}
+  const monthBucket = (monthTs) => {
+    if (!monthly[monthTs]) monthly[monthTs] = { revenueUSD: 0, mWh: 0, costUSD: 0 }
+    return monthly[monthTs]
+  }
+
+  // Revenue only counts on days that also have a BTC price; a priceless day
+  // would otherwise be valued at 0 and drag the monthly average down.
+  for (const [dayTs, revenueBTC] of Object.entries(dailyRevenueBTC)) {
+    const price = dailyAvgPrices[dayTs]
+    if (!Number.isFinite(price)) continue
+    monthBucket(getStartOfMonthUtc(Number(dayTs))).revenueUSD += revenueBTC * price
+  }
+
+  const dailyAvgWByMonth = {}
+  for (const [dayTs, avgW] of Object.entries(dailyAvgPowerW)) {
+    const monthTs = getStartOfMonthUtc(Number(dayTs))
+    if (!dailyAvgWByMonth[monthTs]) dailyAvgWByMonth[monthTs] = []
+    dailyAvgWByMonth[monthTs].push(avgW)
+  }
+  for (const [monthTs, dailyAvgW] of Object.entries(dailyAvgWByMonth)) {
+    const meanW = dailyAvgW.reduce((sum, w) => sum + w, 0) / dailyAvgW.length
+    monthBucket(Number(monthTs)).mWh = (meanW / WATTS_PER_MW) * HOURS_PER_DAY * dailyAvgW.length
+  }
+
+  for (const [monthTs, costUSD] of Object.entries(costsByMonth)) {
+    monthBucket(Number(monthTs)).costUSD = costUSD
+  }
+
+  const log = Object.entries(monthly)
+    .map(([monthTs, { revenueUSD, mWh, costUSD }]) => ({
+      ts: Number(monthTs),
+      revenueUSD: mWh > 0 ? revenueUSD / mWh : 0,
+      hashCostUSD: mWh > 0 ? costUSD / mWh : 0
+    }))
+    .filter(({ ts }) => ts >= startMonthTs && ts <= endMonthTs)
+    .sort((a, b) => a.ts - b.ts)
+
+  return { log }
+}
+
+function processDailyAvgPower (results, start, end) {
+  const startDay = getStartOfDay(start)
+  const endDay = getStartOfDay(end)
+  const sumByDay = {}
+  const countByDay = {}
+
+  const addReading = (dayTs, sitePowerW, aggrIntervals) => {
+    if (!dayTs || dayTs < startDay || dayTs > endDay) return
+    const avgW = aggrIntervals > 0 ? sitePowerW / aggrIntervals : sitePowerW
+    sumByDay[dayTs] = (sumByDay[dayTs] || 0) + avgW
+    countByDay[dayTs] = (countByDay[dayTs] || 0) + 1
+  }
+
+  for (const res of results) {
+    if (!res || res.error) continue
+    const data = Array.isArray(res) ? res : (res.data || res.result || [])
+    if (!Array.isArray(data)) continue
+    for (const entry of data) {
+      if (!entry || entry.type !== WORKER_TYPES.POWERMETER || !entry.data) continue
+      if (Array.isArray(entry.data)) {
+        for (const item of entry.data) {
+          if (!item) continue
+          const val = item.val || {}
+          addReading(getStartOfDay(item.ts), val[AGGR_FIELDS.SITE_POWER] || 0, val.aggrIntervals || 0)
+        }
+      } else if (typeof entry.data === 'object') {
+        addReading(startDay, entry.data[AGGR_FIELDS.SITE_POWER] || 0, entry.data.aggrIntervals || 1)
+      }
+    }
+  }
+
+  const daily = {}
+  for (const [dayTs, sum] of Object.entries(sumByDay)) {
+    daily[dayTs] = sum / (countByDay[dayTs] || 1)
+  }
+  return daily
+}
+
+function processDailyRevenueBtc (results, start, end) {
+  const startDay = getStartOfDay(start)
+  const endDay = getStartOfDay(end)
+  const daily = {}
+  for (const res of results) {
+    if (!res || res.error) continue
+    const data = Array.isArray(res) ? res : (res.data || res.result || [])
+    if (!Array.isArray(data)) continue
+    for (const entry of data) {
+      if (!entry || !entry.ts || !Array.isArray(entry.transactions)) continue
+      const dayTs = getStartOfDay(normalizeTimestampMs(Number(entry.ts)))
+      if (!dayTs || dayTs < startDay || dayTs > endDay) continue
+      let revenueBTC = 0
+      for (const tx of entry.transactions) {
+        if (!tx) continue
+        if (typeof tx.changed_balance === 'number') {
+          revenueBTC += tx.changed_balance
+        } else if (typeof tx.satoshis_net_earned === 'number') {
+          revenueBTC += tx.satoshis_net_earned / BTC_SATS
+        }
+      }
+      daily[dayTs] = (daily[dayTs] || 0) + revenueBTC
+    }
+  }
+  return daily
+}
+
+function processDailyAvgPrices (results, start, end) {
+  const startDay = getStartOfDay(start)
+  const endDay = getStartOfDay(end)
+  const sums = {}
+  const counts = {}
+  for (const res of results) {
+    if (!res || res.error) continue
+    const data = Array.isArray(res) ? res : (res.data || res.result || [])
+    if (!Array.isArray(data)) continue
+    for (const entry of data) {
+      if (!entry) continue
+      const dayTs = getStartOfDay(normalizeTimestampMs(entry.ts || entry.timestamp || entry.time))
+      const price = entry.priceUSD ?? entry.price
+      if (!dayTs || dayTs < startDay || dayTs > endDay || typeof price !== 'number') continue
+      sums[dayTs] = (sums[dayTs] || 0) + price
+      counts[dayTs] = (counts[dayTs] || 0) + 1
+    }
+  }
+  const daily = {}
+  for (const [dayTs, sum] of Object.entries(sums)) {
+    daily[dayTs] = sum / counts[dayTs]
+  }
+  return daily
+}
+
+function sumCostsByMonth (costs, startMonthTs, endMonthTs) {
+  const byMonth = {}
+  if (!Array.isArray(costs)) return byMonth
+  for (const entry of costs) {
+    if (!entry || !entry.site || !entry.year || !entry.month) continue
+    const monthTs = Date.UTC(Number(entry.year), Number(entry.month) - 1, 1)
+    if (monthTs < startMonthTs || monthTs > endMonthTs) continue
+    const totalCost = (Number(entry.energyCost) || 0) +
+      (Number(entry.operationalCost) || 0) +
+      (Number(entry.energyCostsUSD) || 0)
+    if (totalCost > 0) {
+      byMonth[monthTs] = (byMonth[monthTs] || 0) + totalCost
+    }
+  }
+  return byMonth
+}
+
 async function getProductionCosts (ctx, start, end) {
   if (!ctx.globalDataLib) return []
   const costs = await ctx.globalDataLib.getGlobalData({
@@ -1385,6 +1590,12 @@ module.exports = {
   calculateHourlyRevenueSummary,
   getRevenueSummary,
   getHashRevenue,
+  getPowerCost,
+  getStartOfMonthUtc,
+  processDailyAvgPower,
+  processDailyRevenueBtc,
+  processDailyAvgPrices,
+  sumCostsByMonth,
   getProductionCosts,
   getCostParameters,
   resolveLcoeUsdPerMwh,

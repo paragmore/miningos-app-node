@@ -25,6 +25,10 @@ const {
   getRevenueSummary,
   calculateDetailedRevenueSummary,
   getHashRevenue,
+  getPowerCost,
+  getStartOfMonthUtc,
+  processDailyRevenueBtc,
+  processDailyAvgPrices,
   processHashrateData,
   processNetworkHashrateData,
   calculateHashRevenueSummary
@@ -1520,5 +1524,167 @@ test('getEbitda - accepts the weekly period', async (t) => {
 
   t.ok(Array.isArray(result.log), 'returns a log')
   t.is(result.log.length, 1, 'both days collapse into one weekly bucket')
+  t.pass()
+})
+
+// ==================== Power Cost Tests ====================
+
+const JAN_1 = 1767225600000
+const JAN_10 = 1768003200000
+const JAN_11 = 1768089600000
+const JAN_31 = 1769817600000
+const DAY_MS = 86400000
+
+function createPowerCostCtx ({ power = [], transactions = [], prices = [], costs = [] } = {}) {
+  return withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (method === 'tailLogCustomRangeAggr') {
+          return [{ type: 'powermeter', data: power, error: null }]
+        }
+        if (method === 'getWrkExtData') {
+          if (payload.query && payload.query.key === 'transactions') return transactions
+          if (payload.query && payload.query.key === 'HISTORICAL_PRICES') return prices
+        }
+        return []
+      }
+    },
+    globalDataLib: {
+      getGlobalData: async () => costs
+    }
+  })
+}
+
+test('getPowerCost - rolls daily data into monthly per-MWh points', async (t) => {
+  const mockCtx = createPowerCostCtx({
+    power: [
+      { ts: JAN_10, val: { site_power_w: 48000000, aggrIntervals: 24 } },
+      { ts: JAN_11, val: { site_power_w: 48000000, aggrIntervals: 24 } }
+    ],
+    transactions: [
+      { ts: JAN_10, transactions: [{ changed_balance: 0.5 }] },
+      { ts: JAN_11, transactions: [{ changed_balance: 0.25 }] }
+    ],
+    prices: [
+      { ts: JAN_10, priceUSD: 100000 },
+      { ts: JAN_11, priceUSD: 100000 }
+    ],
+    costs: [
+      { site: 's1', year: 2026, month: 1, energyCost: 40000, operationalCost: 8000 }
+    ]
+  })
+
+  const result = await getPowerCost(mockCtx, { query: { start: JAN_1, end: JAN_31 } })
+  t.is(result.log.length, 1, 'should return one month')
+  const jan = result.log[0]
+  t.is(jan.ts, JAN_1, 'month bucket should be the UTC month start')
+  // avg 2 MW over 2 days -> 2 * 24 * 2 = 96 MWh; revenue 0.75 BTC * 100k = 75000 USD
+  t.is(jan.revenueUSD, 75000 / 96, 'revenue should be USD per MWh')
+  t.is(jan.hashCostUSD, 48000 / 96, 'cost should be production costs per MWh')
+  t.pass()
+})
+
+test('getPowerCost - averages multiple same-day power entries', async (t) => {
+  const mockCtx = createPowerCostCtx({
+    power: [
+      { ts: JAN_10, val: { site_power_w: 48000000, aggrIntervals: 24 } },
+      { ts: JAN_10, val: { site_power_w: 96000000, aggrIntervals: 24 } }
+    ],
+    costs: [
+      { site: 's1', year: 2026, month: 1, energyCost: 7200, operationalCost: 0 }
+    ]
+  })
+
+  const result = await getPowerCost(mockCtx, { query: { start: JAN_1, end: JAN_31 } })
+  // day avg = mean(2 MW, 4 MW) = 3 MW -> 72 MWh for the single day
+  t.is(result.log[0].hashCostUSD, 7200 / 72, 'daily entries should be averaged, not summed')
+  t.pass()
+})
+
+test('getPowerCost - skips revenue on days without a BTC price', async (t) => {
+  const mockCtx = createPowerCostCtx({
+    power: [{ ts: JAN_10, val: { site_power_w: 24000000, aggrIntervals: 24 } }],
+    transactions: [
+      { ts: JAN_10, transactions: [{ changed_balance: 1 }] },
+      { ts: JAN_11, transactions: [{ changed_balance: 5 }] }
+    ],
+    prices: [{ ts: JAN_10, priceUSD: 100000 }]
+  })
+
+  const result = await getPowerCost(mockCtx, { query: { start: JAN_1, end: JAN_31 } })
+  // only Jan 10 revenue counts: 1 BTC * 100k over 24 MWh
+  t.is(result.log[0].revenueUSD, 100000 / 24, 'priceless days should not contribute revenue')
+  t.pass()
+})
+
+test('getPowerCost - sums costs across sites and drops months outside the range', async (t) => {
+  const mockCtx = createPowerCostCtx({
+    power: [{ ts: JAN_10, val: { site_power_w: 24000000, aggrIntervals: 24 } }],
+    costs: [
+      { site: 's1', year: 2026, month: 1, energyCost: 1000, operationalCost: 200 },
+      { site: 's2', year: 2026, month: 1, energyCost: 800, operationalCost: 400 },
+      { site: 's1', year: 2026, month: 3, energyCost: 9999, operationalCost: 0 },
+      { year: 2026, month: 1, energyCost: 500, operationalCost: 0 }
+    ]
+  })
+
+  const result = await getPowerCost(mockCtx, { query: { start: JAN_1, end: JAN_31 } })
+  t.is(result.log.length, 1, 'out-of-range months should be dropped')
+  t.is(result.log[0].hashCostUSD, 2400 / 24, 'should sum costs across sites and skip site-less rows')
+  t.pass()
+})
+
+test('getPowerCost - empty results', async (t) => {
+  const mockCtx = createPowerCostCtx()
+  const result = await getPowerCost(mockCtx, { query: { start: JAN_1, end: JAN_31 } })
+  t.alike(result.log, [], 'should return empty log')
+  t.pass()
+})
+
+test('getPowerCost - missing start throws', async (t) => {
+  const mockCtx = createPowerCostCtx()
+  try {
+    await getPowerCost(mockCtx, { query: { end: JAN_31 } })
+    t.fail('should have thrown')
+  } catch (err) {
+    t.is(err.message, 'ERR_MISSING_START_END', 'should throw missing start/end error')
+  }
+  t.pass()
+})
+
+test('processDailyRevenueBtc - prefers changed_balance and falls back to satoshis', (t) => {
+  const daily = processDailyRevenueBtc([
+    [
+      {
+        ts: JAN_10,
+        transactions: [
+          { changed_balance: 0.5, satoshis_net_earned: 999 },
+          { satoshis_net_earned: 50000000 },
+          { note: 'no amounts' }
+        ]
+      }
+    ]
+  ], JAN_1, JAN_31)
+  t.is(daily[JAN_10], 1, 'should sum 0.5 BTC + 0.5 BTC')
+  t.pass()
+})
+
+test('processDailyAvgPrices - averages price points within a day', (t) => {
+  const daily = processDailyAvgPrices([
+    [
+      { ts: JAN_10, priceUSD: 90000 },
+      { ts: JAN_10 + 3600000, priceUSD: 110000 },
+      { ts: JAN_31 + DAY_MS, priceUSD: 500 }
+    ]
+  ], JAN_1, JAN_31)
+  t.is(daily[JAN_10], 100000, 'should average intra-day prices')
+  t.absent(daily[JAN_31 + DAY_MS], 'should drop out-of-range days')
+  t.pass()
+})
+
+test('getStartOfMonthUtc - buckets to UTC month start', (t) => {
+  t.is(getStartOfMonthUtc(JAN_10), JAN_1)
+  t.is(getStartOfMonthUtc(JAN_1), JAN_1)
   t.pass()
 })

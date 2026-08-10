@@ -72,6 +72,15 @@ const schemas = {
         overwriteCache: { type: 'boolean' }
       },
       required: ['start', 'end']
+    },
+    powerCost: {
+      type: 'object',
+      properties: {
+        start: { type: 'integer', minimum: 0 },
+        end: { type: 'integer', minimum: 0 },
+        overwriteCache: { type: 'boolean' }
+      },
+      required: ['start', 'end']
     }
   }
 }
