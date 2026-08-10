@@ -19,6 +19,7 @@ const schemas = {
       properties: {
         filter: { type: 'string' },
         sort: { type: 'string' },
+        search: { type: 'string' },
         offset: { type: 'integer', minimum: 0 },
         limit: { type: 'integer', minimum: 1, maximum: 100 },
         overwriteCache: { type: 'boolean' }

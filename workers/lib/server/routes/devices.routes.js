@@ -48,6 +48,7 @@ module.exports = (ctx) => {
           'cabinets',
           req.query.filter,
           req.query.sort,
+          req.query.search,
           req.query.offset,
           req.query.limit
         ],

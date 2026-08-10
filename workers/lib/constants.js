@@ -322,6 +322,7 @@ const RPC_METHODS = {
 const WORKER_TYPES = {
   MINER: 'miner',
   CONTAINER: 'container',
+  CABINET: 'cabinet',
   POWERMETER: 'powermeter',
   MINERPOOL: 'minerpool',
   MEMPOOL: 'mempool',
@@ -441,11 +442,40 @@ const WORKER_TAGS = {
   MINER: 't-miner',
   CONTAINER: 't-container',
   POWERMETER: 't-powermeter',
+  SENSOR: 't-sensor',
   TEMP_SENSOR: 't-sensor-temp'
 }
 
 const DEVICE_LIST_FIELDS = {
   id: 1, type: 1, code: 1, ip: 1, tags: 1, info: 1, rack: 1
+}
+
+const CONTAINER_LIST_FIELDS = {
+  ...DEVICE_LIST_FIELDS,
+  comments: 1,
+  containerId: 1,
+  'opts.address': 1,
+  'last.err': 1,
+  'last.alerts': 1,
+  'last.snap.stats.status': 1,
+  'last.snap.stats.power_w': 1,
+  'last.snap.stats.ambient_temp_c': 1,
+  'last.snap.stats.humidity_percent': 1,
+  'last.snap.stats.alarm_status': 1,
+  'last.snap.stats.temperature_c': 1,
+  'last.snap.stats.uptime_ms': 1
+}
+
+const CABINET_DEVICE_FIELDS = {
+  id: 1,
+  type: 1,
+  code: 1,
+  tags: 1,
+  rack: 1,
+  info: 1,
+  comments: 1,
+  'last.alerts': 1,
+  'last.snap.stats': 1
 }
 
 // Cooling system field projections by type/view
@@ -974,6 +1004,8 @@ module.exports = {
   MINER_TYPE_REGEX,
   HISTORY_ALERTS_QUERY_MAP,
   DEVICE_LIST_FIELDS,
+  CONTAINER_LIST_FIELDS,
+  CABINET_DEVICE_FIELDS,
   MINER_FIELD_MAP,
   MINER_PROJECTION_MAP,
   MINER_SEARCH_FIELDS,
