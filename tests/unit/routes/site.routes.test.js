@@ -15,6 +15,7 @@ test('site routes - route definitions', (t) => {
   const routeUrls = routes.map(route => route.url)
   t.ok(routeUrls.includes('/auth/site/status/live'), 'should have site status live route')
   t.ok(routeUrls.includes('/auth/site/overview/groups'), 'should have site overview groups route')
+  t.ok(routeUrls.includes('/auth/site/overview/units'), 'should have site overview units route')
   t.ok(routeUrls.includes('/auth/site/efficiency'), 'should have site efficiency route')
 
   t.pass()

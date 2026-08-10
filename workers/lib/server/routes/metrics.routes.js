@@ -11,6 +11,8 @@ const {
   getMinerStatus,
   getMinersByContainer,
   getInventorySummary,
+  getMinersByType,
+  getInventoryMinerDistribution,
   getPowerMode,
   getPowerModeTimeline,
   getTemperature,
@@ -145,6 +147,32 @@ module.exports = (ctx) => {
         () => ['metrics/inventory/summary'],
         ENDPOINTS.METRICS_INVENTORY_SUMMARY,
         getInventorySummary
+      )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.METRICS_MINERS_BY_TYPE,
+      schema: {
+        querystring: schemas.query.minersByType
+      },
+      ...createCachedAuthRoute(
+        ctx,
+        () => ['metrics/miners/by-type'],
+        ENDPOINTS.METRICS_MINERS_BY_TYPE,
+        getMinersByType
+      )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.METRICS_INVENTORY_MINER_DISTRIBUTION,
+      schema: {
+        querystring: schemas.query.inventoryMinerDistribution
+      },
+      ...createCachedAuthRoute(
+        ctx,
+        () => ['metrics/inventory/miner-distribution'],
+        ENDPOINTS.METRICS_INVENTORY_MINER_DISTRIBUTION,
+        getInventoryMinerDistribution
       )
     },
     {

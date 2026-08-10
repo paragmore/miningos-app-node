@@ -1,7 +1,7 @@
 'use strict'
 
 const test = require('brittle')
-const { getSiteLiveStatus, getSiteOverviewGroupsStats, getSiteEfficiency } = require('../../../workers/lib/server/handlers/site.handlers')
+const { getSiteLiveStatus, getSiteOverviewGroupsStats, getSiteOverviewUnits, getSiteEfficiency } = require('../../../workers/lib/server/handlers/site.handlers')
 const { withDataProxy } = require('../helpers/mockHelpers')
 
 function createMockCtx (tailLogMultiResponse, extDataResponse, globalConfigResponse, listThingsResponse = [], featureConfig = {}) {
@@ -1128,5 +1128,111 @@ test('getSiteEfficiency - handles efficiency per meter correctly', async (t) => 
   t.is(meter.feeds, 'Groups 1-2', 'feeds should match')
   t.is(meter.efficiency.value, 20, 'efficiency should be 20 W/TH')
   t.is(meter.miners, 160, 'miners should be 2 groups * 4 racks * 20 miners = 160')
+  t.pass()
+})
+
+// ==================== Site Overview Units Tests ====================
+
+function createUnitsCtx ({ containers = [], byContainerEntry = null, poolStats = [] } = {}) {
+  return withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (method === 'listThings' && payload.fields && payload.fields['last.snap.stats.status']) {
+          return containers
+        }
+        if (method === 'listThings') {
+          return poolStats
+        }
+        if (method === 'tailLogMulti') {
+          return byContainerEntry ? [[byContainerEntry]] : [[]]
+        }
+        return []
+      }
+    }
+  })
+}
+
+test('getSiteOverviewUnits - merges containers with miner counts, hashrate and pool stats', async (t) => {
+  const mockCtx = createUnitsCtx({
+    containers: [
+      {
+        id: 'thing-c1',
+        type: 'antbox-hydro',
+        info: { container: 'c1', nominalMinerCapacity: 100, poolConfig: 'pool-a' },
+        last: { snap: { stats: { status: 'running', power_w: 500000 } } }
+      },
+      {
+        id: 'thing-c2',
+        type: 'bitdeer-d40',
+        info: { container: 'c2', nominalMinerCapacity: 50 },
+        last: { snap: { stats: { status: 'stopped' } } }
+      }
+    ],
+    byContainerEntry: {
+      hashrate_mhs_5m_container_group_sum_aggr: { c1: 9000 },
+      hashrate_mhs_5m_active_container_group_cnt: { c1: 80 },
+      offline_cnt: { c1: 5 },
+      error_cnt: { c1: 3 },
+      not_mining_cnt: { c1: 2 },
+      power_mode_sleep_cnt: { c1: 0 },
+      power_mode_low_cnt: { c1: 10 },
+      power_mode_normal_cnt: { c1: 70 },
+      power_mode_high_cnt: { c1: 0 }
+    }
+  })
+
+  const result = await getSiteOverviewUnits(mockCtx, { query: {} })
+  t.is(result.units.length, 2, 'should return every container')
+
+  const c1 = result.units[0]
+  t.is(c1.info.container, 'c1', 'should sort by container name')
+  t.is(c1.status, 'mining', 'running containers report mining')
+  t.is(c1.containerStatus, 'running', 'raw status preserved')
+  t.is(c1.powerW, 500000)
+  t.is(c1.miners.connected, 90, 'connected = sum of by-container counts')
+  t.is(c1.miners.disconnected, 10, 'disconnected = capacity minus connected')
+  t.is(c1.miners.actualMiners, 90)
+  t.is(c1.miners.online, 80)
+  t.is(c1.hashrateMhs, 9000)
+
+  const c2 = result.units[1]
+  t.is(c2.status, 'offline', 'non-running containers report offline')
+  t.is(c2.miners.connected, 0, 'containers without stats have zero miners')
+  t.is(c2.miners.disconnected, 50)
+  t.is(c2.hashrateMhs, 0)
+  t.pass()
+})
+
+test('getSiteOverviewUnits - clamps over-filled containers', async (t) => {
+  const mockCtx = createUnitsCtx({
+    containers: [{
+      id: 'thing-c1',
+      type: 'antbox',
+      info: { container: 'c1', nominalMinerCapacity: 10 },
+      last: { snap: { stats: { status: 'running' } } }
+    }],
+    byContainerEntry: {
+      offline_cnt: { c1: 0 },
+      error_cnt: { c1: 0 },
+      not_mining_cnt: { c1: 0 },
+      power_mode_sleep_cnt: { c1: 0 },
+      power_mode_low_cnt: { c1: 0 },
+      power_mode_normal_cnt: { c1: 15 },
+      power_mode_high_cnt: { c1: 0 }
+    }
+  })
+
+  const result = await getSiteOverviewUnits(mockCtx, { query: {} })
+  const unit = result.units[0]
+  t.is(unit.miners.disconnected, 0, 'disconnected clamps at zero')
+  t.is(unit.miners.actualMiners, 10, 'actual miners cap at capacity')
+  t.pass()
+})
+
+test('getSiteOverviewUnits - empty site', async (t) => {
+  const mockCtx = createUnitsCtx()
+  const result = await getSiteOverviewUnits(mockCtx, { query: {} })
+  t.alike(result.units, [], 'should return empty units')
   t.pass()
 })

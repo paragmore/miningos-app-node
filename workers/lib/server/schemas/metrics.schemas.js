@@ -70,6 +70,18 @@ const schemas = {
         overwriteCache: { type: 'boolean' }
       }
     },
+    minersByType: {
+      type: 'object',
+      properties: {
+        overwriteCache: { type: 'boolean' }
+      }
+    },
+    inventoryMinerDistribution: {
+      type: 'object',
+      properties: {
+        overwriteCache: { type: 'boolean' }
+      }
+    },
     revenueHourly: {
       type: 'object',
       properties: {
