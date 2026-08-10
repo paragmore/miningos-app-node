@@ -22,6 +22,7 @@ test('finance routes - route definitions', (t) => {
   t.ok(routeUrls.includes('/auth/finance/revenue'), 'should have revenue route')
   t.ok(routeUrls.includes('/auth/finance/revenue-summary'), 'should have revenue-summary route')
   t.ok(routeUrls.includes('/auth/finance/hash-revenue'), 'should have hash-revenue route')
+  t.ok(routeUrls.includes('/auth/finance/power-cost'), 'should have power-cost route')
 
   t.pass()
 })

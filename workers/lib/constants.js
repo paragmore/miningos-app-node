@@ -153,6 +153,7 @@ const ENDPOINTS = {
   FINANCE_REVENUE: '/auth/finance/revenue',
   FINANCE_REVENUE_SUMMARY: '/auth/finance/revenue-summary',
   FINANCE_HASH_REVENUE: '/auth/finance/hash-revenue',
+  FINANCE_POWER_COST: '/auth/finance/power-cost',
 
   // Pools endpoints
   POOLS: '/auth/pools',
