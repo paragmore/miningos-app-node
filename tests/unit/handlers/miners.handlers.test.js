@@ -27,10 +27,11 @@ function createMockMiner (overrides = {}) {
     info: {
       container: 'bitdeer-4b',
       pos: 'R3-S12',
+      subnet: '10.172.137.0/24',
       serialNum: 'SN12345',
       macAddress: 'AA:BB:CC:DD:EE:FF'
     },
-    opts: { address: '192.168.1.101' },
+    address: '192.168.1.101',
     last: {
       snap: {
         model: 'S19XP',
@@ -39,7 +40,8 @@ function createMockMiner (overrides = {}) {
           hashrate_mhs: 140000000,
           power_w: 3010,
           temperature_c: 72,
-          efficiency_w_ths: 21.5
+          efficiency_w_ths: 21.5,
+          uptime_ms: 1209600000
         },
         config: {
           power_mode: 'normal',
@@ -49,7 +51,6 @@ function createMockMiner (overrides = {}) {
         }
       },
       alerts: { critical: 0, high: 0, medium: 1 },
-      uptime: 1209600000,
       ts: 1709266500000
     },
     comments: [],
@@ -84,6 +85,7 @@ test('formatMiner - transforms raw miner to clean format', (t) => {
   t.is(result.model, 'S19XP')
   t.is(result.code, 'A101')
   t.is(result.ip, '192.168.1.101')
+  t.is(result.subnet, '10.172.137.0/24')
   t.is(result.container, 'bitdeer-4b')
   t.is(result.rack, 'rack-0')
   t.is(result.position, 'R3-S12')
@@ -96,6 +98,7 @@ test('formatMiner - transforms raw miner to clean format', (t) => {
   t.is(result.powerMode, 'normal')
   t.is(result.ledStatus, 'normal')
   t.is(result.serialNum, 'SN12345')
+  t.is(result.uptime, 1209600000)
   t.is(result.lastSeen, 1709266500000)
   t.pass()
 })
@@ -301,7 +304,7 @@ test('listMiners - builds search query', async (t) => {
   const lastCondition = dataCall.payload.query.$and[dataCall.payload.query.$and.length - 1]
   t.ok(lastCondition.$or)
   t.ok(lastCondition.$or.some(c => c.id?.$regex === '192\\.168'))
-  t.ok(lastCondition.$or.some(c => c['opts.address']?.$regex === '192\\.168'))
+  t.ok(lastCondition.$or.some(c => c.address?.$regex === '192\\.168'))
   t.pass()
 })
 
@@ -345,7 +348,7 @@ test('listMiners - throws on invalid sort JSON', async (t) => {
 test('MINER_FIELD_MAP - has expected field mappings', (t) => {
   t.is(MINER_FIELD_MAP.status, 'last.snap.stats.status')
   t.is(MINER_FIELD_MAP.hashrate, 'last.snap.stats.hashrate_mhs')
-  t.is(MINER_FIELD_MAP.ip, 'opts.address')
+  t.is(MINER_FIELD_MAP.ip, 'address')
   t.is(MINER_FIELD_MAP.container, 'info.container')
   t.is(MINER_FIELD_MAP.model, 'last.snap.model')
   t.pass()
@@ -452,7 +455,7 @@ test('buildOrkProjection - maps clean names to internal paths', (t) => {
   t.is(result.id, 1, 'always includes id')
   t.is(result.code, 1, 'always includes code')
   t.is(result['last.snap.config.firmware_ver'], 1, 'maps firmware')
-  t.is(result['opts.address'], 1, 'maps ip')
+  t.is(result.address, 1, 'maps ip')
   t.is(result['last.snap.stats.hashrate_mhs'], undefined, 'does not include unrequested fields')
   t.pass()
 })
@@ -484,7 +487,7 @@ test('buildOrkProjection - passes through unknown field names as-is', (t) => {
 
 test('MINER_PROJECTION_MAP - covers all response fields', (t) => {
   const expectedFields = [
-    'id', 'type', 'model', 'code', 'ip', 'container', 'rack', 'position',
+    'id', 'type', 'model', 'code', 'ip', 'subnet', 'container', 'rack', 'position',
     'status', 'hashrate', 'power', 'temperature', 'efficiency', 'uptime',
     'firmware', 'powerMode', 'ledStatus', 'poolConfig', 'alerts',
     'comments', 'serialNum', 'macAddress', 'lastSeen'
@@ -547,7 +550,7 @@ test('listMiners - maps user fields to ork projection and filters response', asy
   // Check ork projection was mapped correctly
   const dataCall = capturedCalls.find(c => c.method === 'listThings')
   t.is(dataCall.payload.fields['last.snap.config.firmware_ver'], 1, 'maps firmware to ork path')
-  t.is(dataCall.payload.fields['opts.address'], 1, 'maps ip to ork path')
+  t.is(dataCall.payload.fields.address, 1, 'maps ip to ork path')
   t.is(dataCall.payload.fields.id, 1, 'always includes id')
   t.is(dataCall.payload.fields.code, 1, 'always includes code')
 

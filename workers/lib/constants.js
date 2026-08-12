@@ -864,7 +864,8 @@ const MINER_FIELD_MAP = {
   powerMode: 'last.snap.config.power_mode',
   firmware: 'last.snap.config.firmware_ver',
   model: 'last.snap.model',
-  ip: 'opts.address',
+  ip: 'address',
+  subnet: 'info.subnet',
   container: 'info.container',
   rack: 'rack',
   serialNum: 'info.serialNum',
@@ -884,7 +885,8 @@ const MINER_PROJECTION_MAP = {
   type: ['type'],
   model: ['last.snap.model', 'type'],
   code: ['code'],
-  ip: ['opts.address'],
+  ip: ['address', 'last.snap.config.network_config.ip_address'],
+  subnet: ['info.subnet'],
   container: ['info.container'],
   rack: ['rack'],
   position: ['info.pos'],
@@ -893,7 +895,7 @@ const MINER_PROJECTION_MAP = {
   power: ['last.snap.stats.power_w'],
   temperature: ['last.snap.stats.temperature_c'],
   efficiency: ['last.snap.stats.efficiency_w_ths'],
-  uptime: ['last.uptime'],
+  uptime: ['last.snap.stats.uptime_ms'],
   firmware: ['last.snap.config.firmware_ver'],
   powerMode: ['last.snap.config.power_mode'],
   ledStatus: ['last.snap.config.led_status'],
@@ -908,7 +910,7 @@ const MINER_PROJECTION_MAP = {
 
 const MINER_SEARCH_FIELDS = [
   'id',
-  'opts.address',
+  'address',
   'info.serialNum',
   'info.macAddress',
   'info.container',
@@ -928,9 +930,8 @@ const MINER_DEFAULT_FIELDS = {
   'last.snap.stats': 1,
   'last.snap.config': 1,
   'last.snap.model': 1,
-  'last.uptime': 1,
   'last.ts': 1,
-  'opts.address': 1,
+  address: 1,
   ts: 1
 }
 
