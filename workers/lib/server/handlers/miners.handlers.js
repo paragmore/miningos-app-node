@@ -73,6 +73,7 @@ function formatMiner (raw, poolWorkers, requestedFields) {
   if (include('powerMode')) miner.powerMode = config.power_mode
   if (include('ledStatus')) miner.ledStatus = config.led_status
   if (include('poolConfig')) miner.poolConfig = config.pool_config
+  if (include('poolConfigId')) miner.poolConfigId = raw.info?.poolConfig
   if (include('alerts')) miner.alerts = raw.last?.alerts
   if (include('comments')) miner.comments = raw.comments
   if (include('serialNum')) miner.serialNum = raw.info?.serialNum

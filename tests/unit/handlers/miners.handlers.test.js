@@ -144,6 +144,35 @@ test('formatMiner - no poolHashrate when no match', (t) => {
   t.pass()
 })
 
+test('formatMiner - exposes reported pool endpoints and assigned pool config separately', (t) => {
+  const raw = createMockMiner({
+    info: { container: 'bitdeer-4b', poolConfig: 'pool-config-1' }
+  })
+  const result = formatMiner(raw, null)
+
+  t.alike(result.poolConfig, { url: 'stratum+tcp://pool.example.com', worker: 'worker1' })
+  t.is(result.poolConfigId, 'pool-config-1')
+  t.pass()
+})
+
+test('formatMiner - poolConfigId is undefined when no pool config assigned', (t) => {
+  const result = formatMiner(createMockMiner(), null)
+
+  t.is(result.poolConfigId, undefined)
+  t.pass()
+})
+
+test('formatMiner - honours requested fields for poolConfigId', (t) => {
+  const raw = createMockMiner({
+    info: { container: 'bitdeer-4b', poolConfig: 'pool-config-1' }
+  })
+  const result = formatMiner(raw, null, new Set(['id', 'poolConfigId']))
+
+  t.is(result.poolConfigId, 'pool-config-1')
+  t.is(result.poolConfig, undefined)
+  t.pass()
+})
+
 // --- extractPoolWorkers ---
 
 test('extractPoolWorkers - builds worker lookup', (t) => {

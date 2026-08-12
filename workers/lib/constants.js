@@ -872,7 +872,11 @@ const MINER_FIELD_MAP = {
   pool: 'last.snap.config.pool_config.url',
   led: 'last.snap.config.led_status',
   alerts: 'last.alerts',
-  poolConfig: 'info.poolConfig'
+  // `poolConfig` in a response is the miner-reported endpoint list
+  // (`last.snap.config.pool_config`); the assigned pool config lives on
+  // `info.poolConfig` and is exposed as `poolConfigId`.
+  poolConfig: 'info.poolConfig',
+  poolConfigId: 'info.poolConfig'
 }
 
 const MINER_PROJECTION_MAP = {
@@ -894,6 +898,7 @@ const MINER_PROJECTION_MAP = {
   powerMode: ['last.snap.config.power_mode'],
   ledStatus: ['last.snap.config.led_status'],
   poolConfig: ['last.snap.config.pool_config'],
+  poolConfigId: ['info.poolConfig'],
   alerts: ['last.alerts'],
   comments: ['comments'],
   serialNum: ['info.serialNum'],
