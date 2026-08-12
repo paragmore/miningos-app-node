@@ -59,7 +59,8 @@ function formatMiner (raw, poolWorkers, requestedFields) {
   if (include('type')) miner.type = raw.type
   if (include('model')) miner.model = snap.model || raw.type
   if (include('code')) miner.code = raw.code
-  if (include('ip')) miner.ip = raw.opts?.address
+  if (include('ip')) miner.ip = raw.address || config.network_config?.ip_address
+  if (include('subnet')) miner.subnet = raw.info?.subnet
   if (include('container')) miner.container = raw.info?.container
   if (include('rack')) miner.rack = raw.rack
   if (include('position')) miner.position = raw.info?.pos
@@ -68,7 +69,7 @@ function formatMiner (raw, poolWorkers, requestedFields) {
   if (include('power')) miner.power = stats.power_w || 0
   if (include('temperature')) miner.temperature = stats.temperature_c
   if (include('efficiency')) miner.efficiency = stats.efficiency_w_ths || 0
-  if (include('uptime')) miner.uptime = raw.last?.uptime
+  if (include('uptime')) miner.uptime = stats.uptime_ms
   if (include('firmware')) miner.firmware = config.firmware_ver
   if (include('powerMode')) miner.powerMode = config.power_mode
   if (include('ledStatus')) miner.ledStatus = config.led_status
