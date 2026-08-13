@@ -26,7 +26,8 @@ const {
   extractDcsThing,
   fetchDcsThing,
   extractSiteMainMeterPowerW,
-  extractMinerCoolingStatus
+  extractMinerCoolingStatus,
+  extractMinerSocketCapacity
 } = require('../../dcs.utils')
 const {
   sumTransformerPowerW,
@@ -123,7 +124,8 @@ async function getSiteLiveStatus (ctx, req) {
     dcsEnabled
       ? { powerW: extractSiteMainMeterPowerW(dcsThing), alert: '' }
       : consumption,
-    dcsEnabled ? extractMinerCoolingStatus(dcsThing) : null
+    dcsEnabled ? extractMinerCoolingStatus(dcsThing) : null,
+    dcsEnabled ? extractMinerSocketCapacity(dcsThing) : null
   )
 }
 

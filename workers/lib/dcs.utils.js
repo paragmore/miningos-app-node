@@ -36,6 +36,12 @@ function extractMinerCoolingStatus (dcsThing) {
   return dcsThing?.last?.snap?.stats?.dcs_specific?.cooling_system?.status || 'Unavailable'
 }
 
+function extractMinerSocketCapacity (dcsThing) {
+  const mining = dcsThing?.last?.snap?.config?.mining
+  const capacity = (mining?.total_groups || 0) * (mining?.racks_per_group || 0) * (mining?.miners_per_rack || 0)
+  return capacity || null
+}
+
 function getSensorReading (sensors, sensorId, defaultConfig = null) {
   if (!sensorId) return defaultConfig
   const sensor = sensors?.find(s => s.equipment === sensorId)
@@ -84,6 +90,7 @@ module.exports = {
   extractDcsThing,
   extractSiteMainMeterPowerW,
   extractMinerCoolingStatus,
+  extractMinerSocketCapacity,
   getSensorReading,
   sensorReading,
   findEquipment,

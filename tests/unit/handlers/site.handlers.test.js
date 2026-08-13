@@ -457,6 +457,81 @@ test('getSiteLiveStatus - no cooling status outside central DCS setups', async (
   t.pass()
 })
 
+function createDcsThingWithMiningConfig (mining) {
+  return [
+    {
+      id: 'dcs-1',
+      type: 'dcs-central',
+      tags: ['t-dcs'],
+      last: { snap: { config: { mining }, stats: { dcs_specific: {} } } }
+    }
+  ]
+}
+
+test('getSiteLiveStatus - central DCS derives container capacity from the mining config', async (t) => {
+  const tailLogMultiResponse = [[{ hashrate_mhs_1m_cnt_aggr: 1277 }], [{}], [{}]]
+
+  const listThingsResponse = createDcsThingWithMiningConfig({
+    total_groups: 16,
+    racks_per_group: 4,
+    miners_per_rack: 20
+  })
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, listThingsResponse, { centralDCSSetup: { enabled: true, tag: 't-dcs' } })
+
+  const result = await getSiteLiveStatus(ctx, { query: {} })
+
+  t.is(result.miners.containerCapacity, 1280, 'capacity should be groups x racks x miners per rack')
+  t.is(result.miners.total, 1277, 'miner total should stay on the existing counting rules')
+  t.pass()
+})
+
+test('getSiteLiveStatus - central DCS capacity is null when the mining config is incomplete', async (t) => {
+  const tailLogMultiResponse = [[{}], [{}], []]
+
+  const listThingsResponse = createDcsThingWithMiningConfig({ total_groups: 16 })
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, listThingsResponse, { centralDCSSetup: { enabled: true, tag: 't-dcs' } })
+
+  const result = await getSiteLiveStatus(ctx, { query: {} })
+
+  t.is(result.miners.containerCapacity, null, 'a partial mining config should not produce a capacity')
+  t.pass()
+})
+
+test('getSiteLiveStatus - central DCS capacity is null when the DCS thing is missing', async (t) => {
+  const tailLogMultiResponse = [[{}], [{}], []]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {}, [], { centralDCSSetup: { enabled: true, tag: 't-dcs' } })
+
+  const result = await getSiteLiveStatus(ctx, { query: {} })
+
+  t.is(result.miners.containerCapacity, null, 'no DCS thing should map to unknown capacity, not 0')
+  t.pass()
+})
+
+test('getSiteLiveStatus - container capacity is null when no container thing reports one', async (t) => {
+  const tailLogMultiResponse = [[{ hashrate_mhs_1m_cnt_aggr: 100 }], [{}], []]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {})
+
+  const result = await getSiteLiveStatus(ctx, { query: {} })
+
+  t.is(result.miners.containerCapacity, null, 'missing capacity data should not be presented as 0')
+  t.pass()
+})
+
+test('getSiteLiveStatus - container capacity of 0 is kept when containers report it', async (t) => {
+  const tailLogMultiResponse = [[{}], [{}], [{ container_nominal_miner_capacity_sum_aggr: 0 }]]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {})
+
+  const result = await getSiteLiveStatus(ctx, { query: {} })
+
+  t.is(result.miners.containerCapacity, 0, 'a reported zero is real data and should pass through')
+  t.pass()
+})
+
 test('getSiteLiveStatus - central DCS takes precedence over other consumption branches', async (t) => {
   const tailLogMultiResponse = [[{}], [{}], [{}]]
 

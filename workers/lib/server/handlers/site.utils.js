@@ -53,12 +53,12 @@ function aggregateAlertStats (tailLogResults) {
 
 // tailLogMulti key index 2 = container
 function aggregateContainerCapacity (tailLogResults) {
-  let capacity = 0
+  let capacity = null
 
   for (const orkResult of tailLogResults) {
     const entry = extractKeyEntry(orkResult, 2)
     if (!entry) continue
-    capacity += entry.container_nominal_miner_capacity_sum_aggr || 0
+    capacity = (capacity || 0) + (entry.container_nominal_miner_capacity_sum_aggr || 0)
   }
 
   return capacity
@@ -165,11 +165,12 @@ function composeSiteStatus (
   poolDataResults,
   globalConfigResults,
   consumption,
-  minerCoolingStatus = null
+  minerCoolingStatus = null,
+  dcsMinerCapacity = null
 ) {
   const minerStats = aggregateMinerStats(tailLogResults)
   const alertStats = aggregateAlertStats(tailLogResults)
-  const containerCapacity = aggregateContainerCapacity(tailLogResults)
+  const containerCapacity = dcsMinerCapacity ?? aggregateContainerCapacity(tailLogResults)
   const poolStats = aggregatePoolStats(poolDataResults)
   const globalConfig = extractGlobalConfig(globalConfigResults)
 
