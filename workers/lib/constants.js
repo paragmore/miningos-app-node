@@ -898,6 +898,7 @@ const MINER_PROJECTION_MAP = {
   uptime: ['last.snap.stats.uptime_ms'],
   firmware: ['last.snap.config.firmware_ver'],
   powerMode: ['last.snap.config.power_mode'],
+  powerPct: ['last.snap.stats.miner_specific.power_pct'],
   ledStatus: ['last.snap.config.led_status'],
   poolConfig: ['last.snap.config.pool_config'],
   poolConfigId: ['info.poolConfig'],

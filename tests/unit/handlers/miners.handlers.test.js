@@ -41,7 +41,8 @@ function createMockMiner (overrides = {}) {
           power_w: 3010,
           temperature_c: 72,
           efficiency_w_ths: 21.5,
-          uptime_ms: 1209600000
+          uptime_ms: 1209600000,
+          miner_specific: { power_pct: 120 }
         },
         config: {
           power_mode: 'normal',
@@ -96,6 +97,7 @@ test('formatMiner - transforms raw miner to clean format', (t) => {
   t.is(result.efficiency, 21.5)
   t.is(result.firmware, '2024.01.15')
   t.is(result.powerMode, 'normal')
+  t.is(result.powerPct, 120)
   t.is(result.ledStatus, 'normal')
   t.is(result.serialNum, 'SN12345')
   t.is(result.uptime, 1209600000)
@@ -113,6 +115,7 @@ test('formatMiner - handles missing nested fields', (t) => {
   t.is(result.efficiency, 0)
   t.is(result.status, undefined)
   t.is(result.ip, undefined)
+  t.is(result.powerPct, undefined)
   t.pass()
 })
 

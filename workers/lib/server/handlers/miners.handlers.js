@@ -72,6 +72,7 @@ function formatMiner (raw, poolWorkers, requestedFields) {
   if (include('uptime')) miner.uptime = stats.uptime_ms
   if (include('firmware')) miner.firmware = config.firmware_ver
   if (include('powerMode')) miner.powerMode = config.power_mode
+  if (include('powerPct')) miner.powerPct = stats.miner_specific?.power_pct
   if (include('ledStatus')) miner.ledStatus = config.led_status
   if (include('poolConfig')) miner.poolConfig = config.pool_config
   if (include('poolConfigId')) miner.poolConfigId = raw.info?.poolConfig
