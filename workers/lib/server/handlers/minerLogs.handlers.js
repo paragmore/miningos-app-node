@@ -93,9 +93,11 @@ async function startMinerLogDownload (ctx, req, reply) {
  *   failed   — action completed but the miner returned an error
  *   expired  — log was ready but the Hypercore TTL has passed
  */
+// The ork action record has no `voter` field — the submitter is the first
+// (initiating) vote in `votesPos` (see svc-facs-action-approver pushAction)
 function assertJobOwner (action, req) {
   const email = req._info?.user?.metadata?.email
-  return !!(email && action.voter && action.voter === email)
+  return !!(email && action.votesPos?.[0] === email)
 }
 
 async function getMinerLogDownloadStatus (ctx, req, reply) {
