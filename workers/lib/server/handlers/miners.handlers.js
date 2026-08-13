@@ -68,6 +68,7 @@ function formatMiner (raw, poolWorkers, requestedFields) {
   if (include('hashrate')) miner.hashrate = stats.hashrate_mhs || 0
   if (include('power')) miner.power = stats.power_w || 0
   if (include('temperature')) miner.temperature = stats.temperature_c
+  if (include('frequency')) miner.frequency = stats.frequency_mhz
   if (include('efficiency')) miner.efficiency = stats.efficiency_w_ths || 0
   if (include('uptime')) miner.uptime = stats.uptime_ms
   if (include('firmware')) miner.firmware = config.firmware_ver
