@@ -24,6 +24,8 @@ test('metrics routes - route definitions', (t) => {
   t.ok(routeUrls.includes('/auth/metrics/temperature'), 'should have temperature route')
   t.ok(routeUrls.includes('/auth/metrics/containers/:id'), 'should have container telemetry route')
   t.ok(routeUrls.includes('/auth/metrics/containers/:id/history'), 'should have container history route')
+  t.ok(routeUrls.includes('/auth/metrics/miners/by-type'), 'should have miners by-type route')
+  t.ok(routeUrls.includes('/auth/metrics/inventory/miner-distribution'), 'should have miner distribution route')
 
   t.pass()
 })

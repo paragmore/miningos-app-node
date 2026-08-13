@@ -178,6 +178,8 @@ const ENDPOINTS = {
   METRICS_EFFICIENCY: '/auth/metrics/efficiency',
   METRICS_MINER_STATUS: '/auth/metrics/miner-status',
   METRICS_MINERS_BY_CONTAINER: '/auth/metrics/miners/by-container',
+  METRICS_MINERS_BY_TYPE: '/auth/metrics/miners/by-type',
+  METRICS_INVENTORY_MINER_DISTRIBUTION: '/auth/metrics/inventory/miner-distribution',
   METRICS_SITE_SUMMARY: '/auth/metrics/site/summary',
   METRICS_INVENTORY_SUMMARY: '/auth/metrics/inventory/summary',
   METRICS_REVENUE_HOURLY: '/auth/metrics/revenue/hourly',
@@ -204,6 +206,7 @@ const ENDPOINTS = {
   ENERGY_SYSTEM: '/auth/dcs/energy-system',
   // Site Overview endpoints
   SITE_OVERVIEW_GROUPS: '/auth/site/overview/groups',
+  SITE_OVERVIEW_UNITS: '/auth/site/overview/units',
   // Site Efficiency endpoint
   SITE_EFFICIENCY: '/auth/site/efficiency',
   // Explorer endpoints
@@ -728,6 +731,9 @@ const AGGR_FIELDS = {
   POWER_MODE_LOW_CNT: 'power_mode_low_cnt',
   POWER_MODE_NORMAL_CNT: 'power_mode_normal_cnt',
   POWER_MODE_HIGH_CNT: 'power_mode_high_cnt',
+  POWER_MODE_LOW_TYPE_CNT: 'power_mode_low_type_cnt',
+  POWER_MODE_NORMAL_TYPE_CNT: 'power_mode_normal_type_cnt',
+  POWER_MODE_HIGH_TYPE_CNT: 'power_mode_high_type_cnt',
   ERROR_CNT: 'error_cnt',
   NOT_MINING_CNT: 'not_mining_cnt',
   ACTIVE_CONTAINER_CNT: 'hashrate_mhs_5m_active_container_group_cnt',

@@ -18,7 +18,8 @@ const {
 } = require('../../constants')
 const {
   getStartOfDay,
-  safeDiv
+  safeDiv,
+  flattenRpcResults
 } = require('../../utils')
 const {
   isCentralDCSEnabled,
@@ -949,6 +950,178 @@ function processInventorySummary (results) {
   return { miners, spareParts }
 }
 
+const MINERS_BY_TYPE_AGGR_FIELDS = {
+  [AGGR_FIELDS.TYPE_CNT]: 1,
+  [AGGR_FIELDS.POWER_W_TYPE_GROUP_SUM]: 1,
+  [AGGR_FIELDS.OFFLINE_TYPE_CNT]: 1,
+  [AGGR_FIELDS.ERROR_TYPE_CNT]: 1,
+  [AGGR_FIELDS.MAINTENANCE_CNT]: 1,
+  [AGGR_FIELDS.SLEEP_TYPE_CNT]: 1,
+  [AGGR_FIELDS.POWER_MODE_LOW_TYPE_CNT]: 1,
+  [AGGR_FIELDS.POWER_MODE_NORMAL_TYPE_CNT]: 1,
+  [AGGR_FIELDS.POWER_MODE_HIGH_TYPE_CNT]: 1
+}
+
+async function getMinersByType (ctx, req) {
+  const results = await ctx.dataProxy.requestDataMap(RPC_METHODS.TAIL_LOG_MULTI, {
+    keys: [{ key: LOG_KEYS.STAT_5M, type: WORKER_TYPES.MINER, tag: WORKER_TAGS.MINER }],
+    limit: 1,
+    start: Date.now() - SITE_STATUS_LIVE_WINDOW_MS,
+    aggrFields: MINERS_BY_TYPE_AGGR_FIELDS
+  })
+
+  return processMinersByType(results)
+}
+
+function processMinersByType (results) {
+  const f = {
+    count: {},
+    powerW: {},
+    offline: {},
+    error: {},
+    maintenance: {},
+    sleep: {},
+    low: {},
+    normal: {},
+    high: {}
+  }
+
+  for (const orkResult of results) {
+    const entry = extractKeyEntry(orkResult, 0)
+    if (!entry) continue
+    mergeGroupedField(f.count, entry[AGGR_FIELDS.TYPE_CNT])
+    mergeGroupedField(f.powerW, entry[AGGR_FIELDS.POWER_W_TYPE_GROUP_SUM])
+    mergeGroupedField(f.offline, entry[AGGR_FIELDS.OFFLINE_TYPE_CNT])
+    mergeGroupedField(f.error, entry[AGGR_FIELDS.ERROR_TYPE_CNT])
+    mergeGroupedField(f.maintenance, entry[AGGR_FIELDS.MAINTENANCE_CNT])
+    mergeGroupedField(f.sleep, entry[AGGR_FIELDS.SLEEP_TYPE_CNT])
+    mergeGroupedField(f.low, entry[AGGR_FIELDS.POWER_MODE_LOW_TYPE_CNT])
+    mergeGroupedField(f.normal, entry[AGGR_FIELDS.POWER_MODE_NORMAL_TYPE_CNT])
+    mergeGroupedField(f.high, entry[AGGR_FIELDS.POWER_MODE_HIGH_TYPE_CNT])
+  }
+
+  const minerTypes = new Set()
+  for (const field of Object.values(f)) {
+    for (const type of Object.keys(field)) minerTypes.add(type)
+  }
+
+  const types = {}
+  for (const type of minerTypes) {
+    types[type] = {
+      count: f.count[type] || 0,
+      powerW: f.powerW[type] || 0,
+      offline: f.offline[type] || 0,
+      error: f.error[type] || 0,
+      maintenance: f.maintenance[type] || 0,
+      powerModes: {
+        sleep: f.sleep[type] || 0,
+        low: f.low[type] || 0,
+        normal: f.normal[type] || 0,
+        high: f.high[type] || 0
+      }
+    }
+  }
+
+  return { types }
+}
+
+const CONTAINER_MINER_TAG_REGEX = /container_miner-[^_]+_(.+)/
+
+function computeInstalledCapacity (containers, byContainer) {
+  const capacity = {}
+  for (const container of containers) {
+    const tags = Array.isArray(container?.tags) ? container.tags : []
+    const minerTag = tags.find(tag => typeof tag === 'string' && tag.startsWith('container_miner'))
+    const match = minerTag && minerTag.match(CONTAINER_MINER_TAG_REGEX)
+    if (!match) continue
+
+    const minerType = `miner-${match[1]}`
+    const total = Number(container.info?.nominalMinerCapacity) || 0
+    const entry = byContainer?.[container.info?.container]
+    const connected = entry ? entry.minerCount : 0
+    const available = Math.max(0, total - connected)
+
+    if (!capacity[minerType]) capacity[minerType] = { total: 0, available: 0 }
+    capacity[minerType].total += total
+    capacity[minerType].available += available
+  }
+  return capacity
+}
+
+async function getInventoryMinerDistribution (ctx, req) {
+  const site = ctx.conf?.site
+  const minersQuery = site
+    ? { $and: [{ 'info.site': { $eq: site } }, { tags: { $in: [WORKER_TAGS.MINER] } }] }
+    : { tags: { $in: [WORKER_TAGS.MINER] } }
+
+  const [minerResults, containerResults, byContainer] = await Promise.all([
+    ctx.dataProxy.requestDataAllPages(RPC_METHODS.LIST_THINGS, {
+      query: minersQuery,
+      fields: { id: 1, type: 1 },
+      status: 1
+    }),
+    ctx.dataProxy.requestDataAllPages(RPC_METHODS.LIST_THINGS, {
+      query: { tags: { $in: [WORKER_TAGS.CONTAINER] } },
+      fields: { id: 1, tags: 1, 'info.container': 1, 'info.nominalMinerCapacity': 1 },
+      status: 1
+    }),
+    getMinersByContainer(ctx, req)
+  ])
+
+  const miners = flattenRpcResults(minerResults)
+  const countByType = {}
+  for (const miner of miners) {
+    if (miner?.type) countByType[miner.type] = (countByType[miner.type] || 0) + 1
+  }
+  const minerTypes = Object.keys(countByType).sort()
+
+  const locationResults = minerTypes.length
+    ? await ctx.dataProxy.requestDataMap(RPC_METHODS.TAIL_LOG_MULTI, {
+      keys: minerTypes.map(type => ({
+        key: LOG_KEYS.STAT_5M,
+        type: WORKER_TYPES.MINER,
+        tag: `t-${type}`
+      })),
+      limit: 1,
+      start: Date.now() - SITE_STATUS_LIVE_WINDOW_MS,
+      aggrFields: { [AGGR_FIELDS.MINER_INVENTORY_LOCATION]: 1 }
+    })
+    : []
+
+  const locationsByType = {}
+  for (const orkResult of locationResults) {
+    minerTypes.forEach((type, keyIndex) => {
+      const entry = extractKeyEntry(orkResult, keyIndex)
+      if (!entry) return
+      if (!locationsByType[type]) locationsByType[type] = {}
+      mergeGroupedField(locationsByType[type], entry[AGGR_FIELDS.MINER_INVENTORY_LOCATION])
+    })
+  }
+
+  const capacityByType = computeInstalledCapacity(flattenRpcResults(containerResults), byContainer.containers)
+
+  const rows = minerTypes.map(type => {
+    const locations = {}
+    let knownSum = 0
+    for (const [location, count] of Object.entries(locationsByType[type] || {})) {
+      if (location === 'unknown') continue
+      locations[location] = count
+      knownSum += count
+    }
+    locations.unknown = Math.max(0, countByType[type] - knownSum)
+
+    return {
+      type,
+      count: countByType[type],
+      totalPositions: capacityByType[type] ? capacityByType[type].total : null,
+      freePositions: capacityByType[type] ? capacityByType[type].available : null,
+      locations
+    }
+  })
+
+  return { rows, totalMiners: miners.length }
+}
+
 async function getPowerMode (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
@@ -1548,6 +1721,10 @@ module.exports = {
   processMinersByContainer,
   getInventorySummary,
   processInventorySummary,
+  getMinersByType,
+  processMinersByType,
+  getInventoryMinerDistribution,
+  computeInstalledCapacity,
   getPowerMode,
   processPowerModeData,
   calculatePowerModeSummary,

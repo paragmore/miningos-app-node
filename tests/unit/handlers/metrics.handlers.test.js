@@ -37,7 +37,11 @@ const {
   processContainerMiners,
   processContainerSensorSnapshot,
   getContainerHistory,
-  processContainerHistoryData
+  processContainerHistoryData,
+  getMinersByType,
+  processMinersByType,
+  getInventoryMinerDistribution,
+  computeInstalledCapacity
 } = require('../../../workers/lib/server/handlers/metrics.handlers')
 const { withDataProxy } = require('../helpers/mockHelpers')
 
@@ -3604,5 +3608,159 @@ test('calculateHashrateSummary - stays backwards compatible without the flag', (
 
   t.alike(calculateHashrateSummary(log), { avgHashrateMhs: 200 }, 'no nominal keys are emitted')
   t.alike(calculateHashrateSummary([]), { avgHashrateMhs: null }, 'empty log unchanged')
+  t.pass()
+})
+
+// ==================== Miners By Type Tests ====================
+
+test('getMinersByType - rolls up per-type counts, power and modes', async (t) => {
+  let payload = null
+  const orkResult = [
+    [{
+      type_cnt: { 'miner-am-s19xp': 100, 'miner-wm-m53s': 50 },
+      power_w_type_group_sum_aggr: { 'miner-am-s19xp': 300000, 'miner-wm-m53s': 170000 },
+      offline_type_cnt: { 'miner-am-s19xp': 5 },
+      error_type_cnt: { 'miner-wm-m53s': 2 },
+      maintenance_type_cnt: { 'miner-am-s19xp': 1 },
+      power_mode_sleep_type_cnt: { 'miner-am-s19xp': 4 },
+      power_mode_low_type_cnt: { 'miner-wm-m53s': 8 },
+      power_mode_normal_type_cnt: { 'miner-am-s19xp': 90, 'miner-wm-m53s': 40 },
+      power_mode_high_type_cnt: {}
+    }]
+  ]
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: { jRequest: async (key, method, p) => { payload = p; return orkResult } }
+  })
+
+  const result = await getMinersByType(mockCtx, { query: {} })
+  t.is(payload.keys.length, 1, 'should query one tail-log key')
+  t.is(payload.keys[0].key, 'stat-5m', 'should read the 5m snapshot')
+  t.ok(payload.aggrFields.type_cnt, 'should restrict the row to aggr fields')
+
+  const s19 = result.types['miner-am-s19xp']
+  t.is(s19.count, 100)
+  t.is(s19.powerW, 300000)
+  t.is(s19.offline, 5)
+  t.is(s19.maintenance, 1)
+  t.alike(s19.powerModes, { sleep: 4, low: 0, normal: 90, high: 0 })
+
+  const m53 = result.types['miner-wm-m53s']
+  t.is(m53.error, 2)
+  t.alike(m53.powerModes, { sleep: 0, low: 8, normal: 40, high: 0 })
+  t.pass()
+})
+
+test('getMinersByType - sums counts across orks', (t) => {
+  const result = processMinersByType([
+    [[{ type_cnt: { 'miner-am-s21': 10 }, power_w_type_group_sum_aggr: { 'miner-am-s21': 1000 } }]],
+    [[{ type_cnt: { 'miner-am-s21': 5 }, power_w_type_group_sum_aggr: { 'miner-am-s21': 700 } }]]
+  ])
+  t.is(result.types['miner-am-s21'].count, 15, 'should sum type counts')
+  t.is(result.types['miner-am-s21'].powerW, 1700, 'should sum power')
+  t.pass()
+})
+
+test('getMinersByType - empty results', (t) => {
+  t.alike(processMinersByType([]), { types: {} })
+  t.pass()
+})
+
+// ==================== Inventory Miner Distribution Tests ====================
+
+test('computeInstalledCapacity - parses container miner tags and subtracts connected miners', (t) => {
+  const containers = [
+    {
+      tags: ['t-container', 'container_miner-mbt-kehua_wm-m53s'],
+      info: { container: 'c1', nominalMinerCapacity: 100 }
+    },
+    {
+      tags: ['container_miner-as-immersion_am-s19xp'],
+      info: { container: 'c2', nominalMinerCapacity: 200 }
+    },
+    { tags: ['t-container'], info: { container: 'c3', nominalMinerCapacity: 50 } }
+  ]
+  const byContainer = {
+    c1: { minerCount: 90 },
+    c2: { minerCount: 250 }
+  }
+
+  const capacity = computeInstalledCapacity(containers, byContainer)
+  t.alike(capacity['miner-wm-m53s'], { total: 100, available: 10 }, 'available = capacity - connected')
+  t.alike(capacity['miner-am-s19xp'], { total: 200, available: 0 }, 'over-filled containers clamp to 0')
+  t.is(Object.keys(capacity).length, 2, 'containers without a miner tag are skipped')
+  t.pass()
+})
+
+test('getInventoryMinerDistribution - builds per-type rows with locations and capacity', async (t) => {
+  const calls = []
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }], site: 'site-a' },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        calls.push({ method, payload })
+        if (method === 'listThings' && payload.query.$and) {
+          return [
+            { id: 'm1', type: 'miner-am-s19xp' },
+            { id: 'm2', type: 'miner-am-s19xp' },
+            { id: 'm3', type: 'miner-wm-m53s' }
+          ]
+        }
+        if (method === 'listThings') {
+          return [{
+            id: 'c1',
+            tags: ['container_miner-as-immersion_am-s19xp'],
+            info: { container: 'c1', nominalMinerCapacity: 3 }
+          }]
+        }
+        if (method === 'tailLogMulti' && payload.aggrFields.miner_inventory_location_group_cnt_aggr) {
+          return [
+            [{ miner_inventory_location_group_cnt_aggr: { 'miner.room': 1, 'site.warehouse': 0 } }],
+            [{ miner_inventory_location_group_cnt_aggr: { 'site.warehouse': 1 } }]
+          ]
+        }
+        if (method === 'tailLogMulti') return [[{}]]
+        return []
+      }
+    }
+  })
+
+  const result = await getInventoryMinerDistribution(mockCtx, { query: {} })
+  t.is(result.totalMiners, 3, 'should count all site miners')
+
+  const minerListCall = calls.find(c => c.method === 'listThings' && c.payload.query.$and)
+  t.alike(
+    minerListCall.payload.query.$and[0],
+    { 'info.site': { $eq: 'site-a' } },
+    'should scope miners to the configured site'
+  )
+
+  const locationCall = calls.find(c => c.method === 'tailLogMulti' && c.payload.aggrFields.miner_inventory_location_group_cnt_aggr)
+  t.alike(
+    locationCall.payload.keys.map(k => k.tag),
+    ['t-miner-am-s19xp', 't-miner-wm-m53s'],
+    'should query one tail-log key per discovered type'
+  )
+
+  const s19Row = result.rows.find(r => r.type === 'miner-am-s19xp')
+  t.is(s19Row.count, 2)
+  t.is(s19Row.locations['miner.room'], 1, 'should report aggregated locations')
+  t.is(s19Row.locations.unknown, 1, 'unknown = count minus located miners')
+  t.is(s19Row.totalPositions, 3, 'capacity from container miner tag')
+
+  const m53Row = result.rows.find(r => r.type === 'miner-wm-m53s')
+  t.is(m53Row.locations.unknown, 0, 'located miners leave no unknowns')
+  t.is(m53Row.totalPositions, null, 'types without containers have no capacity')
+  t.pass()
+})
+
+test('getInventoryMinerDistribution - empty fleet', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: { jRequest: async () => [] }
+  })
+
+  const result = await getInventoryMinerDistribution(mockCtx, { query: {} })
+  t.alike(result, { rows: [], totalMiners: 0 })
   t.pass()
 })
