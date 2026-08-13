@@ -142,9 +142,11 @@ async function cancelActionsBatch (ctx, req) {
   })
 }
 
+// The ork action record has no `voter` field — the submitter is the first
+// (initiating) vote in `votesPos` (see svc-facs-action-approver pushAction)
 function assertLogDownloadOwner (action, req) {
   const email = req._info?.user?.metadata?.email
-  if (!email || !action.voter || action.voter !== email) {
+  if (!email || action.votesPos?.[0] !== email) {
     return false
   }
   return true

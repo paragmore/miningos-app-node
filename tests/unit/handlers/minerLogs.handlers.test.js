@@ -61,9 +61,11 @@ function makeMockCtx ({ write = true, permissions = ['admin'], requestDataResult
   }
 }
 
+// Mirrors the real ork `getAction` record: the submitter is votesPos[0]
+// (svc-facs-action-approver pushAction) — there is no `voter` field.
 function makeActionResult (overrides = {}) {
   return {
-    voter: 'ops@example.com',
+    votesPos: ['ops@example.com'],
     targets: {
       'rack-001': {
         calls: [
@@ -224,7 +226,7 @@ test('getMinerLogDownloadStatus - returns ready with metadata when log is availa
 
 test('getMinerLogDownloadStatus - returns failed when no coreKey in targets', async (t) => {
   const action = {
-    voter: 'ops@example.com',
+    votesPos: ['ops@example.com'],
     targets: {
       'rack-001': {
         calls: [
@@ -250,7 +252,7 @@ test('getMinerLogDownloadStatus - returns failed when no coreKey in targets', as
 
 test('getMinerLogDownloadStatus - returns failed with generic error when no error_msg', async (t) => {
   const action = {
-    voter: 'ops@example.com',
+    votesPos: ['ops@example.com'],
     targets: {
       'rack-001': {
         calls: [{ result: { success: false } }]
@@ -318,7 +320,7 @@ test('getMinerLogDownloadStatus - failed status carries the worker error code an
 
   for (const errMsg of workerErrors) {
     const action = {
-      voter: 'ops@example.com',
+      votesPos: ['ops@example.com'],
       targets: {
         'rack-001': { calls: [{ result: { success: false, error_msg: errMsg } }] }
       }
@@ -341,11 +343,11 @@ test('getMinerLogDownloadStatus - failed status carries the worker error code an
   t.pass()
 })
 
-test('getMinerLogDownloadStatus - returns 403 when voter does not match caller', async (t) => {
+test('getMinerLogDownloadStatus - returns 403 when the submitter does not match caller', async (t) => {
   const ctx = {
     authLib: { getTokenPerms: async () => ({}) },
     dataProxy: {
-      requestData: async () => [makeActionResult({ voter: 'other@example.com' })]
+      requestData: async () => [makeActionResult({ votesPos: ['other@example.com'] })]
     }
   }
   const req = makeMockReq('miner-001', '42')
@@ -355,6 +357,24 @@ test('getMinerLogDownloadStatus - returns 403 when voter does not match caller',
 
   t.is(reply.statusCode, 403, 'should return 403')
   t.is(reply.body.error, 'ERR_AUTH_FAIL_NO_PERMS')
+  t.pass()
+})
+
+test('getMinerLogDownloadStatus - only the initiating vote counts as owner', async (t) => {
+  const ctx = {
+    authLib: { getTokenPerms: async () => ({}) },
+    dataProxy: {
+      requestData: async () => [
+        makeActionResult({ votesPos: ['other@example.com', 'ops@example.com'] })
+      ]
+    }
+  }
+  const req = makeMockReq('miner-001', '42')
+  const reply = makeMockReply()
+
+  await getMinerLogDownloadStatus(ctx, req, reply)
+
+  t.is(reply.statusCode, 403, 'a co-approver is not the job owner')
   t.pass()
 })
 
@@ -439,7 +459,7 @@ test('getMinerLogFile - returns 503 when the log peer is unreachable', async (t)
 test('getMinerLogDownloadStatus - finds successful result across multiple racks', async (t) => {
   const expiresAt = Date.now() + 3600000
   const action = {
-    voter: 'ops@example.com',
+    votesPos: ['ops@example.com'],
     targets: {
       'rack-001': {
         calls: [{ result: { success: false, error_msg: 'offline' } }]
