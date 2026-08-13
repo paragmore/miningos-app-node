@@ -894,6 +894,7 @@ const MINER_PROJECTION_MAP = {
   hashrate: ['last.snap.stats.hashrate_mhs'],
   power: ['last.snap.stats.power_w'],
   temperature: ['last.snap.stats.temperature_c'],
+  frequency: ['last.snap.stats.frequency_mhz'],
   efficiency: ['last.snap.stats.efficiency_w_ths'],
   uptime: ['last.snap.stats.uptime_ms'],
   firmware: ['last.snap.config.firmware_ver'],
