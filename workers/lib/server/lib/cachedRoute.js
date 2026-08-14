@@ -9,7 +9,10 @@ function dequeueRequests (requests, key, data, err = null) {
 }
 
 async function cachedRoute (ctx, ckeyParts, apiPath, func, overwriteCache = false) {
-  const lru = ctx[`lru_${ctx.conf.cacheTiming[apiPath] || '30s'}`]
+  // Fall back to the default bucket when the configured one does not exist
+  // (e.g. config referencing a bucket the running build does not ship yet),
+  // so a config/code deploy-order mismatch degrades to 30s caching, not 500s
+  const lru = ctx[`lru_${ctx.conf.cacheTiming[apiPath] || '30s'}`] || ctx.lru_30s
   if (!lru) throw new Error('INTERNAL_SERVER_ERROR')
 
   const ckey = ckeyParts.map(k => k ?? '-').join(':')
