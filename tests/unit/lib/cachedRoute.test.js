@@ -175,6 +175,31 @@ test('cachedRoute - missing LRU cache', async (t) => {
   t.pass()
 })
 
+test('cachedRoute - unknown timing bucket falls back to the default', async (t) => {
+  // A config can reference a bucket the running build does not ship yet
+  // (deploy-order mismatch) — serve from the default bucket instead of 500ing
+  const cachedValue = { data: 'cached' }
+  const mockCtx = {
+    conf: {
+      cacheTiming: {
+        '/test': '8s'
+      }
+    },
+    lru_30s: {
+      get: (key) => {
+        t.is(key, 'test-key', 'should use correct cache key')
+        return cachedValue
+      },
+      set: () => {}
+    },
+    queuedRequests: new Map()
+  }
+
+  const result = await cachedRoute(mockCtx, ['test-key'], '/test', async () => ({ data: 'new' }), false)
+  t.is(result.data, 'cached', 'should serve from the default bucket')
+  t.pass()
+})
+
 test('cachedRoute - null key parts', async (t) => {
   const mockCtx = {
     conf: {
