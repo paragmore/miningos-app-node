@@ -108,6 +108,47 @@ test('handlers: createWorkOrder Type 2 (move) surfaces a failed relocation push 
   )
 })
 
+test('handlers: createWorkOrder Type 2 (move) surfaces a rack error the ork recorded on the executed action', async (t) => {
+  const pushed = []
+  const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
+    if (method === 'pushAction') { pushed.push(params); return { id: 7, errors: [] } }
+    if (method === 'listThings') return [{ id: 'miner-1', type: 'miner-wm', rack: 'miner-rack-1', info: { location: 'site.warehouse' } }]
+    if (method === 'getActionsBatch') {
+      return [{ type: 'done', action: { targets: { 'miner-rack-1': { calls: [{ id: 'miner-1', error: '[HRPC_ERR]=ERR_SUBNET_NOT_FOUND' }] } } } }]
+    }
+    return null
+  })
+  ctx.authLib = mockAuthLib
+  ctx._workOrderRackId = RACK
+  await t.exception(
+    () => handlers.createWorkOrder(ctx, {
+      ...userMeta(),
+      body: { type: 2, deviceType: 'miner', deviceModel: 'M', deviceIdentifier: 'miner-1', info: { location: 'miner.room', pos: '1-4_1', container: 'group-1' } }
+    }),
+    /ERR_WO_DEVICE_UPDATE_FAILED.*ERR_SUBNET_NOT_FOUND/
+  )
+  t.absent(pushed.find(p => p.action === 'registerThing'), 'no work order is registered when the device move failed')
+})
+
+test('handlers: createWorkOrder Type 2 (move) registers the work order when the executed action carries no error', async (t) => {
+  const pushed = []
+  const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
+    if (method === 'pushAction') { pushed.push(params); return { id: 7, errors: [] } }
+    if (method === 'listThings') return [{ id: 'miner-1', type: 'miner-wm', rack: 'miner-rack-1', info: { location: 'site.warehouse' } }]
+    if (method === 'getActionsBatch') {
+      return [{ type: 'done', action: { targets: { 'miner-rack-1': { calls: [{ id: 'miner-1', result: 1 }] } } } }]
+    }
+    return null
+  })
+  ctx.authLib = mockAuthLib
+  ctx._workOrderRackId = RACK
+  await handlers.createWorkOrder(ctx, {
+    ...userMeta(),
+    body: { type: 2, deviceType: 'miner', deviceModel: 'M', deviceIdentifier: 'miner-1', info: { location: 'miner.room', pos: '1-4_1', container: 'group-1' } }
+  })
+  t.ok(pushed.find(p => p.action === 'registerThing'), 'work order is registered once the move applied')
+})
+
 test('handlers: createWorkOrdersBatch Type 2 (move) relocates every part', async (t) => {
   const pushed = []
   const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {

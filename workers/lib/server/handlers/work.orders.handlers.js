@@ -12,7 +12,7 @@ const {
   MAINTENANCE_CONTAINER
 } = require('../../constants')
 const { renderWorkOrderCsv, renderRmaCsv } = require('../lib/work.order.export')
-const { submitWorkOrderAction, getWorkOrderRackId, assertActionApplied } = require('../lib/work.orders')
+const { submitWorkOrderAction, getWorkOrderRackId, assertActionApplied, assertActionsExecuted } = require('../lib/work.orders')
 
 async function _resolvePartByIdentifier (ctx, identifier) {
   const results = await ctx.dataProxy.requestData('listThings', {
@@ -266,6 +266,8 @@ async function createWorkOrder (ctx, req) {
     }
   }
 
+  await assertActionsExecuted(ctx, req, 'ERR_WO_DEVICE_UPDATE_FAILED')
+
   return submitWorkOrderAction(ctx, req, 'registerThing', { id: woId, info })
 }
 
@@ -432,6 +434,8 @@ async function createWorkOrdersBatch (ctx, req) {
   }
 
   info.partsMoves = partsMoves
+
+  await assertActionsExecuted(ctx, req, 'ERR_WO_DEVICE_UPDATE_FAILED')
 
   return submitWorkOrderAction(ctx, req, 'registerThing', { id: woId, info })
 }
