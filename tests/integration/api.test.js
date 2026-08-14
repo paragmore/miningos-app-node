@@ -49,7 +49,7 @@ test('Api', { timeout: 90000 }, async (main) => {
     }
     if (!fs.existsSync(`./${baseDir}/db`)) fs.mkdirSync(`./${baseDir}/db`)
 
-    const commonConf = { dir_log: 'logs', debug: 0, orks: { 'cluster-1': { rpcPublicKey: '' } }, cacheTiming: {}, featureConfig: {} }
+    const commonConf = { dir_log: 'logs', debug: 0, orks: { 'cluster-1': { rpcPublicKey: '' } }, cacheTiming: { '/auth/list-things': '8s' }, featureConfig: {} }
     const netConf = { r0: {} }
     const httpdConf = { h0: {} }
     const httpdOauthConf = {
