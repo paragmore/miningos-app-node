@@ -1004,13 +1004,23 @@ test('handlers: listWorkOrders passes a JSON-encoded mingo query straight throug
   t.is(flow.lastList.query.type, 'inventory-work_order', 'type still pinned')
 })
 
-test('handlers: listWorkOrders ?q builds a regex $or against code and info.issue', async (t) => {
+test('handlers: listWorkOrders ?q builds a regex $or against code, info.issue, and operator emails', async (t) => {
   const flow = listFlow()
   await handlers.listWorkOrders(flow.ctx, { query: { q: 'IVI-2-0001' } })
   const or = flow.lastList.query.$or
-  t.is(or.length, 2)
+  t.is(or.length, 4)
   t.alike(or[0], { code: { $regex: 'IVI-2-0001' } })
   t.alike(or[1], { 'info.issue': { $regex: 'IVI-2-0001', $options: 'i' } })
+  t.alike(or[2], { 'info.createdBy': { $regex: 'IVI-2-0001', $options: 'i' } })
+  t.alike(or[3], { 'info.assignedTo': { $regex: 'IVI-2-0001', $options: 'i' } })
+})
+
+test('handlers: listWorkOrders ?q matches a full or partial operator email', async (t) => {
+  const flow = listFlow()
+  await handlers.listWorkOrders(flow.ctx, { query: { q: 'andrei' } })
+  const or = flow.lastList.query.$or
+  t.alike(or[2], { 'info.createdBy': { $regex: 'andrei', $options: 'i' } })
+  t.alike(or[3], { 'info.assignedTo': { $regex: 'andrei', $options: 'i' } })
 })
 
 test('handlers: listWorkOrders ?q escapes regex metacharacters', async (t) => {

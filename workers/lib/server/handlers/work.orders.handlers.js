@@ -489,7 +489,9 @@ function _buildWorkOrderQuery (qs) {
     const escaped = escapeRegex(qs.q)
     query.$or = [
       { code: { $regex: escaped } },
-      { 'info.issue': { $regex: escaped, $options: 'i' } }
+      { 'info.issue': { $regex: escaped, $options: 'i' } },
+      { 'info.createdBy': { $regex: escaped, $options: 'i' } },
+      { 'info.assignedTo': { $regex: escaped, $options: 'i' } }
     ]
   }
   return query
