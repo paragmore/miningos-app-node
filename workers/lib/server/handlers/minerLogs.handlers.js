@@ -38,10 +38,10 @@ function describeWorkerError (errorCode) {
 async function startMinerLogDownload (ctx, req, reply) {
   const { minerId } = req.params
 
-  const { write, permissions } = await ctx.authLib.getTokenPerms(req._info.authToken)
-  if (!write) {
-    return reply.code(403).send({ error: 'ERR_WRITE_PERM_REQUIRED' })
-  }
+  // No global-write check here: `getTokenPerms().write` is just `actions:w`, and
+  // requesting a log archive is a read. The route enforces `miner:r`, and the status
+  // and file legs additionally enforce submitter ownership via votesPos[0].
+  const { permissions } = await ctx.authLib.getTokenPerms(req._info.authToken)
 
   const payload = {
     query: { id: minerId },

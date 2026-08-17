@@ -108,15 +108,35 @@ test('startMinerLogDownload - returns 202 with jobId on success', async (t) => {
   t.pass()
 })
 
-test('startMinerLogDownload - returns 403 when token has no write permission', async (t) => {
-  const ctx = makeMockCtx({ write: false })
+test('startMinerLogDownload - accepts a read-only token', async (t) => {
+  // A log download is a read: `getTokenPerms().write` is just `actions:w`, so a
+  // read-only user must not be turned away here. The route enforces `miner:r`.
+  const ctx = makeMockCtx({
+    write: false,
+    permissions: ['miner:r'],
+    requestDataResult: { id: '12345' }
+  })
   const req = makeMockReq('miner-001')
   const reply = makeMockReply()
 
   await startMinerLogDownload(ctx, req, reply)
 
-  t.is(reply.statusCode, 403, 'should return 403 Forbidden')
-  t.is(reply.body.error, 'ERR_WRITE_PERM_REQUIRED', 'should return ERR_WRITE_PERM_REQUIRED')
+  t.is(reply.statusCode, 202, 'should return 202 Accepted for a read-only token')
+  t.is(reply.body.jobId, '12345', 'should include jobId')
+  t.pass()
+})
+
+test('startMinerLogDownload - forwards the caller permissions as authPerms', async (t) => {
+  let capturedPayload = null
+  const ctx = makeMockCtx({ write: false, permissions: ['miner:r'] })
+  ctx.dataProxy.requestData = async (method, payload) => {
+    capturedPayload = payload
+    return { id: '12345' }
+  }
+
+  await startMinerLogDownload(ctx, makeMockReq('miner-001'), makeMockReply())
+
+  t.alike(capturedPayload.authPerms, ['miner:r'], 'should forward the caller permissions')
   t.pass()
 })
 

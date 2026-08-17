@@ -37,6 +37,24 @@ function createAuthOnRequest (ctx, perms = null) {
 }
 
 /**
+ * Creates an authenticated route that is always checked at read level, whatever
+ * the HTTP method. For endpoints that use POST for transport reasons (kicking off
+ * an async job, passing a body) but do not mutate anything the caller owns —
+ * e.g. requesting a miner log archive.
+ * @param {Object} ctx - Context object
+ * @param {Array} perms - Optional permissions
+ * @returns {Function} onRequest handler
+ */
+function createReadAuthOnRequest (ctx, perms = null) {
+  return async (req, rep) => {
+    await authCheck(ctx, req, rep)
+    if (perms && !ctx.noAuth) {
+      await capCheck(ctx, req, rep, perms, false)
+    }
+  }
+}
+
+/**
  * Creates a cached route handler
  * @param {Object} ctx - Context object
  * @param {Array|Function} keyParts - Cache key parts or function to generate them
@@ -86,6 +104,7 @@ function createCachedAuthRoute (ctx, keyParts, endpoint, handler, perms = null) 
 module.exports = {
   createAuthHandler,
   createAuthOnRequest,
+  createReadAuthOnRequest,
   createCachedHandler,
   createAuthRoute,
   createCachedAuthRoute

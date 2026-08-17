@@ -6,7 +6,7 @@ const {
   getMinerLogDownloadStatus,
   getMinerLogFile
 } = require('../handlers/minerLogs.handlers')
-const { createAuthOnRequest } = require('../lib/routeHelpers')
+const { createAuthOnRequest, createReadAuthOnRequest } = require('../lib/routeHelpers')
 
 const MINER_PERMS = [AUTH_PERMISSIONS.MINER]
 
@@ -23,7 +23,9 @@ module.exports = (ctx) => [
         required: ['minerId']
       }
     },
-    onRequest: createAuthOnRequest(ctx, MINER_PERMS),
+    // POST is only the transport for kicking off the async job; fetching a log
+    // archive is a read, so check at read level to keep it open to read-only users.
+    onRequest: createReadAuthOnRequest(ctx, MINER_PERMS),
     handler: (req, reply) => startMinerLogDownload(ctx, req, reply)
   },
   {
