@@ -62,6 +62,26 @@ function buildCoolingAuxiliaryView (equipment, config) {
   }
 }
 
+/**
+ * Branch metering point, reduced to the fields the SLD needs.
+ *
+ * The branch breaker (`distribution_board`, e.g. `QGBT-01-CB`) carries switching
+ * state but no metering tags, so the layout falls back to this meter for the
+ * board's power/voltage/current readings. `total_energy` / `reactive_power` /
+ * `power_factor` are deliberately left out — the SLD has no row for them.
+ */
+function pickBranchMeter (meter) {
+  if (!meter) return null
+
+  return {
+    equipment: meter.equipment,
+    name: meter.name,
+    power: meter.power,
+    voltage: meter.voltage,
+    current: meter.current
+  }
+}
+
 function buildLayoutView (equipment, config, stats) {
   const powerMeters = equipment.power_meters || []
   const protectionRelays = equipment.protection_relays || []
@@ -88,7 +108,7 @@ function buildLayoutView (equipment, config, stats) {
       protection_relay: relay || null,
       transformer: transformer || null,
       distribution_board: board || null,
-      meter: meter ? { equipment: meter.equipment, power: meter.power } : null
+      meter: pickBranchMeter(meter)
     }
   })
 
