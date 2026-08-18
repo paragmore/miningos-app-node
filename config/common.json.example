@@ -54,5 +54,6 @@
   },
   "ttl": 300,
   "site": "SITE_NAME",
-  "rpcTimeout" : 15000
+  "rpcTimeout" : 15000,
+  "expectedActionLatencyMs": 6000
 }
