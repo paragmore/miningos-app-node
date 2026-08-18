@@ -5,7 +5,8 @@ const {
   mhsToPhs,
   mhsToThs,
   mergeGroupedField,
-  getGroupNumber
+  getGroupNumber,
+  rackKeysByGroupOrdinal
 } = require('../../metrics.utils')
 const {
   LOG_KEYS,
@@ -39,7 +40,7 @@ function aggregateRackStats (tailLogResults) {
     const entry = extractKeyEntry(orkResult, 0)
     if (!entry) continue
 
-    mergeGroupedField(stats.hashrateByRack, entry.hashrate_mhs_5m_pdu_rack_group_avg_aggr)
+    mergeGroupedField(stats.hashrateByRack, entry.hashrate_mhs_5m_pdu_rack_group_sum_aggr)
     mergeGroupedField(stats.powerByRack, entry.power_w_pdu_rack_group_sum_aggr)
     mergeGroupedField(stats.efficiencyByRack, entry.efficiency_w_ths_pdu_rack_group_avg_aggr, true)
   }
@@ -58,21 +59,24 @@ function buildRackList (miningConfig, rackStats) {
   const totalGroups = miningConfig?.total_groups || 0
   const racksPerGroup = miningConfig?.racks_per_group || 4
   const minersPerRack = miningConfig?.miners_per_rack || 20
+  const keysByGroup = rackKeysByGroupOrdinal(rackStats.hashrateByRack, rackStats.powerByRack, rackStats.efficiencyByRack)
   const racks = []
 
   for (let g = 1; g <= totalGroups; g++) {
     const groupId = `group-${g}`
     const groupName = `Group ${g}`
+    const keyByOrdinal = keysByGroup.get(groupId) || new Map()
 
     for (let r = 1; r <= racksPerGroup; r++) {
       const rackKey = `${groupId}_rack-${r}`
-      const hashrateMhs = rackStats.hashrateByRack[rackKey] || 0
-      const powerW = rackStats.powerByRack[rackKey] || 0
+      const statsKey = keyByOrdinal.get(r) || rackKey
+      const hashrateMhs = rackStats.hashrateByRack[statsKey] || 0
+      const powerW = rackStats.powerByRack[statsKey] || 0
       const powerKw = Math.round(powerW / 10) / 100
       const hashrateThs = mhsToThs(hashrateMhs)
       const efficiency = hashrateThs > 0
         ? Math.round((powerW / hashrateThs) * 10) / 10
-        : rackStats.efficiencyByRack[rackKey] || 0
+        : rackStats.efficiencyByRack[statsKey] || 0
 
       racks.push({
         id: rackKey,

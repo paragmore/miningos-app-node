@@ -36,12 +36,28 @@ const {
   getIntervalConfig,
   mergeGroupedField,
   extractKeyEntry,
-  mhsToThs
+  mhsToThs,
+  rackFilterFor
 } = require('../../metrics.utils')
 const { parseRacks } = require('../lib/queryUtils')
 
 function firstOrkEntries (res) {
   return Array.isArray(res?.[0]) ? res[0] : []
+}
+
+// `racks` without an explicit groupBy scopes the site-wide series to the selected racks,
+// collapsing the rack-grouped series back to a scalar so the response shape is unchanged.
+function rackGroupedReq (req) {
+  return { query: { ...req.query, groupBy: 'rack' } }
+}
+
+function hasRackFilter (req) {
+  return !req.query.groupBy && !!parseRacks(req)?.length
+}
+
+function avgObjectValues (obj) {
+  const values = Object.values(obj || {}).map(Number).filter(Boolean)
+  return safeDiv(values.reduce((sum, val) => sum + val, 0), values.length)
 }
 
 function readHashrate (val, container) {
@@ -69,6 +85,12 @@ async function getHashrate (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
   if (req.query.groupBy) return getGoupedHashrate(ctx, req)
+
+  if (hasRackFilter(req)) {
+    const { log } = await getGoupedHashrate(ctx, rackGroupedReq(req))
+    const scoped = log.map(({ ts, hashrateMhs }) => ({ ts, hashrateMhs: sumObjectValues(hashrateMhs) }))
+    return { log: scoped, summary: calculateHashrateSummary(scoped) }
+  }
 
   const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
   const container = req.query.container || null
@@ -142,13 +164,12 @@ async function getGoupedHashrate (ctx, req) {
     aggrFields: { [aggrField]: 1 }
   })
 
-  const racks = groupBy === 'rack' ? parseRacks(req) : null
-  const rackFilter = racks && racks.length ? new Set(racks) : null
+  const rackFilter = groupBy === 'rack' ? rackFilterFor(parseRacks(req)) : null
 
   const log = res[0].reduce((aggr, val) => {
     let hashrateMhs = val[aggrField]
     if (rackFilter && hashrateMhs && typeof hashrateMhs === 'object') {
-      hashrateMhs = Object.fromEntries(Object.entries(hashrateMhs).filter(([rack]) => rackFilter.has(rack)))
+      hashrateMhs = Object.fromEntries(Object.entries(hashrateMhs).filter(([rack]) => rackFilter(rack)))
     }
     aggr.push({ ts: parseEntryTs(val.ts), hashrateMhs })
     return aggr
@@ -222,6 +243,15 @@ async function getConsumption (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
   if (req.query.groupBy) return getGroupedConsumption(ctx, req)
+
+  if (hasRackFilter(req)) {
+    const { log } = await getGroupedConsumption(ctx, rackGroupedReq(req))
+    const scoped = log.map(({ ts, powerW }) => {
+      const scopedPowerW = sumObjectValues(powerW)
+      return { ts, powerW: scopedPowerW, consumptionMWh: (scopedPowerW * 24) / 1000000 }
+    })
+    return { log: scoped, summary: calculateConsumptionSummary(scoped) }
+  }
 
   // by_meter_power_w is a per-meter breakdown only produced by the DCS worker,
   // so it gets its own DCS-only flow.
@@ -408,13 +438,12 @@ async function getGroupedConsumption (ctx, req) {
     aggrFields: { [aggrField]: 1 }
   })
 
-  const racks = groupBy === 'rack' ? parseRacks(req) : null
-  const rackFilter = racks && racks.length ? new Set(racks) : null
+  const rackFilter = groupBy === 'rack' ? rackFilterFor(parseRacks(req)) : null
 
   const log = res[0].reduce((aggr, val) => {
     let powerW = val[aggrField]
     if (rackFilter && powerW && typeof powerW === 'object') {
-      powerW = Object.fromEntries(Object.entries(powerW).filter(([rack]) => rackFilter.has(rack)))
+      powerW = Object.fromEntries(Object.entries(powerW).filter(([rack]) => rackFilter(rack)))
     }
     aggr.push({
       ts: parseEntryTs(val.ts),
@@ -477,6 +506,12 @@ async function getEfficiency (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
   if (req.query.groupBy) return getGroupedEfficiency(ctx, req)
+
+  if (hasRackFilter(req)) {
+    const { log } = await getGroupedEfficiency(ctx, rackGroupedReq(req))
+    const scoped = log.map(({ ts, efficiencyWThs }) => ({ ts, efficiencyWThs: avgObjectValues(efficiencyWThs) }))
+    return { log: scoped, summary: calculateEfficiencySummary(scoped) }
+  }
 
   const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
 
@@ -597,13 +632,12 @@ async function getGroupedEfficiency (ctx, req) {
     aggrFields: { [aggrField]: 1 }
   })
 
-  const racks = groupBy === 'rack' ? parseRacks(req) : null
-  const rackFilter = racks && racks.length ? new Set(racks) : null
+  const rackFilter = groupBy === 'rack' ? rackFilterFor(parseRacks(req)) : null
 
   const log = firstOrkEntries(res).map((val) => {
     let efficiencyWThs = val[aggrField]
     if (rackFilter && efficiencyWThs && typeof efficiencyWThs === 'object') {
-      efficiencyWThs = Object.fromEntries(Object.entries(efficiencyWThs).filter(([rack]) => rackFilter.has(rack)))
+      efficiencyWThs = Object.fromEntries(Object.entries(efficiencyWThs).filter(([rack]) => rackFilter(rack)))
     }
     return { ts: parseEntryTs(val.ts), efficiencyWThs }
   })

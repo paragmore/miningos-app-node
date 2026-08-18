@@ -144,6 +144,49 @@ function getGroupNumber (groupName) {
   return match ? parseInt(match[1], 10) : null
 }
 
+// The '*_pdu_rack_group_*' aggregations are keyed by physical position ('group-1_1-1'), while
+// the rack grid is addressed by slot ('group-1_rack-1'). Both spellings reduce to group+ordinal.
+function rackSlotKey (rackId) {
+  const parsed = parseRackId(rackId)
+  if (!parsed) return null
+  const match = /(\d+)\s*$/.exec(parsed.rack)
+  return match ? `${parsed.group}#${parseInt(match[1], 10)}` : null
+}
+
+function rackKeysByGroupOrdinal (...rackMaps) {
+  const keysByGroup = new Map()
+
+  for (const rackMap of rackMaps) {
+    for (const rackKey of Object.keys(rackMap || {})) {
+      const parsed = parseRackId(rackKey)
+      if (!parsed) continue
+      if (!keysByGroup.has(parsed.group)) keysByGroup.set(parsed.group, new Set())
+      keysByGroup.get(parsed.group).add(rackKey)
+    }
+  }
+
+  const byGroupOrdinal = new Map()
+  for (const [groupId, rackKeys] of keysByGroup) {
+    const byOrdinal = new Map()
+    ;[...rackKeys]
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .forEach((rackKey, idx) => {
+        const slot = rackSlotKey(rackKey)
+        const ordinal = slot ? Number(slot.split('#')[1]) : idx + 1
+        if (!byOrdinal.has(ordinal)) byOrdinal.set(ordinal, rackKey)
+      })
+    byGroupOrdinal.set(groupId, byOrdinal)
+  }
+
+  return byGroupOrdinal
+}
+
+function rackFilterFor (racks) {
+  if (!racks?.length) return null
+  const slots = new Set(racks.map(rackSlotKey).filter(Boolean))
+  return (rackId) => slots.has(rackSlotKey(rackId))
+}
+
 function mergeGroupedField (target, source, isAverage = false) {
   if (!source || typeof source !== 'object') return
 
@@ -227,6 +270,9 @@ module.exports = {
   mhsToThs,
   parseRackId,
   getGroupNumber,
+  rackSlotKey,
+  rackKeysByGroupOrdinal,
+  rackFilterFor,
   mergeGroupedField,
   getMeterGroupMapping,
   buildGroupPowerFromDCS

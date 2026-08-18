@@ -297,6 +297,54 @@ test('getHashrate - grouped by rack filters to requested racks', async (t) => {
   t.pass()
 })
 
+test('getHashrate - grouped by rack matches the real aggregation key spelling', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{
+        ts: 1700006400000,
+        hashrate_mhs_5m_pdu_rack_group_sum_aggr: {
+          'group-1_1-1': 1000, 'group-1_1-2': 2000, 'group-2_2-1': 3000
+        }
+      }]
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: {
+      start: 1700000000000,
+      end: 1700100000000,
+      groupBy: 'rack',
+      racks: 'group-1_rack-1,group-2_rack-1'
+    }
+  })
+
+  t.alike(result.log[0].hashrateMhs, { 'group-1_1-1': 1000, 'group-2_2-1': 3000 }, 'slot ids resolve to the real keys')
+  t.pass()
+})
+
+test('getHashrate - racks without groupBy scopes the scalar series', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [{
+        ts: 1700006400000,
+        hashrate_mhs_5m_pdu_rack_group_sum_aggr: {
+          'group-1_1-1': 1000, 'group-1_1-2': 2000, 'group-2_2-1': 3000
+        }
+      }]
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, racks: 'group-1_rack-1,group-1_rack-2' }
+  })
+
+  t.is(result.log[0].hashrateMhs, 3000, 'sums only the selected racks')
+  t.is(result.summary.avgHashrateMhs, 3000)
+  t.pass()
+})
+
 test('getHashrate - grouped mode handles empty results', async (t) => {
   const mockCtx = withDataProxy({
     conf: { orks: [{ rpcPublicKey: 'key1' }] },

@@ -13,24 +13,24 @@ const {
 function createMockRackStats (overrides = {}) {
   return {
     hashrateByRack: {
-      'group-1_rack-1': 5000000000, // 5 PH/s
-      'group-1_rack-2': 4000000000,
-      'group-2_rack-1': 3000000000,
-      'group-2_rack-2': 6000000000,
+      'group-1_1-1': 5000000000, // 5 PH/s
+      'group-1_1-2': 4000000000,
+      'group-2_2-1': 3000000000,
+      'group-2_2-2': 6000000000,
       ...overrides.hashrateByRack
     },
     powerByRack: {
-      'group-1_rack-1': 500000,
-      'group-1_rack-2': 400000,
-      'group-2_rack-1': 300000,
-      'group-2_rack-2': 600000,
+      'group-1_1-1': 500000,
+      'group-1_1-2': 400000,
+      'group-2_2-1': 300000,
+      'group-2_2-2': 600000,
       ...overrides.powerByRack
     },
     efficiencyByRack: {
-      'group-1_rack-1': 6,
-      'group-1_rack-2': 6,
-      'group-2_rack-1': 6,
-      'group-2_rack-2': 6,
+      'group-1_1-1': 6,
+      'group-1_1-2': 6,
+      'group-2_2-1': 6,
+      'group-2_2-2': 6,
       ...overrides.efficiencyByRack
     }
   }
@@ -81,7 +81,7 @@ test('aggregateRackStats - extracts per-rack hashrate, power, efficiency', (t) =
   const tailLogResults = [
     [
       [{
-        hashrate_mhs_5m_pdu_rack_group_avg_aggr: { 'group-1_rack-1': 5000000000, 'group-1_rack-2': 4000000000 },
+        hashrate_mhs_5m_pdu_rack_group_sum_aggr: { 'group-1_rack-1': 5000000000, 'group-1_rack-2': 4000000000 },
         power_w_pdu_rack_group_sum_aggr: { 'group-1_rack-1': 500000, 'group-1_rack-2': 400000 },
         efficiency_w_ths_pdu_rack_group_avg_aggr: { 'group-1_rack-1': 6, 'group-1_rack-2': 6.5 }
       }]
@@ -98,12 +98,12 @@ test('aggregateRackStats - extracts per-rack hashrate, power, efficiency', (t) =
 test('aggregateRackStats - merges across multiple orks', (t) => {
   const tailLogResults = [
     [[{
-      hashrate_mhs_5m_pdu_rack_group_avg_aggr: { 'group-1_rack-1': 3000000000 },
+      hashrate_mhs_5m_pdu_rack_group_sum_aggr: { 'group-1_rack-1': 3000000000 },
       power_w_pdu_rack_group_sum_aggr: { 'group-1_rack-1': 300000 },
       efficiency_w_ths_pdu_rack_group_avg_aggr: { 'group-1_rack-1': 5 }
     }]],
     [[{
-      hashrate_mhs_5m_pdu_rack_group_avg_aggr: { 'group-1_rack-1': 2000000000 },
+      hashrate_mhs_5m_pdu_rack_group_sum_aggr: { 'group-1_rack-1': 2000000000 },
       power_w_pdu_rack_group_sum_aggr: { 'group-1_rack-1': 200000 },
       efficiency_w_ths_pdu_rack_group_avg_aggr: { 'group-1_rack-1': 7 }
     }]]
@@ -141,6 +141,17 @@ test('buildRackList - builds racks from config', (t) => {
   t.is(racks[0].efficiency.unit, 'W/TH/s')
   t.is(racks[0].hashrate.unit, 'PH/s')
   t.is(racks[0].consumption.unit, 'kW')
+  t.pass()
+})
+
+test('buildRackList - reads values from the real aggregation keys', (t) => {
+  const config = createMockMiningConfig()
+  const racks = buildRackList(config, createMockRackStats())
+
+  t.is(racks[0].id, 'group-1_rack-1', 'public id is preserved')
+  t.is(racks[0].hashrate.value, 5, 'group-1_1-1 → 5 PH/s')
+  t.is(racks[0].consumption.value, 500, '500000 W → 500 kW')
+  t.is(racks[1].hashrate.value, 4, 'group-1_1-2 → 4 PH/s')
   t.pass()
 })
 
@@ -425,7 +436,7 @@ test('listExplorerRacks - returns paginated rack list', async (t) => {
   const dcsThing = createMockDcsThing(miningConfig)
   const tailLogData = [
     [{
-      hashrate_mhs_5m_pdu_rack_group_avg_aggr: { 'group-1_rack-1': 5000000000 },
+      hashrate_mhs_5m_pdu_rack_group_sum_aggr: { 'group-1_rack-1': 5000000000 },
       power_w_pdu_rack_group_sum_aggr: { 'group-1_rack-1': 500000 },
       efficiency_w_ths_pdu_rack_group_avg_aggr: { 'group-1_rack-1': 6 }
     }]
@@ -596,7 +607,7 @@ test('listExplorerRacks - applies sort', async (t) => {
   const dcsThing = createMockDcsThing(miningConfig)
   const tailLogData = [
     [{
-      hashrate_mhs_5m_pdu_rack_group_avg_aggr: {
+      hashrate_mhs_5m_pdu_rack_group_sum_aggr: {
         'group-1_rack-1': 1000000000,
         'group-1_rack-2': 5000000000,
         'group-2_rack-1': 3000000000,

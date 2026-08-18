@@ -636,7 +636,7 @@ const SITE_OVERVIEW_AGGR_FIELDS = {
   power_w_rack_group_sum_aggr: 1,
   efficiency_w_ths_container_group_avg_aggr: 1,
   efficiency_w_ths_pdu_rack_group_avg_aggr: 1,
-  hashrate_mhs_5m_pdu_rack_group_avg_aggr: 1,
+  hashrate_mhs_5m_pdu_rack_group_sum_aggr: 1,
   power_w_pdu_rack_group_sum_aggr: 1,
   offline_cnt: 1,
   error_cnt: 1,
@@ -976,7 +976,7 @@ const CONTAINER_MINER_FIELDS = {
 
 // Explorer racks aggregation fields
 const EXPLORER_RACK_AGGR_FIELDS = {
-  hashrate_mhs_5m_pdu_rack_group_avg_aggr: 1,
+  hashrate_mhs_5m_pdu_rack_group_sum_aggr: 1,
   power_w_pdu_rack_group_sum_aggr: 1,
   efficiency_w_ths_pdu_rack_group_avg_aggr: 1
 }

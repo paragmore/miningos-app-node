@@ -15,6 +15,7 @@ const {
   sensorReading
 } = require('../../dcs.utils')
 const { aggregateRackStats } = require('./explorer.handlers')
+const { rackKeysByGroupOrdinal } = require('../../metrics.utils')
 
 /**
  * BE-9 — Layout positional / equipment-id contract (FE binds by position or id):
@@ -525,6 +526,8 @@ function buildMinersLayoutView (equipment, config, stats, rackPowerByRack) {
   const vlanStart = miningConfig.vlan_start || 129
   const totalMiners = totalGroups * racksPerGroup * minersPerRack
 
+  const keysByGroup = rackPowerByRack ? rackKeysByGroupOrdinal(rackPowerByRack) : null
+
   const groups = []
   for (let i = 1; i <= totalGroups; i++) {
     const group = {
@@ -533,9 +536,10 @@ function buildMinersLayoutView (equipment, config, stats, rackPowerByRack) {
       vlan: vlanStart + (i - 1)
     }
     if (rackPowerByRack) {
+      const keyByOrdinal = keysByGroup.get(`group-${i}`) || new Map()
       const statuses = []
       for (let r = 1; r <= racksPerGroup; r++) {
-        const powerW = rackPowerByRack[`group-${i}_rack-${r}`]
+        const powerW = rackPowerByRack[keyByOrdinal.get(r)]
         statuses.push(powerW != null && powerW > 0)
       }
       group.rack_statuses = statuses

@@ -153,7 +153,7 @@ function aggregateOverviewMinerStats (tailLogResults) {
     if (!entry) continue
 
     mergeGroupedField(aggregated.hashrateByGroup, entry.hashrate_mhs_5m_container_group_sum_aggr)
-    mergeGroupedField(aggregated.hashrateByRack, entry.hashrate_mhs_5m_pdu_rack_group_avg_aggr)
+    mergeGroupedField(aggregated.hashrateByRack, entry.hashrate_mhs_5m_pdu_rack_group_sum_aggr)
     mergeGroupedField(aggregated.powerByGroup, entry.power_w_container_group_sum_aggr)
     mergeGroupedField(aggregated.powerByRack, entry.power_w_pdu_rack_group_sum_aggr)
     mergeGroupedField(aggregated.efficiencyByGroup, entry.efficiency_w_ths_container_group_avg_aggr, true)

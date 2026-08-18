@@ -11,7 +11,7 @@ const {
   aggregateRackStats,
   buildRackList
 } = require('./explorer.handlers')
-const { mhsToPhs, mhsToThs, parseRackId } = require('../../metrics.utils')
+const { rackFilterFor } = require('../../metrics.utils')
 const {
   isCentralDCSEnabled,
   getDCSTag,
@@ -53,13 +53,8 @@ async function getGroupStats (ctx, req) {
   const dcsThing = dcsResults ? extractDcsThing(dcsResults) : null
   const miningConfig = dcsThing?.last?.snap?.config?.mining || {}
 
-  const allRacks = buildRackList(miningConfig, rackStats)
-  const realKeyById = mapRackIdToKeys(allRacks, rackStats)
-
-  const requestedSet = new Set(requestedRacks)
-  const data = allRacks
-    .filter(rack => requestedSet.has(rack.id))
-    .map(rack => formatRackValues(rack, realKeyById.get(rack.id), rackStats))
+  const matchesRequested = rackFilterFor(requestedRacks)
+  const data = buildRackList(miningConfig, rackStats).filter(rack => matchesRequested(rack.id))
 
   return {
     data,
@@ -67,54 +62,6 @@ async function getGroupStats (ctx, req) {
   }
 }
 
-function mapRackIdToKeys (racks, rackStats) {
-  const allRealKeys = new Set([
-    ...Object.keys(rackStats.hashrateByRack),
-    ...Object.keys(rackStats.powerByRack),
-    ...Object.keys(rackStats.efficiencyByRack)
-  ])
-
-  const sortedByGroup = {}
-  for (const key of allRealKeys) {
-    const parsed = parseRackId(key)
-    if (!parsed) continue
-    ;(sortedByGroup[parsed.group] ||= []).push(key)
-  }
-  for (const list of Object.values(sortedByGroup)) {
-    list.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-  }
-
-  const map = new Map()
-  const cursor = {}
-  for (const rack of racks) {
-    const groupId = rack.group.id
-    const pos = (cursor[groupId] = (cursor[groupId] ?? -1) + 1)
-    map.set(rack.id, sortedByGroup[groupId]?.[pos])
-  }
-  return map
-}
-
-function formatRackValues (rack, realKey, rackStats) {
-  if (!realKey) return rack
-
-  const hashrateMhs = rackStats.hashrateByRack[realKey] || 0
-  const powerW = rackStats.powerByRack[realKey] || 0
-  const powerKw = Math.round(powerW / 10) / 100
-  const hashrateThs = mhsToThs(hashrateMhs)
-  const efficiency = hashrateThs > 0
-    ? Math.round((powerW / hashrateThs) * 10) / 10
-    : rackStats.efficiencyByRack[realKey] || 0
-
-  return {
-    ...rack,
-    efficiency: { value: efficiency, unit: 'W/TH/s' },
-    hashrate: { value: mhsToPhs(hashrateMhs), unit: 'PH/s' },
-    consumption: { value: powerKw, unit: 'kW' }
-  }
-}
-
 module.exports = {
-  getGroupStats,
-  mapRackIdToKeys,
-  formatRackValues
+  getGroupStats
 }

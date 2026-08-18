@@ -673,7 +673,7 @@ test('getSiteOverviewGroupsStats - returns groups with correct structure', async
   const tailLogResponse = [
     [{
       hashrate_mhs_5m_container_group_sum_aggr: { 'group-1': 100000000, 'group-2': 200000000 },
-      hashrate_mhs_5m_pdu_rack_group_avg_aggr: { 'group-1_rack-1': 50000000, 'group-1_rack-2': 50000000 },
+      hashrate_mhs_5m_pdu_rack_group_sum_aggr: { 'group-1_rack-1': 50000000, 'group-1_rack-2': 50000000 },
       power_w_container_group_sum_aggr: { 'group-1': 50000, 'group-2': 100000 },
       power_w_pdu_rack_group_sum_aggr: { 'group-1_rack-1': 25000, 'group-1_rack-2': 25000 },
       offline_cnt: { 'group-1': 2, 'group-2': 1 },
@@ -783,7 +783,7 @@ test('getSiteOverviewGroupsStats - builds racks for groups', async (t) => {
   const tailLogResponse = [
     [{
       hashrate_mhs_5m_container_group_sum_aggr: { 'group-1': 100000000 },
-      hashrate_mhs_5m_pdu_rack_group_avg_aggr: {
+      hashrate_mhs_5m_pdu_rack_group_sum_aggr: {
         'group-1_rack-1': 30000000,
         'group-1_rack-2': 40000000,
         'group-1_rack-3': 30000000
