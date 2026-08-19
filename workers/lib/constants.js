@@ -55,6 +55,7 @@ const MINER_LOCATIONS = ['workshop.warehouse', 'workshop.lab', 'site.warehouse',
 const MINER_ROOM_LOCATION = 'miner.room'
 const MAINTENANCE_CONTAINER = 'maintenance'
 const SPARE_PART_INITIAL_LOCATION = 'site.warehouse'
+const IN_OPERATION_STATUS = 'in_operation'
 const FILE_TYPES = { WORK_ORDER: 'work_order' }
 const WORK_ORDER_ACTION_WAIT_ATTEMPTS = 8
 const WORK_ORDER_ACTION_WAIT_MS = 1000
@@ -1080,6 +1081,7 @@ module.exports = {
   MINER_LOCATIONS,
   MINER_ROOM_LOCATION,
   MAINTENANCE_CONTAINER,
+  IN_OPERATION_STATUS,
   SPARE_PART_INITIAL_LOCATION,
   FILE_TYPES,
   WORK_ORDER_ACTION_WAIT_ATTEMPTS,

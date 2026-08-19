@@ -9,7 +9,8 @@ const {
   WORK_ORDER_VALID_DEVICE_TYPES,
   SPARE_PART_INITIAL_LOCATION,
   MINER_ROOM_LOCATION,
-  MAINTENANCE_CONTAINER
+  MAINTENANCE_CONTAINER,
+  IN_OPERATION_STATUS
 } = require('../../constants')
 const { renderWorkOrderCsv, renderRmaCsv } = require('../lib/work.order.export')
 const { submitWorkOrderAction, getWorkOrderRackId, assertActionApplied, assertActionsExecuted } = require('../lib/work.orders')
@@ -90,6 +91,7 @@ function _replacementInfo (replacement, woId) {
   const { container, pos, subnet } = replacement.vacated
   return {
     location: MINER_ROOM_LOCATION,
+    status: IN_OPERATION_STATUS,
     container,
     pos,
     ...(subnet ? { subnet } : {}),
@@ -140,6 +142,8 @@ function _buildReplacementMove (replacement, part, voter, ts) {
     replacesPartCode: part.code,
     fromLocation: thing.info?.location ?? null,
     toLocation: MINER_ROOM_LOCATION,
+    fromStatus: thing.info?.status ?? null,
+    toStatus: IN_OPERATION_STATUS,
     fromContainer: thing.info?.container ?? null,
     fromPos: thing.info?.pos ?? null,
     toContainer: vacated.container,
