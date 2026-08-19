@@ -1,5 +1,9 @@
 'use strict'
 
+// 1M is a 30-day month. Distinct from 1m (one minute) used by
+// powerModeTimeline / containerHistory.
+const METRICS_INTERVALS = ['1h', '1d', '1w', '1M']
+
 const schemas = {
   query: {
     hashrate: {
@@ -7,7 +11,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
-        interval: { type: 'string', enum: ['1h', '1d', '1w'] },
+        interval: { type: 'string', enum: METRICS_INTERVALS },
         groupBy: { type: 'string', enum: ['miner', 'container', 'rack'] },
         container: { type: 'string' },
         current: { type: 'boolean' },
@@ -22,7 +26,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
-        interval: { type: 'string', enum: ['1h', '1d', '1w'] },
+        interval: { type: 'string', enum: METRICS_INTERVALS },
         groupBy: { type: 'string', enum: ['miner', 'container', 'rack'] },
         byMeter: { type: 'boolean' },
         racks: { type: 'string' },
@@ -35,7 +39,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
-        interval: { type: 'string', enum: ['1h', '1d', '1w'] },
+        interval: { type: 'string', enum: METRICS_INTERVALS },
         groupBy: { type: 'string', enum: ['miner', 'container', 'rack'] },
         racks: { type: 'string' },
         overwriteCache: { type: 'boolean' }
@@ -97,7 +101,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
-        interval: { type: 'string', enum: ['1h', '1d', '1w'] },
+        interval: { type: 'string', enum: METRICS_INTERVALS },
         overwriteCache: { type: 'boolean' }
       },
       required: ['start', 'end']
@@ -117,7 +121,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
-        interval: { type: 'string', enum: ['1h', '1d', '1w'] },
+        interval: { type: 'string', enum: METRICS_INTERVALS },
         container: { type: 'string' },
         overwriteCache: { type: 'boolean' }
       },
@@ -128,7 +132,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
-        interval: { type: 'string', enum: ['1h', '1d', '1w', 'hourly', 'daily', 'weekly'] },
+        interval: { type: 'string', enum: [...METRICS_INTERVALS, 'hourly', 'daily', 'weekly'] },
         overwriteCache: { type: 'boolean' }
       },
       required: ['start', 'end']

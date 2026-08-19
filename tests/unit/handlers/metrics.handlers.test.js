@@ -880,6 +880,66 @@ test('getConsumption - byMeter applies the 1w interval to the ork query and MWh 
   t.pass()
 })
 
+test('getConsumption - byMeter applies the 1M interval to the ork query and MWh scaling', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [
+          { ts: 1700006400000, by_meter_power_w: { 'PM-1': 1000000 } },
+          { ts: 1702684800000, by_meter_power_w: { 'PM-1': 2000000 } }
+        ]
+      }
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1705276800000, byMeter: true, interval: '1M' }
+  })
+
+  t.is(capturedPayload.key, 'stat-3h', 'monthly interval tails the 3h stat log')
+  t.is(capturedPayload.groupRange, '1M', 'and buckets into 1-month windows')
+  t.is(result.log.length, 2, 'one log entry per monthly bucket')
+  t.alike(result.log[0].consumptionMWh, { 'PM-1': 720 }, '1 MW over a 720h bucket is 720 MWh')
+  t.alike(result.log[1].consumptionMWh, { 'PM-1': 1440 }, '2 MW over a 720h bucket is 1440 MWh')
+  t.is(result.summary.groupedBy['PM-1'].totalConsumptionMWh, 2160, 'PM-1 consumption sums both monthly buckets')
+  t.pass()
+})
+
+test('getConsumption - site power applies the 1M interval to the ork query and MWh scaling', async (t) => {
+  let capturedPayload
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [
+          { ts: 1700006400000, site_power_w: 2000000 },
+          { ts: 1702684800000, site_power_w: 1000000 }
+        ]
+      }
+    }
+  })
+
+  const result = await getConsumption(mockCtx, {
+    query: { start: 1700000000000, end: 1705276800000, interval: '1M' }
+  })
+
+  t.is(capturedPayload.key, 'stat-3h', 'monthly interval tails the 3h stat log')
+  t.is(capturedPayload.groupRange, '1M', 'and buckets into 1-month windows')
+  t.is(result.log.length, 2, 'one entry per monthly bucket')
+  t.is(result.log[0].consumptionMWh, 1440, '2 MW over a 720h bucket is 1440 MWh')
+  t.is(result.log[1].consumptionMWh, 720, '1 MW over a 720h bucket is 720 MWh')
+  t.is(result.summary.avgPowerW, 1500000, 'summary averages power across both monthly buckets')
+  t.is(result.summary.totalConsumptionMWh, 2160, 'summary sums consumption across both buckets')
+  t.pass()
+})
+
 test('getConsumption - site power applies the 1w interval to the ork query and MWh scaling', async (t) => {
   let capturedPayload
   const mockCtx = withDataProxy({
@@ -1949,6 +2009,10 @@ test('getIntervalConfig - returns correct configs', (t) => {
   const w = getIntervalConfig('1w')
   t.is(w.key, 'stat-3h', '1w key should be stat-3h')
   t.is(w.groupRange, '1W', '1w groupRange should be 1W')
+
+  const m = getIntervalConfig('1M')
+  t.is(m.key, 'stat-3h', '1M key should be stat-3h')
+  t.is(m.groupRange, '1M', '1M groupRange should be 1M')
 
   t.pass()
 })

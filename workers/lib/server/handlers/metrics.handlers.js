@@ -6,6 +6,7 @@ const {
   RPC_METHODS,
   METRICS_TIME,
   METRICS_DEFAULTS,
+  RANGE_BUCKETS,
   MINER_CATEGORIES,
   LOG_KEYS,
   WORKER_TAGS,
@@ -234,9 +235,9 @@ function calculateGroupedHashrateSummary (log, groupBy) {
 // getIntervalConfig always buckets samples into a fixed window, so translate
 // that window into the number of hours a single entry represents.
 function bucketHours (groupRange) {
-  if (groupRange === '1D') return 24
-  if (groupRange === '1W') return 168
-  return 1 // '1H'
+  const bucketMs = RANGE_BUCKETS[groupRange]
+
+  return bucketMs ? bucketMs / (60 * 60 * 1_000) : 1 // '1H'
 }
 
 async function getConsumption (ctx, req) {
