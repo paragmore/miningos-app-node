@@ -95,6 +95,80 @@ test('handlers: updateSparePart 404s when WO is missing', async (t) => {
   )
 })
 
+test('handlers: updateSparePart 404s when the spare part id does not resolve', async (t) => {
+  const { ctx, pushed } = buildCtx({ part: null })
+  try {
+    await handlers.updateSparePart(ctx, {
+      ...userMeta(),
+      params: { id: PART.id },
+      body: { rackId: PART_RACK, workOrderId: 'wo-1', info: { location: 'site.lab' } }
+    })
+    t.fail('should have thrown')
+  } catch (err) {
+    t.is(err.message, 'ERR_SPARE_PART_NOT_FOUND')
+    t.is(err.statusCode, 404)
+  }
+  t.is(pushed.length, 0, 'no updateThing pushed once the part lookup fails')
+
+  await t.exception(
+    () => handlers.updateSparePart(ctx, {
+      ...userMeta(),
+      params: { id: PART.id },
+      body: { rackId: PART_RACK, workOrderId: 'wo-1', info: { status: 'faulty' } }
+    }),
+    /ERR_SPARE_PART_NOT_FOUND/,
+    'status-only changes are moves and also 404'
+  )
+})
+
+test('handlers: updateSparePart 404s when the id resolves only to a work order', async (t) => {
+  const { ctx } = buildCtx({
+    part: { id: PART.id, type: 'inventory-work_order', code: 'IVI-2-0009', info: {} }
+  })
+  await t.exception(
+    () => handlers.updateSparePart(ctx, {
+      ...userMeta(),
+      params: { id: PART.id },
+      body: { rackId: PART_RACK, workOrderId: 'wo-1', info: { location: 'site.lab' } }
+    }),
+    /ERR_SPARE_PART_NOT_FOUND/
+  )
+})
+
+test('handlers: updateSparePart 404s the target part before validating replacesPartCode', async (t) => {
+  const { ctx } = buildCtx({ part: null })
+  await t.exception(
+    () => handlers.updateSparePart(ctx, {
+      ...userMeta(),
+      params: { id: PART.id },
+      body: { rackId: PART_RACK, workOrderId: 'wo-1', replacesPartCode: REPLACED_PART.code, info: {} }
+    }),
+    /ERR_SPARE_PART_NOT_FOUND/
+  )
+})
+
+test('handlers: updateSparePart prefers ERR_WORK_ORDER_NOT_FOUND when the part is also missing', async (t) => {
+  const { ctx } = buildCtx({ wo: null, part: null })
+  await t.exception(
+    () => handlers.updateSparePart(ctx, {
+      ...userMeta(),
+      params: { id: PART.id },
+      body: { rackId: PART_RACK, workOrderId: 'wo-missing', info: { location: 'site.lab' } }
+    }),
+    /ERR_WORK_ORDER_NOT_FOUND/
+  )
+})
+
+test('handlers: updateSparePart does not 404 a missing part when only non-move fields change', async (t) => {
+  const { ctx, pushed } = buildCtx({ part: null })
+  await handlers.updateSparePart(ctx, {
+    ...userMeta(),
+    params: { id: 'p-missing' },
+    body: { rackId: PART_RACK, info: { serialNum: 'SN-NEW' } }
+  })
+  t.is(pushed.length, 1, 'part update still pushed; existence is only checked on moves')
+})
+
 test('handlers: updateSparePart pushes part update + WO partsMoves append on a valid move', async (t) => {
   const { ctx, pushed } = buildCtx()
   const out = await handlers.updateSparePart(ctx, {
@@ -121,6 +195,7 @@ test('handlers: updateSparePart pushes part update + WO partsMoves append on a v
   t.is(moves[0].workOrderCode, 'IVI-2-0001')
 
   t.ok(out.move, 'response includes the move record')
+  t.is(out.expectedActionLatencyMs, 1000, 'defaults when conf omits expectedActionLatencyMs')
 })
 
 test('handlers: updateSparePart aborts WO append when the part pushAction returned errors', async (t) => {
@@ -306,6 +381,7 @@ test('handlers: registerSparePart fires part + Type-1 WO pushActions in parallel
   t.ok(out.partActionId, 'returns partActionId for the client to poll')
   t.ok(out.workOrderActionId, 'returns workOrderActionId for the client to poll')
   t.alike(out.errors, [], 'no errors on happy path')
+  t.is(out.expectedActionLatencyMs, 1000, 'defaults when conf omits expectedActionLatencyMs')
 })
 
 test('handlers: registerSparePart surfaces ork-side errors in the response', async (t) => {
@@ -352,6 +428,35 @@ test('handlers: registerSparePartsBatch creates one shared register WO carrying 
   }
   t.is(out.parts.length, 3, 'returns a result row per part')
   t.alike(out.errors, [], 'no errors on happy path')
+  t.is(out.expectedActionLatencyMs, 1000, 'defaults when conf omits expectedActionLatencyMs')
+})
+
+test('handlers: spare-part writes echo expectedActionLatencyMs from conf', async (t) => {
+  const { ctx } = buildCtx()
+  ctx.conf.expectedActionLatencyMs = 6000
+  const updateOut = await handlers.updateSparePart(ctx, {
+    ...userMeta(),
+    params: { id: PART.id },
+    body: { rackId: PART_RACK, workOrderId: 'wo-1', info: { location: 'site.lab' } }
+  })
+  t.is(updateOut.expectedActionLatencyMs, 6000, 'updateSparePart move response')
+
+  const { ctx: registerCtx } = buildRegisterCtx()
+  registerCtx.conf.expectedActionLatencyMs = 6000
+  const registerOut = await handlers.registerSparePart(registerCtx, {
+    ...userMeta(),
+    body: { rackId: PART_RACK, info: { deviceType: 'psu', deviceModel: 'PSU-A', serialNum: 'SN-1' } }
+  })
+  t.is(registerOut.expectedActionLatencyMs, 6000, 'registerSparePart response')
+
+  const batchOut = await handlers.registerSparePartsBatch(registerCtx, {
+    ...userMeta(),
+    body: {
+      rackId: PART_RACK,
+      parts: [{ deviceType: 'psu', deviceModel: 'PSU-A', serialNum: 'SN-2' }]
+    }
+  })
+  t.is(batchOut.expectedActionLatencyMs, 6000, 'registerSparePartsBatch response')
 })
 
 test('handlers: registerSparePartsBatch rejects the whole batch if any part is invalid', async (t) => {
