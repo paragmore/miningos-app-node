@@ -19,7 +19,8 @@ const {
   appendWorkLogEntry,
   getWorkOrderAudit,
   exportWorkOrder,
-  exportWorkOrdersRma
+  exportWorkOrdersRma,
+  exportWorkOrdersBulk
 } = require('../handlers/work.orders.handlers')
 const { createAuthRoute, createCachedAuthRoute } = require('../lib/routeHelpers')
 const { stableJsonString } = require('../../utils')
@@ -129,5 +130,11 @@ module.exports = (ctx) => [
     url: ENDPOINTS.WORK_ORDER_EXPORT_RMA,
     schema: schemas.exportRma,
     ...createAuthRoute(ctx, exportWorkOrdersRma, [AUTH_PERMISSIONS.WORK_ORDER])
+  },
+  {
+    method: HTTP_METHODS.GET,
+    url: ENDPOINTS.WORK_ORDER_EXPORT_BULK,
+    schema: schemas.exportBulk,
+    ...createAuthRoute(ctx, exportWorkOrdersBulk, [AUTH_PERMISSIONS.WORK_ORDER])
   }
 ]

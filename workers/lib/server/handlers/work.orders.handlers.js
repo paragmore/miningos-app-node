@@ -12,7 +12,7 @@ const {
   MAINTENANCE_CONTAINER,
   IN_OPERATION_STATUS
 } = require('../../constants')
-const { renderWorkOrderCsv, renderRmaCsv } = require('../lib/work.order.export')
+const { renderWorkOrderCsv, renderWorkOrdersBulkCsv, renderRmaCsv } = require('../lib/work.order.export')
 const { submitWorkOrderAction, getWorkOrderRackId, assertActionApplied, assertActionsExecuted } = require('../lib/work.orders')
 
 async function _resolvePartByIdentifier (ctx, identifier) {
@@ -585,8 +585,8 @@ async function exportWorkOrder (ctx, req, rep) {
   return rep.send(renderWorkOrderCsv(wo))
 }
 
-async function exportWorkOrdersRma (ctx, req, rep) {
-  const ids = req.query.ids.split(',').map(s => s.trim()).filter(Boolean)
+async function _loadWorkOrdersByIdsOrCodes (ctx, idsParam) {
+  const ids = idsParam.split(',').map(s => s.trim()).filter(Boolean)
   const params = {
     query: {
       type: WORK_ORDER_THING_TYPE,
@@ -594,11 +594,31 @@ async function exportWorkOrdersRma (ctx, req, rep) {
     }
   }
   const results = await ctx.dataProxy.requestData('listThings', params)
-  const wos = flattenRpcResults(results).filter(wo => wo?.info?.type === WORK_ORDER_TYPES.MICROBT_MINER)
+  return flattenRpcResults(results)
+}
+
+async function exportWorkOrdersRma (ctx, req, rep) {
+  const wos = (await _loadWorkOrdersByIdsOrCodes(ctx, req.query.ids))
+    .filter(wo => wo?.info?.type === WORK_ORDER_TYPES.MICROBT_MINER)
 
   rep.header('content-type', 'text/csv; charset=utf-8')
   rep.header('content-disposition', 'attachment; filename="rma.csv"')
   return rep.send(renderRmaCsv(wos))
+}
+
+// Bulk sibling of exportWorkOrder: N ids, one combined CSV, so a large list-page
+// selection downloads as a single file instead of one browser download per WO.
+async function exportWorkOrdersBulk (ctx, req, rep) {
+  const wos = await _loadWorkOrdersByIdsOrCodes(ctx, req.query.ids)
+  if (!wos.length) {
+    const err = new Error('ERR_WORK_ORDERS_NOT_FOUND')
+    err.statusCode = 404
+    throw err
+  }
+
+  rep.header('content-type', 'text/csv; charset=utf-8')
+  rep.header('content-disposition', 'attachment; filename="work-orders.csv"')
+  return rep.send(renderWorkOrdersBulkCsv(wos))
 }
 
 async function getWorkOrderAudit (ctx, req) {
@@ -627,5 +647,6 @@ module.exports = {
   appendWorkLogEntry,
   getWorkOrderAudit,
   exportWorkOrder,
-  exportWorkOrdersRma
+  exportWorkOrdersRma,
+  exportWorkOrdersBulk
 }

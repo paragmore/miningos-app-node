@@ -30,7 +30,8 @@ test('work.orders.routes: registers every WO endpoint', (t) => {
     { method: HTTP_METHODS.POST, url: ENDPOINTS.WORK_ORDER_ASSIGN },
     { method: HTTP_METHODS.POST, url: ENDPOINTS.WORK_ORDER_LOG },
     { method: HTTP_METHODS.GET, url: ENDPOINTS.WORK_ORDER_EXPORT },
-    { method: HTTP_METHODS.GET, url: ENDPOINTS.WORK_ORDER_EXPORT_RMA }
+    { method: HTTP_METHODS.GET, url: ENDPOINTS.WORK_ORDER_EXPORT_RMA },
+    { method: HTTP_METHODS.GET, url: ENDPOINTS.WORK_ORDER_EXPORT_BULK }
   ]
   for (const e of expected) {
     const found = routes.find(r => r.method === e.method && r.url === e.url)
