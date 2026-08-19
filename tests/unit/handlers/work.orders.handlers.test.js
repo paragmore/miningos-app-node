@@ -465,7 +465,7 @@ test('handlers: createWorkOrdersBatch Type 2 (move) installs the replacement min
   t.is(inPush.params[0].info.pos, '3_1', 'replacement takes the vacated socket')
   t.is(inPush.params[0].info.subnet, '10.0.3.0', 'replacement inherits the group subnet')
   t.is(inPush.params[0].info.workOrderId, regPush.params[0].id, 'replacement references the created WO id')
-  t.is(inPush.params[0].info.status, undefined, 'replacement status is left untouched')
+  t.is(inPush.params[0].info.status, 'in_operation', 'replacement goes in operation with the same update')
 
   const moves = regPush.params[0].info.partsMoves
   t.is(moves.length, 2, 'the move out and the replacement are both recorded')
@@ -480,6 +480,8 @@ test('handlers: createWorkOrdersBatch Type 2 (move) installs the replacement min
       replacesPartCode: moves[1].replacesPartCode,
       fromLocation: moves[1].fromLocation,
       toLocation: moves[1].toLocation,
+      fromStatus: moves[1].fromStatus,
+      toStatus: moves[1].toStatus,
       toContainer: moves[1].toContainer,
       toPos: moves[1].toPos
     },
@@ -492,6 +494,8 @@ test('handlers: createWorkOrdersBatch Type 2 (move) installs the replacement min
       replacesPartCode: 'MN-1',
       fromLocation: 'site.warehouse',
       toLocation: 'miner.room',
+      fromStatus: 'ok_brand_new',
+      toStatus: 'in_operation',
       toContainer: 'group-3',
       toPos: '3_1'
     }
