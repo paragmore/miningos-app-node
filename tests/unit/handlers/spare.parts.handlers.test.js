@@ -477,18 +477,27 @@ test('handlers: registerSparePartsBatch rejects the whole batch if any part is i
   t.is(pushed.length, 0, 'nothing pushed when any part fails validation')
 })
 
-function listFlow ({ items = [], total = 0 } = {}) {
-  let lastList, lastCount
+function listFlow ({ items = [], total = 0, workOrders = [] } = {}) {
+  const listCalls = []
+  let lastCount
   const handler = async (_key, method, params) => {
-    if (method === 'listThings') { lastList = params; return items }
+    if (method === 'listThings') {
+      listCalls.push(params)
+      return params.query?.type === 'inventory-work_order' ? workOrders : items
+    }
     if (method === 'getThingsCount') { lastCount = params; return total }
     return null
   }
   const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], handler)
   return {
     ctx,
-    get lastList () { return lastList },
-    get lastCount () { return lastCount }
+    get lastList () {
+      return listCalls.find(c => c.query?.type !== 'inventory-work_order') ?? listCalls[0]
+    },
+    get lastCount () { return lastCount },
+    get linkedWoLookupCall () {
+      return listCalls.find(c => c.query?.type === 'inventory-work_order')
+    }
   }
 }
 
@@ -531,6 +540,49 @@ test('handlers: listSpareParts ?q escapes regex metacharacters', async (t) => {
   const flow = listFlow()
   await handlers.listSpareParts(flow.ctx, { query: { q: 'a.b+c*' } })
   t.is(flow.lastList.query.$or[0].code.$regex, 'a\\.b\\+c\\*')
+})
+
+test('handlers: listSpareParts stamps linkedWoCount from distinct WOs referencing each part', async (t) => {
+  const flow = listFlow({
+    items: [{ id: 'p1' }, { id: 'p2' }],
+    total: 2,
+    workOrders: [
+      { id: 'wo-1', info: { partsMoves: [{ partId: 'p1' }, { partId: 'p2' }] } },
+      { id: 'wo-2', info: { partsMoves: [{ partId: 'p1' }] } }
+    ]
+  })
+  const out = await handlers.listSpareParts(flow.ctx, { query: {} })
+  t.is(out.data.find(p => p.id === 'p1').linkedWoCount, 2)
+  t.is(out.data.find(p => p.id === 'p2').linkedWoCount, 1)
+})
+
+test('handlers: listSpareParts counts a part once per WO even if it appears in multiple moves within it', async (t) => {
+  const flow = listFlow({
+    items: [{ id: 'p1' }],
+    total: 1,
+    workOrders: [{ id: 'wo-1', info: { partsMoves: [{ partId: 'p1' }, { partId: 'p1' }] } }]
+  })
+  const out = await handlers.listSpareParts(flow.ctx, { query: {} })
+  t.is(out.data[0].linkedWoCount, 1)
+})
+
+test('handlers: listSpareParts defaults linkedWoCount to 0 when no WO references the part', async (t) => {
+  const flow = listFlow({ items: [{ id: 'p1' }], total: 1, workOrders: [] })
+  const out = await handlers.listSpareParts(flow.ctx, { query: {} })
+  t.is(out.data[0].linkedWoCount, 0)
+})
+
+test('handlers: listSpareParts scopes the WO lookup to exactly the ids on this page', async (t) => {
+  const flow = listFlow({ items: [{ id: 'p1' }, { id: 'p2' }], total: 2 })
+  await handlers.listSpareParts(flow.ctx, { query: {} })
+  t.alike(flow.linkedWoLookupCall.query['info.partsMoves.partId'], { $in: ['p1', 'p2'] })
+})
+
+test('handlers: listSpareParts skips the linked-WO lookup entirely when the page is empty', async (t) => {
+  const flow = listFlow({ items: [], total: 0 })
+  const out = await handlers.listSpareParts(flow.ctx, { query: {} })
+  t.alike(out.data, [])
+  t.is(flow.linkedWoLookupCall, undefined)
 })
 
 test('handlers: listSpareParts ANDs location/status/q in a single query payload', async (t) => {
