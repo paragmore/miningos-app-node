@@ -87,10 +87,12 @@ const TEMPERATURE_COLUMNS = [
 // `undefined`, not 0, when a miner reports no liquid loop: JSON then omits the
 // key and CSV renders an empty cell, so air-cooled reads as "no sensor"
 // rather than "0 degrees".
-function mapTemperatureColumns (temperatureC) {
+function mapTemperatureColumns (stats) {
+  const temperatureC = stats?.temperature_c
+  const minerSpecific = stats?.miner_specific
   return {
     temperatureAmbientC: temperatureC?.ambient,
-    temperatureLiquidInletC: temperatureC?.liquid_inlet,
+    temperatureLiquidInletC: minerSpecific?.liquid_temp,
     temperatureMaxC: temperatureC?.max,
     temperatureAvgC: temperatureC?.avg
   }

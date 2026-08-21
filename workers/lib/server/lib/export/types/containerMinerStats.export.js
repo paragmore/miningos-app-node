@@ -68,7 +68,7 @@ function mapMiner (miner) {
     activePool: poolName,
     alerts: miner?.last?.alerts,
     uptimeMs: stats?.uptime_ms,
-    ...mapTemperatureColumns(stats?.temperature_c)
+    ...mapTemperatureColumns(stats)
   }
 }
 

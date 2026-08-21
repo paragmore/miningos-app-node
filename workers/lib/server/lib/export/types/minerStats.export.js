@@ -61,7 +61,7 @@ function mapMiner (miner) {
     alerts: miner?.last?.alerts,
     uptimeMs: snap?.stats?.uptime_ms,
     ip: miner?.address,
-    ...mapTemperatureColumns(snap?.stats?.temperature_c)
+    ...mapTemperatureColumns(snap?.stats)
   }
 }
 
