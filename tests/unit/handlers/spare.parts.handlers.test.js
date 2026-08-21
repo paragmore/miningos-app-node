@@ -384,6 +384,28 @@ test('handlers: registerSparePart fires part + Type-1 WO pushActions in parallel
   t.is(out.expectedActionLatencyMs, 1000, 'defaults when conf omits expectedActionLatencyMs')
 })
 
+test('handlers: registerSparePart stamps assignedTo on the register WO when provided', async (t) => {
+  const { ctx, pushed } = buildRegisterCtx()
+  await handlers.registerSparePart(ctx, {
+    ...userMeta(),
+    body: { rackId: PART_RACK, info: { deviceType: 'psu', deviceModel: 'PSU-A', serialNum: 'SN-99', assignedTo: 'tech@site.com' } }
+  })
+
+  const woAction = pushed.find(p => p.params[0].rackId === WO_RACK)
+  t.is(woAction.params[0].info.assignedTo, 'tech@site.com')
+})
+
+test('handlers: registerSparePart omits assignedTo from the register WO when not provided', async (t) => {
+  const { ctx, pushed } = buildRegisterCtx()
+  await handlers.registerSparePart(ctx, {
+    ...userMeta(),
+    body: { rackId: PART_RACK, info: { deviceType: 'psu', deviceModel: 'PSU-A', serialNum: 'SN-99' } }
+  })
+
+  const woAction = pushed.find(p => p.params[0].rackId === WO_RACK)
+  t.absent(woAction.params[0].info.assignedTo)
+})
+
 test('handlers: registerSparePart surfaces ork-side errors in the response', async (t) => {
   const { ctx } = buildRegisterCtx({ pushResult: { id: null, errors: ['ERR_RACK_DOWN'] } })
   const out = await handlers.registerSparePart(ctx, {
@@ -429,6 +451,23 @@ test('handlers: registerSparePartsBatch creates one shared register WO carrying 
   t.is(out.parts.length, 3, 'returns a result row per part')
   t.alike(out.errors, [], 'no errors on happy path')
   t.is(out.expectedActionLatencyMs, 1000, 'defaults when conf omits expectedActionLatencyMs')
+})
+
+test('handlers: registerSparePartsBatch stamps assignedTo on the shared register WO from the first part', async (t) => {
+  const { ctx, pushed } = buildRegisterCtx()
+  await handlers.registerSparePartsBatch(ctx, {
+    ...userMeta(),
+    body: {
+      rackId: PART_RACK,
+      parts: [
+        { deviceType: 'psu', deviceModel: 'PSU-A', serialNum: 'SN-1', assignedTo: 'tech@site.com' },
+        { deviceType: 'psu', deviceModel: 'PSU-A', serialNum: 'SN-2', assignedTo: 'tech@site.com' }
+      ]
+    }
+  })
+
+  const woAction = pushed.find(p => p.params[0].rackId === WO_RACK)
+  t.is(woAction.params[0].info.assignedTo, 'tech@site.com')
 })
 
 test('handlers: spare-part writes echo expectedActionLatencyMs from conf', async (t) => {

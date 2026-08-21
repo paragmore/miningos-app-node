@@ -206,6 +206,7 @@ async function registerSparePart (ctx, req) {
     createdBy: voter,
     createdAt: ts,
     ...(info.notes ? { notes: info.notes } : {}),
+    ...(info.assignedTo ? { assignedTo: info.assignedTo } : {}),
     partsMoves: [{
       partId,
       fromLocation: null,
@@ -290,6 +291,7 @@ async function registerSparePartsBatch (ctx, req) {
     deviceCount: prepared.length,
     createdBy: voter,
     createdAt: ts,
+    ...(summary.part.assignedTo ? { assignedTo: summary.part.assignedTo } : {}),
     partsMoves: prepared.map(({ partId, part }) => ({
       partId,
       deviceType: part.deviceType,
