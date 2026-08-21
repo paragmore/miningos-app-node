@@ -21,6 +21,7 @@ const FIELDS = {
   'last.snap.stats.hashrate_mhs.t_5m': 1,
   'last.snap.stats.power_w': 1,
   'last.snap.stats.temperature_c': 1,
+  'last.snap.stats.miner_specific.liquid_temp': 1,
   'last.alerts': 1,
   'last.snap.stats.uptime_ms': 1
 }
@@ -61,7 +62,7 @@ function mapMiner (miner) {
     alerts: miner?.last?.alerts,
     uptimeMs: snap?.stats?.uptime_ms,
     ip: miner?.address,
-    ...mapTemperatureColumns(snap?.stats?.temperature_c)
+    ...mapTemperatureColumns(snap?.stats)
   }
 }
 

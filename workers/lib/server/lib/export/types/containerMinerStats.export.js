@@ -19,6 +19,7 @@ const FIELDS = {
   'last.snap.stats.frequency_mhz': 1,
   'last.snap.stats.power_w': 1,
   'last.snap.stats.miner_specific.power_pct': 1,
+  'last.snap.stats.miner_specific.liquid_temp': 1,
   'last.snap.stats.uptime_ms': 1,
   'last.snap.config.led_status': 1,
   'last.snap.config.firmware_ver': 1,
@@ -68,7 +69,7 @@ function mapMiner (miner) {
     activePool: poolName,
     alerts: miner?.last?.alerts,
     uptimeMs: stats?.uptime_ms,
-    ...mapTemperatureColumns(stats?.temperature_c)
+    ...mapTemperatureColumns(stats)
   }
 }
 

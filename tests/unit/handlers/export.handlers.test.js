@@ -82,6 +82,7 @@ function makeMiner (id) {
           hashrate_mhs: { t_5m: 100000000 },
           power_w: 3500,
           temperature_c: { ambient: 36.1, liquid_inlet: 28.4, max: 78, avg: 61.2 },
+          miner_specific: { liquid_temp: 28.4 },
           uptime_ms: 1000
         },
         config: { power_mode: 'normal', firmware_ver: 'v1', pool_config: [{ username: 'pool.worker1' }] }
@@ -255,6 +256,7 @@ test('miner-stats JSON carries the liquid inlet both flat and nested', async (t)
 test('an air-cooled miner omits the liquid inlet rather than reporting 0', async (t) => {
   const miner = makeMiner('2')
   delete miner.last.snap.stats.temperature_c.liquid_inlet
+  delete miner.last.snap.stats.miner_specific.liquid_temp
 
   const jsonReply = makeMockReply()
   await exportRoute(
