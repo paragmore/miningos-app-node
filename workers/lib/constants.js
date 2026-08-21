@@ -969,6 +969,7 @@ const CONTAINER_MINER_FIELDS = {
   'last.snap.stats.frequency_mhz': 1,
   'last.snap.stats.power_w': 1,
   'last.snap.stats.miner_specific.power_pct': 1,
+  'last.snap.stats.miner_specific.liquid_temp': 1,
   'last.snap.stats.uptime_ms': 1,
   'last.snap.config.power_mode': 1,
   'last.snap.config.led_status': 1,
