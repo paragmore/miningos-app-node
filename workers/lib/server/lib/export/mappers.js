@@ -73,12 +73,37 @@ function splitPoolWorker (username) {
   return { workerName: names[0] }
 }
 
+// Flat temperature columns, shared so the miner and container-miner exports
+// stay column-compatible. The nested `temperatureC` object stays alongside
+// them: it is fine in JSON, but the CSV serializer flattens only one level, so
+// a reading nested inside it is unreadable in a spreadsheet.
+const TEMPERATURE_COLUMNS = [
+  'temperatureAmbientC',
+  'temperatureLiquidInletC',
+  'temperatureMaxC',
+  'temperatureAvgC'
+]
+
+// `undefined`, not 0, when a miner reports no liquid loop: JSON then omits the
+// key and CSV renders an empty cell, so air-cooled reads as "no sensor"
+// rather than "0 degrees".
+function mapTemperatureColumns (temperatureC) {
+  return {
+    temperatureAmbientC: temperatureC?.ambient,
+    temperatureLiquidInletC: temperatureC?.liquid_inlet,
+    temperatureMaxC: temperatureC?.max,
+    temperatureAvgC: temperatureC?.avg
+  }
+}
+
 module.exports = {
   DEFAULT_TIMEZONE,
+  TEMPERATURE_COLUMNS,
   assertTimezone,
   formatDateTime,
   formatDateLabel,
   formatHourLocal,
   getMinerShortCode,
+  mapTemperatureColumns,
   splitPoolWorker
 }

@@ -1,6 +1,6 @@
 'use strict'
 
-const { splitPoolWorker } = require('../mappers')
+const { TEMPERATURE_COLUMNS, mapTemperatureColumns, splitPoolWorker } = require('../mappers')
 const { pagedListThings } = require('./pagedListThings')
 
 const FIELDS = {
@@ -26,11 +26,13 @@ const FIELDS = {
   'last.alerts': 1
 }
 
+// Kept column-compatible with minerStats.export.js — ops diff the two.
 const COLUMNS = [
   'id', 'type', 'site', 'container', 'position', 'serialNumber', 'macAddress',
   'ipAddress', 'firmwareVersion', 'status', 'powerMode', 'hashrateMhs',
   'efficiencyWThs', 'powerW', 'temperatureC', 'workerName', 'activePool',
-  'alerts', 'uptimeMs'
+  'alerts', 'uptimeMs',
+  ...TEMPERATURE_COLUMNS
 ]
 
 function efficiencyWThs (powerW, hashrateMhs) {
@@ -65,7 +67,8 @@ function mapMiner (miner) {
     workerName,
     activePool: poolName,
     alerts: miner?.last?.alerts,
-    uptimeMs: stats?.uptime_ms
+    uptimeMs: stats?.uptime_ms,
+    ...mapTemperatureColumns(stats?.temperature_c)
   }
 }
 

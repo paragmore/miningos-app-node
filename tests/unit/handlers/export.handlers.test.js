@@ -60,6 +60,12 @@ async function drain (stream) {
   return out
 }
 
+// Every data cell is quoted, and the legacy `temperatureC` blob contains
+// commas of its own, so a naive split(',') misaligns the columns.
+function csvCells (line) {
+  return (line.match(/"((?:[^"]|"")*)"/g) || []).map((cell) => cell.slice(1, -1))
+}
+
 function makeMiner (id) {
   return {
     id: `miner-${id}`,
@@ -71,7 +77,13 @@ function makeMiner (id) {
     last: {
       alerts: [],
       snap: {
-        stats: { status: 'mining', hashrate_mhs: { t_5m: 100000000 }, power_w: 3500, temperature_c: 65, uptime_ms: 1000 },
+        stats: {
+          status: 'mining',
+          hashrate_mhs: { t_5m: 100000000 },
+          power_w: 3500,
+          temperature_c: { ambient: 36.1, liquid_inlet: 28.4, max: 78, avg: 61.2 },
+          uptime_ms: 1000
+        },
         config: { power_mode: 'normal', firmware_ver: 'v1', pool_config: [{ username: 'pool.worker1' }] }
       }
     }
@@ -194,8 +206,8 @@ test('miner-stats streams CSV with download headers and paginates listThings', a
 
   const csv = await drain(reply.body)
   const lines = csv.split('\n')
-  t.is(lines[0], 'id,status,powerMode,site,container,position,shortCode,hashrateMhs,powerW,workerName,activePool,serialNumber,macAddress,type,temperatureC,alerts,uptimeMs,ip')
-  t.is(lines[1], '"miner-0","mining","normal","site-1","container-7","pos-0","MC0","100000000","3500","worker1","pool","SN0","00:00:00:00:00:0","antminer_s19","65","","1000","10.0.0.0"')
+  t.is(lines[0], 'id,status,powerMode,site,container,position,shortCode,hashrateMhs,powerW,workerName,activePool,serialNumber,macAddress,type,temperatureC,alerts,uptimeMs,ip,temperatureAmbientC,temperatureLiquidInletC,temperatureMaxC,temperatureAvgC')
+  t.is(lines[1], '"miner-0","mining","normal","site-1","container-7","pos-0","MC0","100000000","3500","worker1","pool","SN0","00:00:00:00:00:0","antminer_s19","{ambient: 36.1, liquid_inlet: 28.4, max: 78, avg: 61.2}","","1000","10.0.0.0","36.1","28.4","78","61.2"')
   t.is(lines.length, 1 + 100 + 1)
   t.alike(offsets, [0, 100])
 })
@@ -213,6 +225,55 @@ test('miner-stats JSON export matches the {dateExported, miners} wrapper', async
   t.is(parsed.miners[0].workerName, 'worker1')
   t.is(parsed.miners[0].activePool, 'pool')
   t.is(parsed.miners[0].shortCode, 'MC1')
+})
+
+test('miner-stats exposes the liquid inlet temperature as its own CSV column', async (t) => {
+  const ctx = makeMockCtx(async () => [[makeMiner('0')]])
+  const reply = makeMockReply()
+  await exportRoute(ctx, makeMockReq({ type: 'miner-stats', format: 'csv' }), reply)
+
+  const lines = (await drain(reply.body)).split('\n')
+  const columns = lines[0].split(',')
+  const cells = csvCells(lines[1])
+  const at = columns.indexOf('temperatureLiquidInletC')
+
+  t.not(at, -1, 'header carries a dedicated liquid inlet column')
+  t.is(cells[at], '28.4', 'and the value lands in that column position')
+})
+
+test('miner-stats JSON carries the liquid inlet both flat and nested', async (t) => {
+  const ctx = makeMockCtx(async () => [[makeMiner('1')]])
+  const reply = makeMockReply()
+  await exportRoute(ctx, makeMockReq({ type: 'miner-stats', format: 'json' }), reply)
+
+  const parsed = JSON.parse(await drain(reply.body))
+  t.is(parsed.miners[0].temperatureLiquidInletC, 28.4)
+  t.is(parsed.miners[0].temperatureC.liquid_inlet, 28.4)
+  t.is(parsed.miners[0].temperatureAmbientC, 36.1)
+})
+
+test('an air-cooled miner omits the liquid inlet rather than reporting 0', async (t) => {
+  const miner = makeMiner('2')
+  delete miner.last.snap.stats.temperature_c.liquid_inlet
+
+  const jsonReply = makeMockReply()
+  await exportRoute(
+    makeMockCtx(async () => [[miner]]),
+    makeMockReq({ type: 'miner-stats', format: 'json' }),
+    jsonReply
+  )
+  const parsed = JSON.parse(await drain(jsonReply.body))
+  t.absent('temperatureLiquidInletC' in parsed.miners[0], 'JSON omits the key entirely')
+
+  const csvReply = makeMockReply()
+  await exportRoute(
+    makeMockCtx(async () => [[miner]]),
+    makeMockReq({ type: 'miner-stats', format: 'csv' }),
+    csvReply
+  )
+  const lines = (await drain(csvReply.body)).split('\n')
+  const at = lines[0].split(',').indexOf('temperatureLiquidInletC')
+  t.is(csvCells(lines[1])[at], '', 'CSV leaves the cell blank, not "0"')
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -237,7 +298,7 @@ test('container-miner-stats filters by container tag and computes efficiency', a
 
   const csv = await drain(reply.body)
   const lines = csv.split('\n')
-  t.is(lines[0], 'id,type,site,container,position,serialNumber,macAddress,ipAddress,firmwareVersion,status,powerMode,hashrateMhs,efficiencyWThs,powerW,temperatureC,workerName,activePool,alerts,uptimeMs')
+  t.is(lines[0], 'id,type,site,container,position,serialNumber,macAddress,ipAddress,firmwareVersion,status,powerMode,hashrateMhs,efficiencyWThs,powerW,temperatureC,workerName,activePool,alerts,uptimeMs,temperatureAmbientC,temperatureLiquidInletC,temperatureMaxC,temperatureAvgC')
   t.ok(lines[1].includes('"35"'))
   t.ok(/^attachment; filename="container_miners_stats_.+\.csv"$/.test(reply.headers['content-disposition']))
 })
@@ -251,6 +312,24 @@ test('container-miner-stats leaves efficiency empty without power or hashrate', 
 
   const parsed = JSON.parse(await drain(reply.body))
   t.is(parsed.miners[0].efficiencyWThs, '')
+})
+
+test('container-miner-stats carries the same temperature columns as miner-stats', async (t) => {
+  const ctx = makeMockCtx(async () => [[makeMiner('9')]])
+  const reply = makeMockReply()
+  await exportRoute(ctx, makeMockReq({ type: 'container-miner-stats', container: '7' }), reply)
+
+  const lines = (await drain(reply.body)).split('\n')
+  const columns = lines[0].split(',')
+  const at = columns.indexOf('temperatureLiquidInletC')
+
+  t.not(at, -1)
+  t.is(csvCells(lines[1])[at], '28.4')
+  t.alike(
+    columns.slice(-4),
+    ['temperatureAmbientC', 'temperatureLiquidInletC', 'temperatureMaxC', 'temperatureAvgC'],
+    'both exports end with the identical temperature block'
+  )
 })
 
 // ─────────────────────────────────────────────────────────────────────────────

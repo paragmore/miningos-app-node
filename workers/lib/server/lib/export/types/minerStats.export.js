@@ -1,6 +1,11 @@
 'use strict'
 
-const { getMinerShortCode, splitPoolWorker } = require('../mappers')
+const {
+  TEMPERATURE_COLUMNS,
+  getMinerShortCode,
+  mapTemperatureColumns,
+  splitPoolWorker
+} = require('../mappers')
 const { pagedListThings } = require('./pagedListThings')
 
 const FIELDS = {
@@ -22,10 +27,13 @@ const FIELDS = {
 
 const QUERY = { tags: { $in: ['t-miner'] } }
 
+// Appended, never reordered: consumers read this CSV both by header name and
+// by column position, so inserting mid-list would break the positional ones.
 const COLUMNS = [
   'id', 'status', 'powerMode', 'site', 'container', 'position', 'shortCode',
   'hashrateMhs', 'powerW', 'workerName', 'activePool', 'serialNumber',
-  'macAddress', 'type', 'temperatureC', 'alerts', 'uptimeMs', 'ip'
+  'macAddress', 'type', 'temperatureC', 'alerts', 'uptimeMs', 'ip',
+  ...TEMPERATURE_COLUMNS
 ]
 
 function mapMiner (miner) {
@@ -52,7 +60,8 @@ function mapMiner (miner) {
     temperatureC: snap?.stats?.temperature_c,
     alerts: miner?.last?.alerts,
     uptimeMs: snap?.stats?.uptime_ms,
-    ip: miner?.address
+    ip: miner?.address,
+    ...mapTemperatureColumns(snap?.stats?.temperature_c)
   }
 }
 
