@@ -6,12 +6,10 @@ const {
   getCostParameters,
   resolveLcoeUsdPerMwh,
   resolveEnergyCostsUSD,
-  processConsumptionData,
   processPriceData,
   processCostsData,
   calculateSummary,
   getEbitda,
-  processTailLogData,
   processEbitdaPrices,
   calculateEbitdaSummary,
   getCostSummary,
@@ -29,7 +27,6 @@ const {
   getStartOfMonthUtc,
   processDailyRevenueBtc,
   processDailyAvgPrices,
-  processHashrateData,
   processNetworkHashrateData,
   calculateHashRevenueSummary
 } = require('../../../workers/lib/server/handlers/finance.handlers')
@@ -45,8 +42,8 @@ test('getEnergyBalance - happy path', async (t) => {
     },
     net_r0: {
       jRequest: async (key, method, payload) => {
-        if (method === 'tailLogCustomRangeAggr') {
-          return [{ type: 'powermeter', data: [{ ts: dayTs, val: { site_power_w: 5000 } }], error: null }]
+        if (method === 'tailLog') {
+          return [{ ts: dayTs, site_power_w: 5000 }]
         }
         if (method === 'getWrkExtData') {
           if (payload.query && payload.query.key === 'transactions') {
@@ -177,8 +174,8 @@ test('getEnergyBalance - reads a grouped range-string ts on the electricity stat
     },
     net_r0: {
       jRequest: async (key, method, payload) => {
-        if (method === 'tailLogCustomRangeAggr') {
-          return [{ type: 'powermeter', data: [{ ts: dayTs, val: { site_power_w: 5000 } }], error: null }]
+        if (method === 'tailLog') {
+          return [{ ts: dayTs, site_power_w: 5000 }]
         }
         if (method === 'getWrkExtData') {
           if (payload.query && payload.query.key === 'transactions') {
@@ -218,37 +215,6 @@ test('getEnergyBalance - reads a grouped range-string ts on the electricity stat
   // consumptionMWh is 5000 W over 24 h = 0.12 MWh, so 1 MWh in leaves 0.88 curtailed
   t.is(day.curtailmentMWh, 0.88, 'should derive curtailment from the range-string bucket')
   t.ok(day.operationalIssuesRate !== null, 'should derive the operational issues rate too')
-  t.pass()
-})
-
-test('processConsumptionData - processes daily data from ORK', (t) => {
-  const results = [
-    [{ type: 'powermeter', data: [{ ts: 1700006400000, val: { site_power_w: 5000 } }], error: null }]
-  ]
-
-  const daily = processConsumptionData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  const key = Object.keys(daily)[0]
-  t.is(daily[key].powerW, 5000, 'should extract power from val')
-  t.pass()
-})
-
-test('processConsumptionData - processes object-keyed data', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { site_power_w: 5000 } } }]
-  ]
-
-  const daily = processConsumptionData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.pass()
-})
-
-test('processConsumptionData - handles error results', (t) => {
-  const results = [{ error: 'timeout' }]
-  const daily = processConsumptionData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.is(Object.keys(daily).length, 0, 'should be empty for error results')
   t.pass()
 })
 
@@ -329,12 +295,8 @@ function makeMockCtx (days) {
     conf: { orks: [{ rpcPublicKey: 'key1' }] },
     net_r0: {
       jRequest: async (_key, method, payload) => {
-        if (method === 'tailLogCustomRangeAggr') {
-          return [{
-            type: 'powermeter',
-            data: days.map(d => ({ ts: d.ts, val: { site_power_w: d.powerW } })),
-            error: null
-          }]
+        if (method === 'tailLog') {
+          return days.map(d => ({ ts: d.ts, site_power_w: d.powerW, hashrate_mhs_5m_sum_aggr: d.hashrateMhs || 0 }))
         }
         if (method === 'getWrkExtData') {
           if (payload.query && payload.query.key === 'transactions') {
@@ -404,6 +366,52 @@ test('getEnergyBalance monthly - rates use MEAN, totals use SUM, per-MW is RECOM
   t.ok(Math.abs(m.energyRevenueBTC_MW - 0.3) < 1e-9, 'BTC per-MW recomputed')
 })
 
+test('getRevenueSummary monthly - rates use MEAN, totals use SUM', async (t) => {
+  const day1 = Date.UTC(2024, 0, 15)
+  const day2 = Date.UTC(2024, 0, 16)
+  const days = [
+    { ts: day1, powerW: 5_000_000, hashrateMhs: 100, btc: 0.5, price: 40000 },
+    { ts: day2, powerW: 3_000_000, hashrateMhs: 300, btc: 0.3, price: 60000 }
+  ]
+
+  const result = await getRevenueSummary(makeMockCtx(days), {
+    query: { start: day1 - 1000, end: day2 + 86400000, period: 'monthly' }
+  }, {})
+
+  t.is(result.log.length, 1, 'two days collapse to one monthly bucket')
+  const m = result.log[0]
+  t.ok(Math.abs(m.revenueBTC - 0.8) < 1e-9, 'revenueBTC summed')
+  t.is(m.consumptionMWh, 192, 'consumptionMWh summed: 120 + 72')
+  t.is(m.btcPrice, 50000, 'btcPrice averaged')
+  t.is(m.powerW, 4_000_000, 'powerW averaged')
+  t.is(m.hashrateMhs, 200, 'hashrateMhs averaged')
+})
+
+test('getCostSummary - central DCS reads site power from the DCS worker', async (t) => {
+  let captured
+  const mockCtx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: { centralDCSSetup: { enabled: true, tag: 't-dcs-custom' } }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (method === 'tailLog') {
+          captured = payload
+          return [{ ts: 1700006400000, site_power_w: 1000000 }]
+        }
+        return {}
+      }
+    },
+    globalDataLib: { getGlobalData: async () => [] }
+  })
+
+  const result = await getCostSummary(mockCtx, { query: { start: 1700000000000, end: 1700100000000 } }, {})
+  t.is(captured.type, 'dcs-siemens', 'queries the DCS worker type')
+  t.is(captured.tag, 't-dcs-custom', 'with the configured DCS tag')
+  t.is(result.log[0].consumptionMWh, 24, '1 MW over 24 h')
+})
+
 // ==================== EBITDA Tests ====================
 
 test('getEbitda - happy path', async (t) => {
@@ -413,8 +421,8 @@ test('getEbitda - happy path', async (t) => {
     },
     net_r0: {
       jRequest: async (key, method, payload) => {
-        if (method === 'tailLogCustomRangeAggr') {
-          return [{ data: { 1700006400000: { site_power_w: 5000, hashrate_mhs_5m_sum_aggr: 100000 } } }]
+        if (method === 'tailLog') {
+          return [{ ts: 1700006400000, site_power_w: 5000, hashrate_mhs_5m_sum_aggr: 100000 }]
         }
         if (method === 'getWrkExtData') {
           if (payload.query && payload.query.key === 'transactions') {
@@ -492,51 +500,6 @@ test('getEbitda - empty ork results', async (t) => {
   t.pass()
 })
 
-test('processTailLogData - processes power and hashrate', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { site_power_w: 5000, hashrate_mhs_5m_sum_aggr: 100000 } } }]
-  ]
-
-  const daily = processTailLogData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.pass()
-})
-
-test('processTailLogData - drills into .val (production shape)', (t) => {
-  const results = [
-    [
-      {
-        type: 'powermeter',
-        data: [
-          { ts: 1700006400000, val: { site_power_w: 5000 } },
-          { ts: 1700092800000, val: { site_power_w: 6000 } }
-        ]
-      },
-      {
-        type: 'miner',
-        data: [
-          { ts: 1700006400000, val: { hashrate_mhs_5m_sum_aggr: 100000 } },
-          { ts: 1700092800000, val: { hashrate_mhs_5m_sum_aggr: 120000 } }
-        ]
-      }
-    ]
-  ]
-
-  const daily = processTailLogData(results)
-  t.is(daily[1700006400000].powerW, 5000, 'extracts powerW from .val on day 1')
-  t.is(daily[1700006400000].hashrateMhs, 100000, 'extracts hashrateMhs from .val on day 1')
-  t.is(daily[1700092800000].powerW, 6000, 'extracts powerW from .val on day 2')
-  t.is(daily[1700092800000].hashrateMhs, 120000, 'extracts hashrateMhs from .val on day 2')
-  t.pass()
-})
-
-test('processTailLogData - handles error results', (t) => {
-  const results = [{ error: 'timeout' }]
-  const daily = processTailLogData(results)
-  t.is(Object.keys(daily).length, 0, 'should be empty for errors')
-  t.pass()
-})
-
 test('processEbitdaPrices - processes valid data', (t) => {
   const results = [
     [{ prices: [{ ts: 1700006400000, price: 40000 }] }]
@@ -592,8 +555,8 @@ test('getCostSummary - happy path', async (t) => {
     },
     net_r0: {
       jRequest: async (key, method, payload) => {
-        if (method === 'tailLogCustomRangeAggr') {
-          return [{ data: { 1700006400000: { site_power_w: 5000 } } }]
+        if (method === 'tailLog') {
+          return [{ ts: 1700006400000, site_power_w: 5000 }]
         }
         if (method === 'getWrkExtData') {
           return { data: [{ prices: [{ ts: 1700006400000, price: 40000 }] }] }
@@ -905,8 +868,8 @@ test('getRevenueSummary - happy path', async (t) => {
     },
     net_r0: {
       jRequest: async (key, method, payload) => {
-        if (method === 'tailLogCustomRangeAggr') {
-          return [{ data: { [dayTs]: { site_power_w: 5000, hashrate_mhs_5m_sum_aggr: 100000 } } }]
+        if (method === 'tailLog') {
+          return [{ ts: dayTs, site_power_w: 5000, hashrate_mhs_5m_sum_aggr: 100000 }]
         }
         if (method === 'getWrkExtData') {
           if (payload.query && payload.query.key === 'transactions') {
@@ -1068,8 +1031,8 @@ test('getHashRevenue - happy path', async (t) => {
     },
     net_r0: {
       jRequest: async (key, method, payload) => {
-        if (method === 'tailLogCustomRangeAggr') {
-          return [{ data: { [dayTs]: { hashrate_mhs_5m_sum_aggr: 500000000 } } }]
+        if (method === 'tailLog') {
+          return [{ ts: dayTs, hashrate_mhs_5m_sum_aggr: 500000000 }]
         }
         if (method === 'getWrkExtData') {
           if (payload.query && payload.query.key === 'transactions') {
@@ -1153,55 +1116,6 @@ test('getHashRevenue - empty ork results', async (t) => {
   const result = await getHashRevenue(mockCtx, { query: { start: 1700000000000, end: 1700100000000 } }, {})
   t.ok(result.log, 'should return log array')
   t.is(result.log.length, 0, 'log should be empty')
-  t.pass()
-})
-
-test('processHashrateData - processes object-keyed data', (t) => {
-  const results = [
-    [{ data: { 1700006400000: { hashrate_mhs_5m_sum_aggr: 500000 } } }]
-  ]
-
-  const daily = processHashrateData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  const key = Object.keys(daily)[0]
-  t.is(daily[key], 500000, 'should extract hashrate from val')
-  t.pass()
-})
-
-test('processHashrateData - processes array data', (t) => {
-  const results = [
-    [{ data: [{ ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 500000 }] }]
-  ]
-
-  const daily = processHashrateData(results)
-  t.ok(typeof daily === 'object', 'should return object')
-  t.ok(Object.keys(daily).length > 0, 'should have entries')
-  t.pass()
-})
-
-test('processHashrateData - drills into .val (production shape)', (t) => {
-  const results = [
-    [
-      {
-        type: 'miner',
-        data: [
-          { ts: 1700006400000, val: { hashrate_mhs_5m_sum_aggr: 500000 } },
-          { ts: 1700092800000, val: { hashrate_mhs_5m_sum_aggr: 600000 } }
-        ]
-      }
-    ]
-  ]
-  const daily = processHashrateData(results)
-  t.is(daily[1700006400000], 500000, 'extracts hashrate from .val on day 1')
-  t.is(daily[1700092800000], 600000, 'extracts hashrate from .val on day 2')
-  t.pass()
-})
-
-test('processHashrateData - handles error results', (t) => {
-  const results = [{ error: 'timeout' }]
-  const daily = processHashrateData(results)
-  t.is(Object.keys(daily).length, 0, 'should be empty for errors')
   t.pass()
 })
 
@@ -1428,8 +1342,8 @@ test('getEbitda - derives energy cost from consumption when the month carries no
     },
     net_r0: {
       jRequest: async (key, method, payload) => {
-        if (payload?.keys) {
-          return [[{ ts: dayTs, site_power_w: 1000000, hashrate_mhs_5m_sum_aggr: 100 }]]
+        if (method === 'tailLog') {
+          return [{ ts: dayTs, site_power_w: 1000000, hashrate_mhs_5m_sum_aggr: 100 }]
         }
         return []
       }
@@ -1461,7 +1375,7 @@ test('getEbitda - a stored energy cost is untouched by the fallback', async (t) 
     },
     net_r0: {
       jRequest: async (key, method, payload) => {
-        if (payload?.keys) return [[{ ts: dayTs, site_power_w: 1000000 }]]
+        if (method === 'tailLog') return [{ ts: dayTs, site_power_w: 1000000 }]
         return []
       }
     }
@@ -1487,7 +1401,7 @@ test('getEbitda - no cost parameters configured leaves behaviour as it is today'
     },
     net_r0: {
       jRequest: async (key, method, payload) => {
-        if (payload?.keys) return [[{ ts: dayTs, site_power_w: 1000000 }]]
+        if (method === 'tailLog') return [{ ts: dayTs, site_power_w: 1000000 }]
         return []
       }
     }
@@ -1507,11 +1421,11 @@ test('getEbitda - accepts the weekly period', async (t) => {
     globalDataLib: { getGlobalData: async () => [] },
     net_r0: {
       jRequest: async (key, method, payload) => {
-        if (payload?.keys) {
-          return [[
+        if (method === 'tailLog') {
+          return [
             { ts: 1700006400000, site_power_w: 1000000 },
             { ts: 1700092800000, site_power_w: 2000000 }
-          ]]
+          ]
         }
         return []
       }
@@ -1540,8 +1454,8 @@ function createPowerCostCtx ({ power = [], transactions = [], prices = [], costs
     conf: { orks: [{ rpcPublicKey: 'key1' }] },
     net_r0: {
       jRequest: async (key, method, payload) => {
-        if (method === 'tailLogCustomRangeAggr') {
-          return [{ type: 'powermeter', data: power, error: null }]
+        if (method === 'tailLog') {
+          return power
         }
         if (method === 'getWrkExtData') {
           if (payload.query && payload.query.key === 'transactions') return transactions
@@ -1559,8 +1473,8 @@ function createPowerCostCtx ({ power = [], transactions = [], prices = [], costs
 test('getPowerCost - rolls daily data into monthly per-MWh points', async (t) => {
   const mockCtx = createPowerCostCtx({
     power: [
-      { ts: JAN_10, val: { site_power_w: 48000000, aggrIntervals: 24 } },
-      { ts: JAN_11, val: { site_power_w: 48000000, aggrIntervals: 24 } }
+      { ts: JAN_10, site_power_w: 2000000 },
+      { ts: JAN_11, site_power_w: 2000000 }
     ],
     transactions: [
       { ts: JAN_10, transactions: [{ changed_balance: 0.5 }] },
@@ -1585,26 +1499,9 @@ test('getPowerCost - rolls daily data into monthly per-MWh points', async (t) =>
   t.pass()
 })
 
-test('getPowerCost - averages multiple same-day power entries', async (t) => {
-  const mockCtx = createPowerCostCtx({
-    power: [
-      { ts: JAN_10, val: { site_power_w: 48000000, aggrIntervals: 24 } },
-      { ts: JAN_10, val: { site_power_w: 96000000, aggrIntervals: 24 } }
-    ],
-    costs: [
-      { site: 's1', year: 2026, month: 1, energyCost: 7200, operationalCost: 0 }
-    ]
-  })
-
-  const result = await getPowerCost(mockCtx, { query: { start: JAN_1, end: JAN_31 } })
-  // day avg = mean(2 MW, 4 MW) = 3 MW -> 72 MWh for the single day
-  t.is(result.log[0].hashCostUSD, 7200 / 72, 'daily entries should be averaged, not summed')
-  t.pass()
-})
-
 test('getPowerCost - skips revenue on days without a BTC price', async (t) => {
   const mockCtx = createPowerCostCtx({
-    power: [{ ts: JAN_10, val: { site_power_w: 24000000, aggrIntervals: 24 } }],
+    power: [{ ts: JAN_10, site_power_w: 1000000 }],
     transactions: [
       { ts: JAN_10, transactions: [{ changed_balance: 1 }] },
       { ts: JAN_11, transactions: [{ changed_balance: 5 }] }
@@ -1620,7 +1517,7 @@ test('getPowerCost - skips revenue on days without a BTC price', async (t) => {
 
 test('getPowerCost - sums costs across sites and drops months outside the range', async (t) => {
   const mockCtx = createPowerCostCtx({
-    power: [{ ts: JAN_10, val: { site_power_w: 24000000, aggrIntervals: 24 } }],
+    power: [{ ts: JAN_10, site_power_w: 1000000 }],
     costs: [
       { site: 's1', year: 2026, month: 1, energyCost: 1000, operationalCost: 200 },
       { site: 's2', year: 2026, month: 1, energyCost: 800, operationalCost: 400 },
