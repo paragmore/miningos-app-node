@@ -17,7 +17,8 @@ const {
   STATUS_CODES,
   RPC_TIMEOUT,
   RPC_CONCURRENCY_LIMIT,
-  USER_SETTINGS_TYPE
+  USER_SETTINGS_TYPE,
+  CUSTOM_ALERT_CONFIG
 } = require('../../../workers/lib/constants')
 
 test('constants - SUPER_ADMIN_ROLE', (t) => {
@@ -45,7 +46,25 @@ test('constants - GLOBAL_DATA_TYPES', (t) => {
   t.is(GLOBAL_DATA_TYPES.SITE_ENERGY, 'siteEnergy', 'should have SITE_ENERGY')
   t.is(GLOBAL_DATA_TYPES.CONTAINER_SETTINGS, 'containerSettings', 'should have CONTAINER_SETTINGS')
   t.is(GLOBAL_DATA_TYPES.COST_PARAMETERS, 'costParameters', 'should have COST_PARAMETERS')
-  t.is(Object.keys(GLOBAL_DATA_TYPES).length, 5, 'should have 5 types')
+  t.is(GLOBAL_DATA_TYPES.ALERT_PARAMETERS, 'alertParameters', 'should have ALERT_PARAMETERS')
+  t.is(Object.keys(GLOBAL_DATA_TYPES).length, 6, 'should have 6 types')
+  t.pass()
+})
+
+test('constants - CUSTOM_ALERT_CONFIG', (t) => {
+  t.ok(typeof CUSTOM_ALERT_CONFIG === 'object', 'should be object')
+  t.ok(Object.keys(CUSTOM_ALERT_CONFIG).length > 0, 'should have at least one alert defined')
+
+  for (const [key, conf] of Object.entries(CUSTOM_ALERT_CONFIG)) {
+    t.ok(typeof key === 'string' && key.startsWith('custom.'), `alert key ${key} should be namespaced under custom.`)
+    t.ok(conf.configSchema && typeof conf.configSchema === 'object', `${key} should have a configSchema`)
+    t.ok(conf.configSchema.enabled && conf.configSchema.enabled.type === 'boolean', `${key} configSchema should have a boolean enabled field`)
+    t.ok(Array.isArray(conf.rackTypes) && conf.rackTypes.length > 0, `${key} should declare at least one rack type`)
+    conf.rackTypes.forEach(rackType => {
+      t.ok(['miner', 'dcs'].includes(rackType), `${key} rackType ${rackType} should be a known rack type`)
+    })
+  }
+
   t.pass()
 })
 
@@ -185,6 +204,7 @@ test('constants - all exports are defined', (t) => {
   t.ok(constants.RPC_TIMEOUT, 'should export RPC_TIMEOUT')
   t.ok(constants.RPC_CONCURRENCY_LIMIT, 'should export RPC_CONCURRENCY_LIMIT')
   t.ok(constants.USER_SETTINGS_TYPE, 'should export USER_SETTINGS_TYPE')
+  t.ok(constants.CUSTOM_ALERT_CONFIG, 'should export CUSTOM_ALERT_CONFIG')
 
   t.pass()
 })

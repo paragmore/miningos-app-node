@@ -7,14 +7,53 @@ const {
 } = require('../../constants')
 const {
   getSiteAlerts,
-  getAlertsHistory
+  getAlertsHistory,
+  getAlertConf,
+  getAlertParams,
+  setAlertParams
 } = require('../handlers/alerts.handlers')
-const { createCachedAuthRoute } = require('../lib/routeHelpers')
+const { createAuthRoute, createCachedAuthRoute } = require('../lib/routeHelpers')
 
 module.exports = (ctx) => {
   const schemas = require('../schemas/alerts.schemas.js')
 
   return [
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.ALERTS_CONFIG,
+      schema: {
+        querystring: schemas.query.alertsConfig
+      },
+      ...createCachedAuthRoute(
+        ctx,
+        ['alerts/config'],
+        ENDPOINTS.ALERTS_CONFIG,
+        getAlertConf,
+        [AUTH_PERMISSIONS.ALERT_CONFIG]
+      )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.ALERTS_PARAMS,
+      schema: {
+        querystring: schemas.query.alertsParams
+      },
+      ...createCachedAuthRoute(
+        ctx,
+        ['alerts/params'],
+        ENDPOINTS.ALERTS_PARAMS,
+        getAlertParams,
+        [AUTH_PERMISSIONS.ALERT_CONFIG]
+      )
+    },
+    {
+      method: HTTP_METHODS.POST,
+      url: ENDPOINTS.ALERTS_PARAMS,
+      schema: {
+        body: schemas.body.setAlertParams
+      },
+      ...createAuthRoute(ctx, setAlertParams, [AUTH_PERMISSIONS.ALERT_CONFIG])
+    },
     {
       method: HTTP_METHODS.GET,
       url: ENDPOINTS.ALERTS_SITE,

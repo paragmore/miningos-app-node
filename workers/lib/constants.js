@@ -5,7 +5,8 @@ const GLOBAL_DATA_TYPES = {
   COST_PARAMETERS: 'costParameters',
   FEATURES: 'features',
   SITE_ENERGY: 'siteEnergy',
-  CONTAINER_SETTINGS: 'containerSettings'
+  CONTAINER_SETTINGS: 'containerSettings',
+  ALERT_PARAMETERS: 'alertParameters'
 }
 
 const LCOE_SOURCES = ['current', 'custom']
@@ -43,7 +44,9 @@ const AUTH_PERMISSIONS = {
   FORECAST: 'forecast',
   POOL_CONFIG: 'pool_config',
   POOL_CONFIG_APPROVE: 'pool_config_approve',
-  WORK_ORDER: 'work_order'
+  WORK_ORDER: 'work_order',
+  ALERT_CONFIG: 'alert_config',
+  ALERT_CONFIG_SENSITIVE: 'alert_config_sensitive'
 }
 
 const WORK_ORDER_THING_TYPE = 'inventory-work_order'
@@ -199,6 +202,8 @@ const ENDPOINTS = {
   // Alerts endpoints
   ALERTS_SITE: '/auth/alerts/site',
   ALERTS_HISTORY: '/auth/alerts/history',
+  ALERTS_CONFIG: '/auth/alerts/config',
+  ALERTS_PARAMS: '/auth/alerts/params',
 
   MINERS: '/auth/miners',
   CONTAINER_MINERS: '/auth/containers/:id/miners',
@@ -325,7 +330,8 @@ const RPC_METHODS = {
   TAIL_LOG: 'tailLog',
   TAIL_LOG_MULTI: 'tailLogMulti',
   GLOBAL_CONFIG: 'getGlobalConfig',
-  GET_CONFIGS: 'getConfigs'
+  GET_CONFIGS: 'getConfigs',
+  SET_ALERT_PARAMS: 'setAlertParams'
 }
 
 const WORKER_TYPES = {
@@ -805,6 +811,8 @@ const RPC_RETRY_DELAY = 100
 const RPC_RETRYABLE_METHODS = new Set([
   'getAction',
   'getActionsBatch',
+  'getAlertConf',
+  'getAlertParams',
   'getConfigs',
   'getGlobalConfig',
   'getHistoricalLogs',
@@ -988,6 +996,191 @@ const EXPLORER_RACK_DEFAULT_LIMIT = 20
 const EXPLORER_RACK_MAX_LIMIT = 100
 const MICROSOFT_AUTH_SCOPE = ['openid', 'profile', 'email', 'User.Read']
 
+const CUSTOM_ALERT_CONFIG = {
+  'custom.low_hashrate.warning': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      minHashRateMhs: {
+        type: 'number'
+      }
+    },
+    rackTypes: ['miner']
+  },
+  'custom.low_hashrate.critical': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      minHashRateMhs: {
+        type: 'number'
+      }
+    },
+    rackTypes: ['miner']
+  },
+  'custom.high_board_temp.warning': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      maxTempC: {
+        type: 'number'
+      }
+    },
+    rackTypes: ['miner']
+  },
+  'custom.high_board_temp.critical': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      maxTempC: {
+        type: 'number'
+      }
+    },
+    rackTypes: ['miner']
+  },
+  'custom.high_supply_temp.warning': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      maxTempC: {
+        type: 'number'
+      }
+    },
+    rackTypes: ['dcs']
+  },
+  'custom.high_supply_temp.critical': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      maxTempC: {
+        type: 'number'
+      }
+    },
+    rackTypes: ['dcs']
+  },
+  'custom.high_differential_pressure.warning': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      maxPressureBar: {
+        type: 'number'
+      }
+    },
+    rackTypes: ['dcs']
+  },
+  'custom.high_differential_pressure.critical': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      maxPressureBar: {
+        type: 'number'
+      }
+    },
+    rackTypes: ['dcs']
+  },
+  'custom.low_tank_level.warning': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      minLevelPct: {
+        type: 'number'
+      }
+    },
+    rackTypes: ['dcs']
+  },
+  'custom.low_tank_level.critical': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      minLevelPct: {
+        type: 'number'
+      }
+    },
+    rackTypes: ['dcs']
+  },
+  'custom.high_site_power.warning': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      maxSitePowerMW: {
+        type: 'number'
+      }
+    },
+    rackTypes: ['dcs']
+  },
+  'custom.high_site_power.critical': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      maxSitePowerMW: {
+        type: 'number'
+      }
+    },
+    rackTypes: ['dcs']
+  },
+  'custom.tower_vibration.critical': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      onError: {
+        type: 'boolean'
+      }
+    },
+    rackTypes: ['dcs']
+  }
+}
+
 module.exports = {
   SUPER_ADMIN_ROLE,
   GLOBAL_DATA_TYPES,
@@ -1094,5 +1287,6 @@ module.exports = {
   WORK_ORDER_EXPORT_FORMATS,
   RMA_COLUMNS,
   MINER_MODEL_DISPLAY_NAMES,
-  MICROSOFT_AUTH_SCOPE
+  MICROSOFT_AUTH_SCOPE,
+  CUSTOM_ALERT_CONFIG
 }

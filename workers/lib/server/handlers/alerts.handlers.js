@@ -14,7 +14,11 @@ const {
   ALERTS_FILTER_OPERATORS,
   MINER_TYPE_REGEX,
   HISTORY_ALERTS_QUERY_MAP,
-  ALERT_EXT_DATA_WORKER_TYPES
+  ALERT_EXT_DATA_WORKER_TYPES,
+  GLOBAL_DATA_TYPES,
+  CUSTOM_ALERT_CONFIG,
+  AUTH_PERMISSIONS,
+  AUTH_LEVELS
 } = require('../../constants')
 const { parseJsonQueryParam, validateFilter, applyMongoFilter, combineAnd, deduplicateAlerts } = require('../../utils')
 
@@ -195,6 +199,66 @@ async function getSiteAlerts (ctx, req) {
   return { alerts, summary, total }
 }
 
+async function getAlertConf (ctx) {
+  return CUSTOM_ALERT_CONFIG
+}
+
+async function getAlertParams (ctx) {
+  return await ctx.globalDataLib.getGlobalData({
+    type: GLOBAL_DATA_TYPES.ALERT_PARAMETERS
+  })
+}
+
+// Users without the sensitive permission may only change `notes`; every other
+// field is taken from the existing stored config, ignoring what was submitted.
+function restrictToNotesOnly (submittedData, existingConfig) {
+  const notesOnlyData = {}
+  for (const alertKey in submittedData) {
+    notesOnlyData[alertKey] = {
+      ...(existingConfig?.[alertKey] ?? {}),
+      notes: submittedData[alertKey]?.notes
+    }
+  }
+  return notesOnlyData
+}
+
+async function setAlertParams (ctx, req) {
+  const type = GLOBAL_DATA_TYPES.ALERT_PARAMETERS
+
+  const sensitivePerm = `${AUTH_PERMISSIONS.ALERT_CONFIG_SENSITIVE}:${AUTH_LEVELS.WRITE}`
+  const hasSensitivePerm = await ctx.authLib.tokenHasPerms(req._info.authToken, false, [sensitivePerm])
+
+  let data = req.body.data
+  if (!hasSensitivePerm) {
+    const [existingConfig] = await ctx.globalDataLib.getGlobalData({ type })
+    data = restrictToNotesOnly(data, existingConfig)
+  }
+
+  const byRackType = {}
+  for (const alertKey in data) {
+    const params = data[alertKey]
+
+    const { rackTypes } = CUSTOM_ALERT_CONFIG[alertKey] ?? {}
+    if (!rackTypes) {
+      continue
+    }
+
+    for (const rackType of rackTypes) {
+      if (!byRackType[rackType]) {
+        byRackType[rackType] = {}
+      }
+
+      byRackType[rackType][alertKey] = params
+    }
+  }
+
+  const res = await ctx.globalDataLib.setGlobalData(data, type)
+  ctx.dataProxy.requestDataMap(RPC_METHODS.SET_ALERT_PARAMS, { byRackType }).catch((error) => {
+    console.error('setAlertParams failed.', error)
+  })
+  return res
+}
+
 async function getAlertsHistory (ctx, req) {
   const start = Number(req.query.start)
   const end = Number(req.query.end)
@@ -244,6 +308,10 @@ async function getAlertsHistory (ctx, req) {
 module.exports = {
   getSiteAlerts,
   getAlertsHistory,
+  getAlertConf,
+  getAlertParams,
+  setAlertParams,
+  restrictToNotesOnly,
   extractAlertsFromThings,
   matchesSearch,
   applySort,

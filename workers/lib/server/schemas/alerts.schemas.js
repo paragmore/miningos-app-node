@@ -2,6 +2,18 @@
 
 const schemas = {
   query: {
+    alertsConfig: {
+      type: 'object',
+      properties: {
+        overwriteCache: { type: 'boolean' }
+      }
+    },
+    alertsParams: {
+      type: 'object',
+      properties: {
+        overwriteCache: { type: 'boolean' }
+      }
+    },
     siteAlerts: {
       type: 'object',
       properties: {
@@ -28,6 +40,17 @@ const schemas = {
         overwriteCache: { type: 'boolean' }
       },
       required: ['start', 'end']
+    }
+  },
+  body: {
+    setAlertParams: {
+      type: 'object',
+      properties: {
+        data: {
+          type: 'object'
+        }
+      },
+      required: ['data']
     }
   }
 }

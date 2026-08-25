@@ -26,6 +26,8 @@
       "ticket:rw",
       "pool_config:rw",
       "pool_config_approve:rw",
+      "alert_config:rw",
+      "alert_config_sensitive:rw",
       "work_order:rw"
     ],
     "roles": {
@@ -53,6 +55,8 @@
         "ticket:rw",
         "pool_config:rw",
         "pool_config_approve:rw",
+        "alert_config:rw",
+        "alert_config_sensitive:rw",
         "work_order:rw"
       ],
       "admin_external": [
@@ -78,8 +82,10 @@
         "settings:r",
         "ticket:r",
         "pool_config:r",
+        "alert_config:rw",
+        "alert_config_sensitive:rw",
         "work_order:r"
-      ],      
+      ],
       "reporting_tool_manager": [
         "revenue:rw",
         "production:rw",
@@ -111,6 +117,8 @@
         "settings:rw",
         "ticket:rw",
         "work_order:rw",
+        "alert_config:rw",
+        "alert_config_sensitive:r",
         "pool_config:r"
       ],
       "site_operator": [
