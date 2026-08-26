@@ -89,7 +89,6 @@ async function getEnergyBalance (ctx, req) {
   const dailyPrices = processPriceData(priceResults)
   const currentBtcPrice = extractCurrentPrice(currentPriceResults)
   const costsByMonth = processCostsData(productionCosts)
-  const lcoeUsdPerMwh = resolveLcoeUsdPerMwh(costParameters)
   const dailyActiveEnergyIn = processEnergyData(activeEnergyInResults, AGGR_FIELDS.ACTIVE_ENERGY_IN)
   const dailyUteEnergy = processEnergyData(uteEnergyResults, AGGR_FIELDS.UTE_ENERGY)
   const nominalPowerMW = extractNominalPower(globalConfigResults)
@@ -113,7 +112,7 @@ async function getEnergyBalance (ctx, req) {
 
     const monthKey = `${new Date(ts).getFullYear()}-${String(new Date(ts).getMonth() + 1).padStart(2, '0')}`
     const costs = costsByMonth[monthKey] || {}
-    const energyCostUSD = resolveEnergyCostsUSD(costs, powerMWh, lcoeUsdPerMwh)
+    const energyCostUSD = resolveEnergyCostsUSD(costs, powerMWh, resolveLcoeUsdPerMwh(costParameters, monthKey))
     const totalCostUSD = energyCostUSD + (costs.operationalCostPerDay || 0)
 
     const activeEnergyIn = dailyActiveEnergyIn[dayTs] || 0
@@ -347,7 +346,6 @@ async function getEbitda (ctx, req) {
   const dailyPrices = processEbitdaPrices(priceResults)
   const currentBtcPrice = extractCurrentPrice(currentPriceResults)
   const costsByMonth = processCostsData(productionCosts)
-  const lcoeUsdPerMwh = resolveLcoeUsdPerMwh(costParameters)
 
   const allDays = new Set([
     ...Object.keys(dailyTransactions),
@@ -369,7 +367,7 @@ async function getEbitda (ctx, req) {
 
     const monthKey = `${new Date(ts).getFullYear()}-${String(new Date(ts).getMonth() + 1).padStart(2, '0')}`
     const costs = costsByMonth[monthKey] || {}
-    const energyCostsUSD = resolveEnergyCostsUSD(costs, powerMWh, lcoeUsdPerMwh)
+    const energyCostsUSD = resolveEnergyCostsUSD(costs, powerMWh, resolveLcoeUsdPerMwh(costParameters, monthKey))
     const operationalCostsUSD = costs.operationalCostPerDay || 0
     const totalCostsUSD = energyCostsUSD + operationalCostsUSD
 
@@ -489,7 +487,6 @@ async function getCostSummary (ctx, req) {
   ])
 
   const costsByMonth = processCostsData(productionCosts)
-  const lcoeUsdPerMwh = resolveLcoeUsdPerMwh(costParameters)
   const dailyPrices = processEbitdaPrices(priceResults)
 
   const allDays = new Set([
@@ -507,7 +504,7 @@ async function getCostSummary (ctx, req) {
 
     const monthKey = `${new Date(ts).getFullYear()}-${String(new Date(ts).getMonth() + 1).padStart(2, '0')}`
     const costs = costsByMonth[monthKey] || {}
-    const energyCostsUSD = resolveEnergyCostsUSD(costs, consumptionMWh, lcoeUsdPerMwh)
+    const energyCostsUSD = resolveEnergyCostsUSD(costs, consumptionMWh, resolveLcoeUsdPerMwh(costParameters, monthKey))
     const operationalCostsUSD = costs.operationalCostPerDay || 0
     const totalCostsUSD = energyCostsUSD + operationalCostsUSD
 
@@ -801,7 +798,6 @@ async function getRevenueSummary (ctx, req) {
   const dailyPrices = processEbitdaPrices(priceResults)
   const currentBtcPrice = extractCurrentPrice(currentPriceResults)
   const costsByMonth = processCostsData(productionCosts)
-  const lcoeUsdPerMwh = resolveLcoeUsdPerMwh(costParameters)
   const dailyBlocks = processBlockData(blockResults)
   const dailyActiveEnergyIn = processEnergyData(activeEnergyInResults, AGGR_FIELDS.ACTIVE_ENERGY_IN)
   const dailyUteEnergy = processEnergyData(uteEnergyResults, AGGR_FIELDS.UTE_ENERGY)
@@ -833,7 +829,7 @@ async function getRevenueSummary (ctx, req) {
 
     const monthKey = `${new Date(ts).getFullYear()}-${String(new Date(ts).getMonth() + 1).padStart(2, '0')}`
     const costs = costsByMonth[monthKey] || {}
-    const energyCostsUSD = resolveEnergyCostsUSD(costs, consumptionMWh, lcoeUsdPerMwh)
+    const energyCostsUSD = resolveEnergyCostsUSD(costs, consumptionMWh, resolveLcoeUsdPerMwh(costParameters, monthKey))
     const operationalCostsUSD = costs.operationalCostPerDay || 0
     const totalCostsUSD = energyCostsUSD + operationalCostsUSD
 
@@ -1379,8 +1375,16 @@ async function getCostParameters (ctx) {
   return (params && typeof params === 'object') ? params : {}
 }
 
-function resolveLcoeUsdPerMwh (costParameters) {
-  const lcoe = costParameters?.lcoe
+// Cost parameters are stored as site defaults plus an `overrides` map keyed 'YYYY-MM'. A month with
+// no override resolves to the base doc, so past figures never move.
+function resolveCostParametersForMonth (costParameters, monthKey) {
+  const override = monthKey ? costParameters?.overrides?.[monthKey] : null
+  if (!override) return costParameters || {}
+  return { ...costParameters, ...override, lcoe: { ...costParameters?.lcoe, ...override.lcoe } }
+}
+
+function resolveLcoeUsdPerMwh (costParameters, monthKey) {
+  const lcoe = resolveCostParametersForMonth(costParameters, monthKey).lcoe
   const value = Number(lcoe?.effectiveUsdPerMwh)
   return Number.isFinite(value) && value >= 0 ? value : 0
 }
@@ -1410,6 +1414,7 @@ module.exports = {
   sumCostsByMonth,
   getProductionCosts,
   getCostParameters,
+  resolveCostParametersForMonth,
   resolveLcoeUsdPerMwh,
   resolveEnergyCostsUSD,
   processPriceData,

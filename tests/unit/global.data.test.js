@@ -720,3 +720,86 @@ test('GlobalDataLib - production costs are unaffected by the cost parameters typ
 
   t.pass()
 })
+
+test('GlobalDataLib - monthly cost parameter overrides merge into the singleton', async function (t) {
+  const Corestore = require('corestore')
+  const Hyperbee = require('hyperbee')
+  const os = require('os')
+  const path = require('path')
+  const fs = require('fs')
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mos-global-data-'))
+  const store = new Corestore(dir)
+  const bee = new Hyperbee(store.get({ name: 'global-data' }), { keyEncoding: 'utf-8' })
+  await bee.ready()
+
+  t.teardown(async () => {
+    await bee.close()
+    await store.close()
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  const globalDataLib = new GlobalDataLib(bee, 'test-site')
+  const read = () => globalDataLib.getGlobalData({ type: GLOBAL_DATA_TYPES.COST_PARAMETERS })
+
+  await globalDataLib.setGlobalData({
+    minerAmortizationUsd: 45000,
+    marginPct: 8,
+    lcoe: { source: 'current', customUsdPerMwh: null, effectiveUsdPerMwh: 42 }
+  }, GLOBAL_DATA_TYPES.COST_PARAMETERS)
+
+  t.absent((await read()).overrides, 'a base-only save writes no overrides key')
+
+  await globalDataLib.setGlobalData({
+    year: 2026,
+    month: 8,
+    marginPct: 10,
+    lcoe: { source: 'custom', customUsdPerMwh: 51, effectiveUsdPerMwh: 51 }
+  }, GLOBAL_DATA_TYPES.COST_PARAMETERS)
+
+  const withOverride = await read()
+  t.is(withOverride.marginPct, 8, 'base fields untouched by an override save')
+  t.is(withOverride.minerAmortizationUsd, 45000, 'other base fields survive too')
+  t.alike(withOverride.overrides, {
+    '2026-08': { marginPct: 10, lcoe: { source: 'custom', customUsdPerMwh: 51, effectiveUsdPerMwh: 51 } }
+  }, 'override stored under the YYYY-MM key, without year/month')
+
+  await globalDataLib.setGlobalData({ year: 2026, month: 12, marginPct: 3 }, GLOBAL_DATA_TYPES.COST_PARAMETERS)
+  t.alike(Object.keys((await read()).overrides).sort(), ['2026-08', '2026-12'], 'months accumulate')
+
+  await globalDataLib.setGlobalData({ marginPct: 12 }, GLOBAL_DATA_TYPES.COST_PARAMETERS)
+  const rebased = await read()
+  t.is(rebased.marginPct, 12, 'a base re-save replaces the base fields')
+  t.absent(rebased.minerAmortizationUsd, 'base re-save still replaces rather than merges')
+  t.alike(Object.keys(rebased.overrides).sort(), ['2026-08', '2026-12'], 'base re-save keeps the overrides')
+
+  await globalDataLib.setGlobalData({
+    year: 2026, month: 8, marginPct: null, lcoe: null, minerAmortizationUsd: null
+  }, GLOBAL_DATA_TYPES.COST_PARAMETERS)
+  t.alike(Object.keys((await read()).overrides), ['2026-12'], 'an all-null override payload resets that month')
+
+  await globalDataLib.setGlobalData({ year: 2026, month: 12 }, GLOBAL_DATA_TYPES.COST_PARAMETERS)
+  t.alike((await read()).overrides, {}, 'a bare year/month payload resets the month too')
+
+  t.pass()
+})
+
+test('GlobalDataLib - override payloads are validated like the base payload', async function (t) {
+  const globalDataLib = new GlobalDataLib(mockGlobalDataBee, 'test-site')
+  const set = (data) => globalDataLib.setGlobalData(data, GLOBAL_DATA_TYPES.COST_PARAMETERS)
+
+  await t.exception(() => set({ year: 2026.5, month: 8 }), /ERR_INVALID_YEAR/, 'non-integer year')
+  await t.exception(() => set({ year: -1, month: 8 }), /ERR_INVALID_YEAR/, 'negative year')
+  await t.exception(() => set({ month: 8, marginPct: 5 }), /ERR_INVALID_YEAR/, 'month without year')
+  await t.exception(() => set({ year: 2026, month: 0 }), /ERR_INVALID_MONTH/, 'month below range')
+  await t.exception(() => set({ year: 2026, month: 13 }), /ERR_INVALID_MONTH/, 'month above range')
+
+  await t.exception(() => set({ year: 2026, month: 8, marginPct: 200 }), /ERR_INVALID_MARGIN/, 'margin out of range')
+  await t.exception(() => set({ year: 2026, month: 8, minerAmortizationUsd: -1 }), /ERR_INVALID_AMORTIZATION/, 'negative amortization')
+  await t.exception(() => set({ year: 2026, month: 8, lcoe: { source: 'nope' } }), /ERR_INVALID_LCOE_SOURCE/, 'unknown lcoe source')
+  await t.exception(() => set({ year: 2026, month: 8, lcoe: { source: 'custom' } }), /ERR_LCOE_COST_REQUIRED/, 'custom source needs a value')
+
+  t.is(await set({ year: 2026, month: 8, marginPct: 10 }), true, 'a valid override saves')
+
+  t.pass()
+})

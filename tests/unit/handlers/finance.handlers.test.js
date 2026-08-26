@@ -5,6 +5,7 @@ const {
   getEnergyBalance,
   getCostParameters,
   resolveLcoeUsdPerMwh,
+  resolveCostParametersForMonth,
   resolveEnergyCostsUSD,
   processPriceData,
   processCostsData,
@@ -1583,5 +1584,100 @@ test('processDailyAvgPrices - averages price points within a day', (t) => {
 test('getStartOfMonthUtc - buckets to UTC month start', (t) => {
   t.is(getStartOfMonthUtc(JAN_10), JAN_1)
   t.is(getStartOfMonthUtc(JAN_1), JAN_1)
+  t.pass()
+})
+
+test('resolveCostParametersForMonth - a month without an override resolves to the base doc', (t) => {
+  const base = { marginPct: 8, lcoe: { source: 'current', effectiveUsdPerMwh: 42 } }
+
+  t.alike(resolveCostParametersForMonth(base, '2026-08'), base, 'no overrides map at all')
+  t.alike(resolveCostParametersForMonth(base), base, 'no month key')
+  t.alike(resolveCostParametersForMonth({ ...base, overrides: {} }, '2026-08'), { ...base, overrides: {} }, 'empty overrides map')
+  t.alike(resolveCostParametersForMonth({ ...base, overrides: { '2026-09': { marginPct: 1 } } }, '2026-08'), { ...base, overrides: { '2026-09': { marginPct: 1 } } }, 'a different month is overridden')
+  t.alike(resolveCostParametersForMonth(undefined, '2026-08'), {}, 'no parameters at all')
+  t.pass()
+})
+
+test('resolveCostParametersForMonth - an override merges over the base, lcoe one level deep', (t) => {
+  const base = {
+    minerAmortizationUsd: 45000,
+    marginPct: 8,
+    lcoe: { source: 'current', customUsdPerMwh: null, effectiveUsdPerMwh: 42 },
+    overrides: { '2026-08': { marginPct: 10, lcoe: { source: 'custom', customUsdPerMwh: 51, effectiveUsdPerMwh: 51 } } }
+  }
+
+  const merged = resolveCostParametersForMonth(base, '2026-08')
+  t.is(merged.marginPct, 10, 'override wins')
+  t.is(merged.minerAmortizationUsd, 45000, 'untouched base fields survive')
+  t.is(merged.lcoe.effectiveUsdPerMwh, 51, 'override lcoe wins')
+
+  const partial = resolveCostParametersForMonth({
+    ...base,
+    overrides: { '2026-08': { lcoe: { effectiveUsdPerMwh: 99 } } }
+  }, '2026-08')
+  t.is(partial.lcoe.effectiveUsdPerMwh, 99, 'partial lcoe override wins')
+  t.is(partial.lcoe.source, 'current', 'unset lcoe keys fall back to the base')
+  t.is(partial.marginPct, 8, 'base margin kept when the override omits it')
+  t.pass()
+})
+
+test('resolveLcoeUsdPerMwh - resolves per month, base untouched', (t) => {
+  const params = {
+    lcoe: { effectiveUsdPerMwh: 42 },
+    overrides: { '2026-08': { lcoe: { effectiveUsdPerMwh: 60 } } }
+  }
+
+  t.is(resolveLcoeUsdPerMwh(params, '2026-08'), 60, 'overridden month')
+  t.is(resolveLcoeUsdPerMwh(params, '2026-07'), 42, 'month without an override keeps the base')
+  t.is(resolveLcoeUsdPerMwh(params), 42, 'no month key behaves exactly as before')
+  t.is(resolveLcoeUsdPerMwh({ overrides: { '2026-08': { lcoe: { effectiveUsdPerMwh: -5 } } } }, '2026-08'), 0, 'an unusable override still falls back to zero')
+  t.pass()
+})
+
+test('getEbitda - a monthly LCOE override only moves its own month', async (t) => {
+  const octTs = 1697068800000 // 2023-10-12
+  const novTs = 1700006400000 // 2023-11-15
+
+  const buildCtx = (costParameters) => withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    globalDataLib: {
+      getGlobalData: async ({ type }) => {
+        if (type === 'costParameters') return costParameters
+        return [
+          { site: 's', year: 2023, month: 10, operationalCost: 3100 },
+          { site: 's', year: 2023, month: 11, operationalCost: 3000 }
+        ]
+      }
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (payload?.keys) {
+          return [[
+            { ts: octTs, site_power_w: 1000000, hashrate_mhs_5m_sum_aggr: 100 },
+            { ts: novTs, site_power_w: 1000000, hashrate_mhs_5m_sum_aggr: 100 }
+          ]]
+        }
+        return []
+      }
+    }
+  })
+
+  const query = { query: { start: 1693526400000, end: 1700200000000, period: 'daily' } }
+  const base = { lcoe: { source: 'current', customUsdPerMwh: null, effectiveUsdPerMwh: 42 } }
+
+  const overridden = await getEbitda(buildCtx({
+    ...base,
+    overrides: { '2023-11': { lcoe: { source: 'custom', customUsdPerMwh: 60, effectiveUsdPerMwh: 60 } } }
+  }), query)
+
+  t.is(overridden.log.length, 2, 'one entry per day')
+  t.is(overridden.log[0].energyCostsUSD, 1008, 'October uses the base LCOE (24 MWh x 42)')
+  t.is(overridden.log[1].energyCostsUSD, 1440, 'November uses its override (24 MWh x 60)')
+
+  const plain = await getEbitda(buildCtx(base), query)
+  t.is(plain.log[0].energyCostsUSD, 1008, 'no overrides: October unchanged')
+  t.is(plain.log[1].energyCostsUSD, 1008, 'no overrides: November falls back to the base too')
+  t.alike(plain, await getEbitda(buildCtx({ ...base, overrides: {} }), query), 'an empty overrides map changes nothing')
+
   t.pass()
 })
