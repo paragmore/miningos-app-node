@@ -44,7 +44,7 @@ function assertActionApplied (results, errCode) {
   const errors = (results || []).flatMap(r => r?.errors || [])
   if (errors.length) {
     const err = new Error(`${errCode}:${errors.join(',')}`)
-    err.statusCode = 502
+    err.statusCode = 409
     throw err
   }
 }
@@ -69,7 +69,7 @@ async function assertActionsExecuted (ctx, req, errCode) {
         .flatMap(target => (target.calls || []).map(call => call.error).filter(Boolean)))
       if (!errors.length) return
       const err = new Error(`${errCode}:${errors.join(',')}`)
-      err.statusCode = 502
+      err.statusCode = 409
       throw err
     }
 

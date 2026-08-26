@@ -115,7 +115,7 @@ async function updateSparePart (ctx, req) {
   const partPushErrors = _pushErrors(partResults)
   if (partPushErrors.length) {
     const err = new Error(`ERR_PART_UPDATE_PUSH_FAILED:${partPushErrors.join(',')}`)
-    err.statusCode = 502
+    err.statusCode = 409
     err.detail = { stage: 'part', partAction: null, workOrderAction: null }
     throw err
   }
