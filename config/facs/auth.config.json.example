@@ -136,7 +136,8 @@
         "settings:rw",
         "ticket:rw",
         "alerts:rw",
-        "work_order:rw"
+        "work_order:rw",
+        "forecast:r"
       ],
       "field_operator": [
         "miner:r",
