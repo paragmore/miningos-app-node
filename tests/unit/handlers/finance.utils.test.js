@@ -73,7 +73,63 @@ test('normalizeTimestampMs - ms passthrough', (t) => {
   t.pass()
 })
 
+test('normalizeTimestampMs - Ocean ISO-8601 string without a timezone is read as UTC', (t) => {
+  t.is(normalizeTimestampMs('2026-05-28T16:46:30'), Date.UTC(2026, 4, 28, 16, 46, 30))
+  t.pass()
+})
+
+test('normalizeTimestampMs - ISO-8601 string with an explicit zone keeps that zone', (t) => {
+  t.is(normalizeTimestampMs('2026-05-28T16:46:30Z'), Date.UTC(2026, 4, 28, 16, 46, 30))
+  t.is(normalizeTimestampMs('2026-05-28T16:46:30+02:00'), Date.UTC(2026, 4, 28, 14, 46, 30))
+  t.pass()
+})
+
+test('normalizeTimestampMs - numeric strings normalize like numbers', (t) => {
+  t.is(normalizeTimestampMs('1700006400'), 1700006400000, 'seconds as a string')
+  t.is(normalizeTimestampMs('1700006400000'), 1700006400000, 'ms as a string')
+  t.pass()
+})
+
+test('normalizeTimestampMs - unparseable input returns 0 rather than NaN', (t) => {
+  t.is(normalizeTimestampMs('not-a-date'), 0)
+  t.is(normalizeTimestampMs(NaN), 0)
+  t.is(normalizeTimestampMs(Infinity), 0)
+  t.is(normalizeTimestampMs({}), 0)
+  t.pass()
+})
+
 // ==================== processTransactions ====================
+
+test('processTransactions - Ocean earnings dated by ISO string are not dropped', (t) => {
+  const results = [
+    [{
+      ts: 1779926400000,
+      transactions: [
+        { ts: '2026-05-28T16:46:30', satoshis_net_earned: 2632155, fees_colected_satoshis: 27238 }
+      ]
+    }]
+  ]
+
+  const daily = processTransactions(results, { trackFees: true })
+  const day = daily[Date.UTC(2026, 4, 28)]
+  t.ok(day, 'the ISO-dated earning lands on its own UTC day')
+  t.is(day.revenueBTC, 2632155 / 1e8)
+  t.is(day.feesBTC, 27238 / 1e8)
+  t.pass()
+})
+
+test('processTransactions - mixed f2pool and Ocean racks both contribute', (t) => {
+  const results = [
+    [{ transactions: [{ created_at: 1785621600, changed_balance: 0.0001, mining_extra: { tx_fee: 0.000001 } }] }],
+    [{ transactions: [{ ts: '2026-05-28T16:46:30', satoshis_net_earned: 100000000 }] }]
+  ]
+
+  const daily = processTransactions(results, { trackFees: true })
+  const total = Object.values(daily).reduce((sum, d) => sum + d.revenueBTC, 0)
+  t.is(Object.keys(daily).length, 2, 'one day per pool')
+  t.is(total, 1.0001, 'both pools counted')
+  t.pass()
+})
 
 test('processTransactions - Ocean data (sats)', (t) => {
   const results = [

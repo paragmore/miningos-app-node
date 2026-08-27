@@ -49,9 +49,9 @@ const aggregateByPeriod = (log, period, nonMetricKeys = [], options = {}) => {
     let groupKey
 
     if (period === PERIOD_TYPES.MONTHLY) {
-      groupKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+      groupKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`
     } else if (period === PERIOD_TYPES.YEARLY) {
-      groupKey = `${date.getFullYear()}`
+      groupKey = `${date.getUTCFullYear()}`
     } else if (period === PERIOD_TYPES.WEEKLY) {
       const day = date.getUTCDay()
       const diff = date.getUTCDate() - day
@@ -97,7 +97,7 @@ const aggregateByPeriod = (log, period, nonMetricKeys = [], options = {}) => {
       if (period === PERIOD_TYPES.MONTHLY) {
         const [year, month] = groupKey.split('-').map(Number)
 
-        const newDate = new Date(year, month - 1, 1)
+        const newDate = new Date(Date.UTC(year, month - 1, 1))
         if (isNaN(newDate.getTime())) {
           throw new Error(`Invalid date for monthly grouping: ${groupKey}`)
         }
@@ -105,11 +105,11 @@ const aggregateByPeriod = (log, period, nonMetricKeys = [], options = {}) => {
         aggregated.ts = newDate.getTime()
         aggregated.month = month
         aggregated.year = year
-        aggregated.monthName = newDate.toLocaleString('en-US', { month: 'long' })
+        aggregated.monthName = newDate.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })
       } else if (period === PERIOD_TYPES.YEARLY) {
         const year = parseInt(groupKey)
 
-        const newDate = new Date(year, 0, 1)
+        const newDate = new Date(Date.UTC(year, 0, 1))
         if (isNaN(newDate.getTime())) {
           throw new Error(`Invalid date for yearly grouping: ${groupKey}`)
         }

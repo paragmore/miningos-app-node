@@ -110,7 +110,7 @@ async function getEnergyBalance (ctx, req) {
     const revenueBTC = transactions.revenueBTC || 0
     const revenueUSD = revenueBTC * btcPrice
 
-    const monthKey = `${new Date(ts).getFullYear()}-${String(new Date(ts).getMonth() + 1).padStart(2, '0')}`
+    const monthKey = getMonthKeyUtc(ts)
     const costs = costsByMonth[monthKey] || {}
     const energyCostUSD = resolveEnergyCostsUSD(costs, powerMWh, resolveLcoeUsdPerMwh(costParameters, monthKey))
     const totalCostUSD = energyCostUSD + (costs.operationalCostPerDay || 0)
@@ -156,7 +156,10 @@ async function getEnergyBalance (ctx, req) {
   }
 
   const aggregated = aggregateByPeriod(log, period, [], {
-    meanKeys: ['sitePowerMW', 'btcPrice', 'curtailmentRate', 'operationalIssuesRate', 'powerUtilization']
+    meanKeys: [
+      'sitePowerMW', 'powerW', 'btcPrice', 'energyRevenuePerMWh', 'allInCostPerMWh',
+      'curtailmentRate', 'operationalIssuesRate', 'powerUtilization'
+    ]
   })
 
   for (const entry of aggregated) {
@@ -327,7 +330,7 @@ async function getEbitda (ctx, req) {
 
     (cb) => ctx.dataProxy.requestData(RPC_METHODS.GET_WRK_EXT_DATA, {
       type: WORKER_TYPES.MEMPOOL,
-      query: { key: 'prices', start, end }
+      query: { key: 'HISTORICAL_PRICES', start, end }
     }).then(r => cb(null, r)).catch(cb),
 
     (cb) => ctx.dataProxy.requestData(RPC_METHODS.GET_WRK_EXT_DATA, {
@@ -365,7 +368,7 @@ async function getEbitda (ctx, req) {
     const hashrateMhs = dailyHashrate[dayTs] || 0
     const powerMWh = (powerW * 24) / 1000000
 
-    const monthKey = `${new Date(ts).getFullYear()}-${String(new Date(ts).getMonth() + 1).padStart(2, '0')}`
+    const monthKey = getMonthKeyUtc(ts)
     const costs = costsByMonth[monthKey] || {}
     const energyCostsUSD = resolveEnergyCostsUSD(costs, powerMWh, resolveLcoeUsdPerMwh(costParameters, monthKey))
     const operationalCostsUSD = costs.operationalCostPerDay || 0
@@ -502,7 +505,7 @@ async function getCostSummary (ctx, req) {
     const powerW = dailyConsumption[dayTs] || 0
     const consumptionMWh = (powerW * 24) / 1000000
 
-    const monthKey = `${new Date(ts).getFullYear()}-${String(new Date(ts).getMonth() + 1).padStart(2, '0')}`
+    const monthKey = getMonthKeyUtc(ts)
     const costs = costsByMonth[monthKey] || {}
     const energyCostsUSD = resolveEnergyCostsUSD(costs, consumptionMWh, resolveLcoeUsdPerMwh(costParameters, monthKey))
     const operationalCostsUSD = costs.operationalCostPerDay || 0
@@ -827,7 +830,7 @@ async function getRevenueSummary (ctx, req) {
     const hashrateMhs = dailyHashrate[dayTs] || 0
     const hashratePhs = hashrateMhs / 1e9
 
-    const monthKey = `${new Date(ts).getFullYear()}-${String(new Date(ts).getMonth() + 1).padStart(2, '0')}`
+    const monthKey = getMonthKeyUtc(ts)
     const costs = costsByMonth[monthKey] || {}
     const energyCostsUSD = resolveEnergyCostsUSD(costs, consumptionMWh, resolveLcoeUsdPerMwh(costParameters, monthKey))
     const operationalCostsUSD = costs.operationalCostPerDay || 0
@@ -992,7 +995,7 @@ async function getHashRevenue (ctx, req) {
 
     (cb) => ctx.dataProxy.requestData(RPC_METHODS.GET_WRK_EXT_DATA, {
       type: WORKER_TYPES.MEMPOOL,
-      query: { key: 'prices', start, end }
+      query: { key: 'HISTORICAL_PRICES', start, end }
     }).then(r => cb(null, r)).catch(cb),
 
     (cb) => ctx.dataProxy.requestData(RPC_METHODS.GET_WRK_EXT_DATA, {
@@ -1183,6 +1186,14 @@ function calculateHashRevenueSummary (log) {
 const WATTS_PER_MW = 1e6
 const HOURS_PER_DAY = 24
 
+// Day timestamps are on the UTC grid, and costsByMonth / costParameters.overrides are keyed by
+// calendar month, so the key has to be derived in UTC too - local getters move a UTC midnight
+// into the previous month on any host west of UTC.
+function getMonthKeyUtc (ts) {
+  const date = new Date(ts)
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`
+}
+
 function getStartOfMonthUtc (ts) {
   const date = new Date(ts)
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)
@@ -1273,7 +1284,7 @@ function processDailyRevenueBtc (results, start, end) {
     if (!Array.isArray(data)) continue
     for (const entry of data) {
       if (!entry || !entry.ts || !Array.isArray(entry.transactions)) continue
-      const dayTs = getStartOfDay(normalizeTimestampMs(Number(entry.ts)))
+      const dayTs = getStartOfDay(normalizeTimestampMs(entry.ts))
       if (!dayTs || dayTs < startDay || dayTs > endDay) continue
       let revenueBTC = 0
       for (const tx of entry.transactions) {

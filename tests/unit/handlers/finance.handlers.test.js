@@ -1681,3 +1681,36 @@ test('getEbitda - a monthly LCOE override only moves its own month', async (t) =
 
   t.pass()
 })
+
+// The mempool worker only serves HISTORICAL_* keys and destructures `prices` out of its
+// fallback reply, so asking for 'prices' returned nothing and every historical day was
+// silently valued at today's spot price.
+test('getEbitda and getHashRevenue request the historical price key the mempool worker serves', async (t) => {
+  const requestedKeys = []
+  const dayTs = 1700006400000
+
+  const makeCtx = () => withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (method === 'tailLog') return [{ ts: dayTs, site_power_w: 5000, hashrate_mhs_5m_sum_aggr: 100 }]
+        if (method === 'getWrkExtData') {
+          const qKey = payload.query && payload.query.key
+          if (payload.type === 'mempool') requestedKeys.push(qKey)
+          if (qKey === 'transactions') return [{ ts: dayTs, transactions: [{ ts: dayTs, changed_balance: 0.5 }] }]
+          if (qKey === 'HISTORICAL_PRICES') return [{ ts: dayTs, priceUSD: 61000 }]
+        }
+        return []
+      }
+    },
+    globalDataLib: { getGlobalData: async () => [] }
+  })
+
+  const req = { query: { start: dayTs - 86400000, end: dayTs + 86400000 } }
+  await getEbitda(makeCtx(), req, {})
+  await getHashRevenue(makeCtx(), req, {})
+
+  t.ok(requestedKeys.includes('HISTORICAL_PRICES'), 'asks for the key the worker actually serves')
+  t.absent(requestedKeys.includes('prices'), 'never asks for the stripped `prices` key')
+  t.pass()
+})

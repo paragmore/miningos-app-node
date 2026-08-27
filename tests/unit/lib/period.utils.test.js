@@ -211,3 +211,32 @@ test('getPeriodEndDate - yearly returns next year', (t) => {
   t.is(result.getFullYear(), 2024, 'should be next year')
   t.pass()
 })
+
+test('aggregateByPeriod - monthly buckets are grouped and stamped in UTC', (t) => {
+  const log = [
+    { ts: Date.UTC(2026, 7, 1), revenueBTC: 1 },
+    { ts: Date.UTC(2026, 7, 2), revenueBTC: 2 }
+  ]
+
+  const [month] = aggregateByPeriod(log, 'monthly')
+
+  t.is(month.ts, Date.UTC(2026, 7, 1), 'stamped on the UTC first of the month')
+  t.is(month.month, 8)
+  t.is(month.monthName, 'August', 'named from the UTC month, not the host month')
+  t.is(month.revenueBTC, 3, 'both UTC days land in the same bucket')
+  t.pass()
+})
+
+test('aggregateByPeriod - yearly buckets are grouped and stamped in UTC', (t) => {
+  const log = [
+    { ts: Date.UTC(2026, 0, 1), revenueBTC: 1 },
+    { ts: Date.UTC(2026, 11, 31), revenueBTC: 2 }
+  ]
+
+  const [year] = aggregateByPeriod(log, 'yearly')
+
+  t.is(year.ts, Date.UTC(2026, 0, 1), 'stamped on the UTC first of the year')
+  t.is(year.year, 2026)
+  t.is(year.revenueBTC, 3, 'both UTC days land in the same bucket')
+  t.pass()
+})

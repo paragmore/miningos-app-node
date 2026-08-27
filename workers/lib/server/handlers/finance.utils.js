@@ -18,8 +18,26 @@ function validateStartEnd (req) {
   return { start, end }
 }
 
+// Worker timestamps arrive in whatever shape the upstream pool API uses: unix seconds
+// (f2pool `created_at`), unix ms, or an ISO-8601 string (ocean `ts`, e.g. "2026-05-28T16:46:30").
+// Anything this returns unparsed becomes NaN in getStartOfDay and the record is dropped without
+// a trace, so every shape has to be handled here rather than at the call sites.
 function normalizeTimestampMs (ts) {
   if (!ts) return 0
+
+  if (typeof ts === 'string') {
+    const numeric = Number(ts)
+    if (!Number.isNaN(numeric)) return normalizeTimestampMs(numeric)
+
+    // Ocean sends no timezone designator; these timestamps are UTC, and Date.parse would
+    // otherwise read them as host-local and shift the day bucket.
+    const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(ts)
+    const parsed = Date.parse(hasZone ? ts : `${ts}Z`)
+    return Number.isNaN(parsed) ? 0 : parsed
+  }
+
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return 0
+
   return ts < 1e12 ? ts * 1000 : ts
 }
 
