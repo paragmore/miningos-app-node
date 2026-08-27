@@ -2,6 +2,7 @@
 
 const { parseJsonQueryParam } = require('../../utils')
 const { ACTIONS_MAX_QUERIES } = require('../../constants')
+const { detectPayloadFormat, peekFirstChunk, prependChunk } = require('../lib/payloadFormat')
 
 async function queryActionsBatch (ctx, req) {
   const payload = {
@@ -208,18 +209,32 @@ async function downloadLogFile (ctx, req, reply) {
     return reply.code(code).send({ error: err.message })
   }
 
+  // The miner decides the payload format — plain text on some models, a gzipped tar of the log
+  // directory on Whatsminers — and the action result carries no format field. Read the leading
+  // bytes so the declared name and type match the payload, then re-emit them ahead of the rest.
+  let head = null
+  try {
+    head = await peekFirstChunk(stream)
+  } catch (err) {
+    stream.destroy()
+    return reply.code(500).send({ error: err.message })
+  }
+
+  const body = prependChunk(stream, head)
+  const { extension, contentType } = detectPayloadFormat(head)
+
   // Set headers only after stream is ready — if set before the try-catch and stream()
-  // throws, the error response would carry application/octet-stream content-type and
-  // Fastify would refuse to serialize the JSON error object.
+  // throws, the error response would carry a binary content-type and Fastify would refuse
+  // to serialize the JSON error object.
   const { safeContentDispositionFilename } = require('../lib/queryUtils')
-  const filename = safeContentDispositionFilename(`miner-log-${meta.minerId || 'unknown'}-${id}.log`)
-  reply.header('Content-Type', 'application/octet-stream')
+  const filename = safeContentDispositionFilename(`miner-log-${meta.minerId || 'unknown'}-${id}.${extension}`)
+  reply.header('Content-Type', contentType)
   reply.header('Content-Disposition', `attachment; filename="${filename}"`)
   reply.header('Content-Length', meta.byteLength)
   reply.header('Cache-Control', 'no-store')
 
   // Fastify pipes a Readable stream directly to the HTTP response — no buffering
-  return reply.send(stream)
+  return reply.send(body)
 }
 
 module.exports = {

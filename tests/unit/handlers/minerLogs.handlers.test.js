@@ -1,5 +1,7 @@
 'use strict'
 
+const zlib = require('zlib')
+const { Readable } = require('streamx')
 const test = require('brittle')
 const {
   startMinerLogDownload,
@@ -14,11 +16,17 @@ const {
 function makeMockReply () {
   let _code = 200
   let _body = null
+  const _headers = {}
   const reply = {
     get statusCode () { return _code },
     get body () { return _body },
+    get headers () { return _headers },
     code (statusCode) {
       _code = statusCode
+      return reply
+    },
+    header (name, value) {
+      _headers[name.toLowerCase()] = value
       return reply
     },
     send (body) {
@@ -474,6 +482,105 @@ test('getMinerLogFile - returns 503 when the log peer is unreachable', async (t)
   t.is(reply.statusCode, 503, 'should return 503 when peer unreachable')
   t.is(reply.body.error, 'ERR_LOG_PEER_TIMEOUT', 'should propagate the peer error code')
   t.pass()
+})
+
+// The miner decides the payload format and the action result does not say which, so the file
+// leg reads the leading bytes and declares what it actually found. See lib/payloadFormat.
+
+function makeLogStream (payload) {
+  let sent = false
+  return new Readable({
+    read (cb) {
+      if (!sent) {
+        sent = true
+        this.push(payload)
+      } else {
+        this.push(null)
+      }
+      cb(null)
+    }
+  })
+}
+
+function makeFileLegCtx (payload) {
+  return {
+    dataProxy: {
+      requestData: async () => [makeActionResult()]
+    },
+    logDownloader: {
+      stream: async () => makeLogStream(payload)
+    }
+  }
+}
+
+async function drain (stream) {
+  const chunks = []
+  for await (const chunk of stream) chunks.push(chunk)
+  return Buffer.concat(chunks)
+}
+
+test('getMinerLogFile - declares .tar.gz for a gzipped tar payload', async (t) => {
+  const tar = Buffer.alloc(1024)
+  tar.write('10.0.0.1.logs/', 0, 'latin1')
+  tar.write('ustar', 257, 'latin1')
+  const payload = zlib.gzipSync(tar)
+
+  const reply = makeMockReply()
+  await getMinerLogFile(makeFileLegCtx(payload), makeMockReq('miner-001', '42'), reply)
+
+  t.is(
+    reply.headers['content-disposition'],
+    'attachment; filename="miner-log-miner-001-42.tar.gz"',
+    'should name the archive .tar.gz'
+  )
+  t.is(reply.headers['content-type'], 'application/gzip', 'should declare gzip')
+  t.alike(await drain(reply.body), payload, 'should stream every byte, peek included')
+})
+
+test('getMinerLogFile - declares .log for a plain-text payload', async (t) => {
+  const payload = Buffer.from('[board0]\npass = 1\n')
+
+  const reply = makeMockReply()
+  await getMinerLogFile(makeFileLegCtx(payload), makeMockReq('miner-001', '42'), reply)
+
+  t.is(
+    reply.headers['content-disposition'],
+    'attachment; filename="miner-log-miner-001-42.log"',
+    'should name a text log .log'
+  )
+  t.is(reply.headers['content-type'], 'text/plain; charset=utf-8', 'should declare text')
+  t.alike(await drain(reply.body), payload, 'should stream every byte, peek included')
+})
+
+test('getMinerLogFile - keeps the byte length and no-store headers', async (t) => {
+  const reply = makeMockReply()
+  await getMinerLogFile(
+    makeFileLegCtx(Buffer.from('log line')),
+    makeMockReq('miner-001', '42'),
+    reply
+  )
+
+  t.is(reply.headers['content-length'], 1024, 'should send the length from the action meta')
+  t.is(reply.headers['cache-control'], 'no-store', 'should keep the log out of caches')
+})
+
+test('getMinerLogFile - returns 500 when the stream errors before the first byte', async (t) => {
+  const ctx = {
+    dataProxy: {
+      requestData: async () => [makeActionResult()]
+    },
+    logDownloader: {
+      stream: async () => new Readable({
+        read (cb) { cb(new Error('ERR_LOG_PEER_TIMEOUT')) }
+      })
+    }
+  }
+
+  const reply = makeMockReply()
+  await getMinerLogFile(ctx, makeMockReq('miner-001', '42'), reply)
+
+  t.is(reply.statusCode, 500, 'should return 500')
+  t.is(reply.body.error, 'ERR_LOG_PEER_TIMEOUT', 'should propagate the stream error as JSON')
 })
 
 test('getMinerLogDownloadStatus - finds successful result across multiple racks', async (t) => {

@@ -63,7 +63,8 @@
     "@tetherto/tether-svc-test-helper": "git+https://github.com/tetherto/tether-svc-test-helper.git#v1.0.0",
     "brittle": "3.18.0",
     "http-server": "14.1.1",
-    "standard": "17.1.2"
+    "standard": "17.1.2",
+    "streamx": "2.28.0"
   },
   "overrides": {
     "@tootallnate/once": "3.0.1",
