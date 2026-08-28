@@ -1060,6 +1060,39 @@ function processMinersByType (results) {
   return { types }
 }
 
+const CONTAINER_MINER_COUNT_AGGR_FIELDS = {
+  [AGGR_FIELDS.OFFLINE_CNT]: 1,
+  [AGGR_FIELDS.ERROR_CNT]: 1,
+  [AGGR_FIELDS.NOT_MINING_CNT]: 1,
+  [AGGR_FIELDS.SLEEP_CNT]: 1,
+  [AGGR_FIELDS.POWER_MODE_LOW_CNT]: 1,
+  [AGGR_FIELDS.POWER_MODE_NORMAL_CNT]: 1,
+  [AGGR_FIELDS.POWER_MODE_HIGH_CNT]: 1
+}
+
+async function getMinerCountsByContainer (ctx) {
+  const results = await ctx.dataProxy.requestDataMap(RPC_METHODS.TAIL_LOG_MULTI, {
+    keys: [{ key: LOG_KEYS.STAT_RTD, type: WORKER_TYPES.MINER, tag: WORKER_TAGS.MINER }],
+    limit: 1,
+    aggrFields: CONTAINER_MINER_COUNT_AGGR_FIELDS
+  })
+
+  const counts = {}
+  for (const orkResult of results) {
+    const entry = extractKeyEntry(orkResult, 0)
+    if (!entry) continue
+    for (const field of Object.keys(CONTAINER_MINER_COUNT_AGGR_FIELDS)) {
+      mergeGroupedField(counts, entry[field])
+    }
+  }
+
+  const containers = {}
+  for (const [id, minerCount] of Object.entries(counts)) {
+    containers[id] = { minerCount }
+  }
+  return { containers }
+}
+
 const CONTAINER_MINER_TAG_REGEX = /container_miner-[^_]+_(.+)/
 
 function computeInstalledCapacity (containers, byContainer) {
@@ -1092,15 +1125,13 @@ async function getInventoryMinerDistribution (ctx, req) {
   const [minerResults, containerResults, byContainer] = await Promise.all([
     ctx.dataProxy.requestDataAllPages(RPC_METHODS.LIST_THINGS, {
       query: minersQuery,
-      fields: { id: 1, type: 1 },
-      status: 1
+      fields: { id: 1, type: 1 }
     }),
     ctx.dataProxy.requestDataAllPages(RPC_METHODS.LIST_THINGS, {
       query: { tags: { $in: [WORKER_TAGS.CONTAINER] } },
-      fields: { id: 1, tags: 1, 'info.container': 1, 'info.nominalMinerCapacity': 1 },
-      status: 1
+      fields: { id: 1, tags: 1, 'info.container': 1, 'info.nominalMinerCapacity': 1 }
     }),
-    getMinersByContainer(ctx, req)
+    getMinerCountsByContainer(ctx)
   ])
 
   const miners = flattenRpcResults(minerResults)
@@ -1754,6 +1785,7 @@ module.exports = {
   processGroupedMinerStatusData,
   getMinersByContainer,
   processMinersByContainer,
+  getMinerCountsByContainer,
   getInventorySummary,
   processInventorySummary,
   getMinersByType,
