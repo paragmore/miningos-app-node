@@ -25,7 +25,12 @@ function aggregateMinerStats (tailLogResults) {
     stats.hashrate += entry.hashrate_mhs_1m_sum_aggr || 0
     stats.nominalHashrate += entry.nominal_hashrate_mhs_sum_aggr || 0
     stats.online += entry.online_or_minor_error_miners_amount_aggr || 0
-    stats.error += entry.not_mining_miners_amount_aggr || 0
+    // Both buckets. The miner template emits error_miners_cnt and not_mining_miners_cnt,
+    // but whatsminer's _getStatus only ever returns error/mining/sleeping, so an errored
+    // miner lands in error_miners_cnt while not_mining stays 0. Reading only not_mining
+    // silently subtracted every errored miner from the site count.
+    stats.error += (entry.error_miners_amount_aggr || 0) +
+      (entry.not_mining_miners_amount_aggr || 0)
     stats.offline += entry.offline_or_sleeping_miners_amount_aggr || 0
     stats.total += entry.hashrate_mhs_1m_cnt_aggr || 0
   }

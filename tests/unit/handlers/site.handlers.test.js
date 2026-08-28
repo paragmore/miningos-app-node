@@ -201,6 +201,57 @@ test('getSiteLiveStatus - does not expose a derived sleep field', async (t) => {
   t.pass()
 })
 
+test('getSiteLiveStatus - counts error_miners_amount_aggr in the error bucket', async (t) => {
+  // The moria miner template emits error_miners_cnt (-> error_miners_amount_aggr) and
+  // has no not_mining status at all. Reading only not_mining dropped every errored
+  // miner from the site totals, so a miner hashing with errors vanished from the header.
+  const tailLogMultiResponse = [
+    [{
+      online_or_minor_error_miners_amount_aggr: 1279,
+      error_miners_amount_aggr: 1,
+      offline_or_sleeping_miners_amount_aggr: 0,
+      hashrate_mhs_1m_cnt_aggr: 1280
+    }],
+    [{}],
+    [{}]
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {})
+  const req = { query: {} }
+
+  const result = await getSiteLiveStatus(ctx, req)
+
+  t.is(result.miners.error, 1, 'errored miner should be counted, not dropped')
+  t.is(
+    result.miners.online + result.miners.error + result.miners.offline,
+    1280,
+    'buckets should account for every miner'
+  )
+  t.pass()
+})
+
+test('getSiteLiveStatus - error bucket sums both error and not_mining aggregates', async (t) => {
+  const tailLogMultiResponse = [
+    [{
+      online_or_minor_error_miners_amount_aggr: 80,
+      error_miners_amount_aggr: 3,
+      not_mining_miners_amount_aggr: 5,
+      offline_or_sleeping_miners_amount_aggr: 10,
+      hashrate_mhs_1m_cnt_aggr: 98
+    }],
+    [{}],
+    [{}]
+  ]
+
+  const ctx = createMockCtx(tailLogMultiResponse, [], {})
+  const req = { query: {} }
+
+  const result = await getSiteLiveStatus(ctx, req)
+
+  t.is(result.miners.error, 8, 'error should sum the error and not_mining aggregates')
+  t.pass()
+})
+
 test('getSiteLiveStatus - sums alerts across miner, powermeter and container entries', async (t) => {
   const tailLogMultiResponse = [
     [{ alerts_aggr: { critical: 1, high: 2, medium: 3 } }],
