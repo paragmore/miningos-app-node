@@ -13,6 +13,7 @@ const {
   calculateGroupedEfficiencySummary,
   getMinerStatus,
   getMinersByContainer,
+  getMinerCountsByContainer,
   getInventorySummary,
   processMinerStatusData,
   processGroupedMinerStatusData,
@@ -2133,6 +2134,30 @@ test('getMinersByContainer - no data returns empty container map', async (t) => 
   t.pass()
 })
 
+test('getMinerCountsByContainer - fetches only count fields and sums them per container', async (t) => {
+  let payload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'a' }, { rpcPublicKey: 'b' }] },
+    net_r0: {
+      jRequest: async (key, method, p) => {
+        payload = p
+        return key === 'a'
+          ? [[{ ts: 1, offline_cnt: { c1: 3 }, power_mode_normal_cnt: { c1: 10, c2: 4 } }]]
+          : [[{ ts: 1, error_cnt: { c1: 1 } }]]
+      }
+    }
+  })
+
+  const result = await getMinerCountsByContainer(mockCtx)
+
+  t.is(payload.keys[0].key, 'stat-rtd', 'should read the realtime snapshot')
+  t.absent(payload.aggrFields.hashrate_mhs_5m_container_group_sum_aggr, 'should not request hashrate')
+  t.absent(payload.aggrFields.temperature_c_group_max_aggr, 'should not request temperature')
+  t.absent(payload.aggrFields.hashrate_mhs_5m_active_container_group_cnt, 'should not request active count')
+  t.alike(result.containers, { c1: { minerCount: 14 }, c2: { minerCount: 4 } }, 'should sum status counts across orks per container')
+  t.pass()
+})
+
 // ==================== Inventory Summary Tests ====================
 
 test('getInventorySummary - rolls up miner and spare-part counts by status/location', async (t) => {
@@ -3831,7 +3856,9 @@ test('getInventoryMinerDistribution - builds per-type rows with locations and ca
             [{ miner_inventory_location_group_cnt_aggr: { 'site.warehouse': 1 } }]
           ]
         }
-        if (method === 'tailLogMulti') return [[{}]]
+        if (method === 'tailLogMulti') {
+          return [[{ offline_cnt: { c1: 1 }, power_mode_normal_cnt: { c1: 1 } }]]
+        }
         return []
       }
     }
@@ -3846,6 +3873,22 @@ test('getInventoryMinerDistribution - builds per-type rows with locations and ca
     { 'info.site': { $eq: 'site-a' } },
     'should scope miners to the configured site'
   )
+  t.absent(minerListCall.payload.status, 'should not request snap data for miners')
+
+  const containerCountCall = calls.find(c => c.method === 'tailLogMulti' && !c.payload.aggrFields.miner_inventory_location_group_cnt_aggr)
+  t.alike(
+    Object.keys(containerCountCall.payload.aggrFields).sort(),
+    [
+      'error_cnt',
+      'not_mining_cnt',
+      'offline_cnt',
+      'power_mode_high_cnt',
+      'power_mode_low_cnt',
+      'power_mode_normal_cnt',
+      'power_mode_sleep_cnt'
+    ],
+    'should only request per-container count fields'
+  )
 
   const locationCall = calls.find(c => c.method === 'tailLogMulti' && c.payload.aggrFields.miner_inventory_location_group_cnt_aggr)
   t.alike(
@@ -3859,6 +3902,7 @@ test('getInventoryMinerDistribution - builds per-type rows with locations and ca
   t.is(s19Row.locations['miner.room'], 1, 'should report aggregated locations')
   t.is(s19Row.locations.unknown, 1, 'unknown = count minus located miners')
   t.is(s19Row.totalPositions, 3, 'capacity from container miner tag')
+  t.is(s19Row.freePositions, 1, 'free = capacity minus connected miner counts')
 
   const m53Row = result.rows.find(r => r.type === 'miner-wm-m53s')
   t.is(m53Row.locations.unknown, 0, 'located miners leave no unknowns')
