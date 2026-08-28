@@ -6,13 +6,17 @@ const minerStats = require('./types/minerStats.export')
 const containerMinerStats = require('./types/containerMinerStats.export')
 const { forecastOverview, historicalForecast } = require('./types/forecast.export')
 const historicalMinerKpi = require('./types/historicalMinerKpi.export')
+const { invoicingHourlyHashes, invoicingDailyHashes, invoiceBreakdown } = require('./types/invoicing.export')
 
 const TYPES = [
   minerStats,
   containerMinerStats,
   forecastOverview,
   historicalForecast,
-  historicalMinerKpi
+  historicalMinerKpi,
+  invoicingHourlyHashes,
+  invoicingDailyHashes,
+  invoiceBreakdown
 ]
 
 const REGISTRY = new Map(TYPES.map((entry) => [entry.type, entry]))

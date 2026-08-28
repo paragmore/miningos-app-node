@@ -82,7 +82,24 @@ async function getCurrentHashrate (ctx, aggrField, container) {
   return entry ? readHashrate(entry[aggrField], container) : null
 }
 
+function pageHashrate (req, { log, summary }) {
+  const offset = Number(req.query.offset) || 0
+  const limit = Number(req.query.limit) || undefined
+  const reverse = req.query.reverse === true || req.query.reverse === 'true'
+  const sorted = log.slice().sort((a, b) => reverse ? b.ts - a.ts : a.ts - b.ts)
+
+  return {
+    log: limit ? sorted.slice(offset, offset + limit) : sorted.slice(offset),
+    totalCount: log.length,
+    summary
+  }
+}
+
 async function getHashrate (ctx, req) {
+  return pageHashrate(req, await resolveHashrate(ctx, req))
+}
+
+async function resolveHashrate (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
   if (req.query.groupBy) return getGoupedHashrate(ctx, req)
