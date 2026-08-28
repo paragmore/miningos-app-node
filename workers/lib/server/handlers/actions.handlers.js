@@ -78,6 +78,64 @@ async function pushActionsBatch (ctx, req, rep) {
   })
 }
 
+const transformPushActionPayload = async (ctx, payload) => {
+  switch (payload.action) {
+    case 'registerConfig':
+    case 'updateConfig': {
+      if (!payload || !Array.isArray(payload.params)) {
+        throw new Error('ERR_INVALID_PAYLOAD')
+      }
+
+      const [poolConfig] = payload.params
+      if (!poolConfig) return payload
+
+      const { poolUrls } = poolConfig.data ?? {}
+      if (!poolUrls || !Array.isArray(poolUrls)) throw new Error('ERR_INVALID_POOL_URLS')
+      delete poolConfig.data.poolUrls
+
+      const result = []
+      for (const poolUrlSetting of poolUrls) {
+        const {
+          poolUrlId, workerName, workerPassword
+        } = poolUrlSetting
+
+        if (!poolUrlId) {
+          throw new Error('ERR_INVALID_POOL_URL_ID_MISSING')
+        }
+
+        let approvedPoolUrls = []
+        const orkGlobalConfigResults = await ctx.dataProxy.requestDataMap('getGlobalConfig', {})
+        for (const orkResult of orkGlobalConfigResults) {
+          if (!orkResult || typeof orkResult !== 'object') continue
+          if (orkResult.approvedPoolUrls) {
+            approvedPoolUrls = orkResult.approvedPoolUrls
+          }
+        }
+
+        const poolUrl = approvedPoolUrls.find(config => config.id === poolUrlId)
+        if (!poolUrl) {
+          throw new Error('ERR_INVALID_POOL_URL_ID_INVALID')
+        }
+
+        const { host, port, name } = poolUrl
+        result.push({
+          poolUrlId,
+          url: `stratum+tcp://${host}:${port}`,
+          workerName,
+          workerPassword,
+          pool: name
+        })
+      }
+
+      poolConfig.data.poolUrls = result
+      return payload
+    }
+
+    default:
+      return payload
+  }
+}
+
 async function pushAction (ctx, req) {
   const { write, permissions } = await ctx.authLib.getTokenPerms(req._info.authToken)
   if (!write) {
@@ -92,7 +150,9 @@ async function pushAction (ctx, req) {
     authPerms: permissions
   }
 
-  return await ctx.dataProxy.requestData('pushAction', payload, (res, resultsArray) => {
+  const transformedPayload = await transformPushActionPayload(ctx, structuredClone(payload))
+
+  return await ctx.dataProxy.requestData('pushAction', transformedPayload, (res, resultsArray) => {
     if (res.error) {
       resultsArray.push({ id: null, errors: [res.error] })
     } else {
