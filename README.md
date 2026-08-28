@@ -254,7 +254,9 @@ DEBUG="*" node worker.js --wtype wrk-node-http --env development --port 3000
       "reporting:rw",
       "settings:rw",
       "ticket:rw",
-      "forecast:rw"
+      "forecast_summary:rw",
+      "forecast_overview:rw",
+      "forecast_settings:rw"
     ],
     "roles": {
       "admin": [
@@ -277,14 +279,18 @@ DEBUG="*" node worker.js --wtype wrk-node-http --env development --port 3000
         "reporting:rw",
         "settings:rw",
         "ticket:rw",
-        "forecast:rw"
+        "forecast_summary:rw",
+        "forecast_overview:rw",
+        "forecast_settings:rw"
       ],
       "reporting_tool_manager": [
         "revenue:rw",
         "production:rw",
         "reporting:rw",
         "settings:r",
-        "forecast:r"
+        "forecast_summary:r",
+        "forecast_overview:r",
+        "forecast_settings:r"
       ],
       "site_manager": [
         "miner:rw",

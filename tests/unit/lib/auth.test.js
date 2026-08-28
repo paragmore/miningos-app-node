@@ -673,3 +673,21 @@ test('AuthLib - _resolveOAuthMicrosoft throws when graph request fails', async (
 
   t.pass()
 })
+
+test('AuthLib - site_operator reads the forecast summary but not overview or settings', async (t) => {
+  const { a0 } = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '../../../config/facs/auth.config.json.example')))
+  const authLib = new AuthLib({
+    httpc: {},
+    httpd: {},
+    userService: {},
+    auth: {
+      getTokenPerms: () => ({ superadmin: false, perms: a0.roles.site_operator }),
+      conf: { superAdminPerms: a0.superAdminPerms }
+    }
+  })
+
+  t.is(await authLib.tokenHasPerms('token', false, ['forecast_summary']), true, 'summary is readable')
+  t.is(await authLib.tokenHasPerms('token', false, ['forecast_overview']), false, 'overview is not')
+  t.is(await authLib.tokenHasPerms('token', false, ['forecast_settings']), false, 'settings are not')
+  t.is(await authLib.tokenHasPerms('token', true, ['forecast_settings']), false, 'settings are not writable')
+})

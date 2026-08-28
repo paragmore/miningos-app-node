@@ -146,8 +146,8 @@ test('exportRoute checks the expected read permission per export type', async (t
     [{ type: 'miner-stats' }, ['reporting:r']],
     [{ type: 'container-miner-stats', container: '7' }, ['reporting:r']],
     [{ type: 'historical-miner-kpi', statKey: 'stat-5m', start: 0, end: 1 }, ['reporting:r']],
-    [{ type: 'forecast-overview' }, ['forecast:r']],
-    [{ type: 'historical-forecast', start: 1, end: 2 }, ['forecast:r']]
+    [{ type: 'forecast-overview' }, ['forecast_overview:r']],
+    [{ type: 'historical-forecast', start: 1, end: 2 }, ['forecast_overview:r']]
   ]
   for (const [query, perms] of cases) {
     let seen = null

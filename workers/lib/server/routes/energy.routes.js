@@ -1,6 +1,6 @@
 'use strict'
 
-const { ENDPOINTS, HTTP_METHODS, AUTH_CAPS } = require('../../constants')
+const { ENDPOINTS, HTTP_METHODS, AUTH_CAPS, AUTH_PERMISSIONS } = require('../../constants')
 const { getEnergyForecast, setAvailableEnergy, getEnergyForecastHistory, setForecastSettings, getForecastSettings, setForecastOverride } = require('../handlers/energy.handlers')
 const { createCachedAuthRoute, createAuthRoute } = require('../lib/routeHelpers')
 const schemas = require('../schemas/energy.schemas')
@@ -13,7 +13,8 @@ module.exports = (ctx) => [
       ctx,
       (req) => ['energy-forecast'],
       ENDPOINTS.ENERGY_FORECAST,
-      getEnergyForecast
+      getEnergyForecast,
+      [AUTH_PERMISSIONS.FORECAST_SUMMARY]
     )
   },
   {
@@ -33,7 +34,8 @@ module.exports = (ctx) => [
       ctx,
       (req) => ['energy-forecast-history'],
       ENDPOINTS.ENERGY_FORECAST_HISTORY,
-      getEnergyForecastHistory
+      getEnergyForecastHistory,
+      [AUTH_PERMISSIONS.FORECAST_OVERVIEW]
     )
   },
   {
@@ -51,7 +53,7 @@ module.exports = (ctx) => [
     url: ENDPOINTS.ENERGY_FORECAST_SETTINGS,
     ...createAuthRoute(ctx, async (ctx, req) => {
       return await setForecastSettings(ctx, req)
-    }, [`${AUTH_CAPS.m}:w`]),
+    }, [AUTH_PERMISSIONS.FORECAST_SETTINGS]),
     schema: {
       body: schemas.body.forecastSettings
     }
@@ -63,7 +65,8 @@ module.exports = (ctx) => [
       ctx,
       (req) => ['forecast-settings'],
       ENDPOINTS.ENERGY_FORECAST_SETTINGS,
-      getForecastSettings
+      getForecastSettings,
+      [AUTH_PERMISSIONS.FORECAST_SETTINGS]
     )
   },
   {
@@ -71,7 +74,7 @@ module.exports = (ctx) => [
     url: ENDPOINTS.ENERGY_FORECAST_OVERRIDE,
     ...createAuthRoute(ctx, async (ctx, req) => {
       return await setForecastOverride(ctx, req)
-    }, [`${AUTH_CAPS.m}:w`]),
+    }, [AUTH_PERMISSIONS.FORECAST_SETTINGS]),
     schema: {
       body: schemas.body.forecastOverride
     }
