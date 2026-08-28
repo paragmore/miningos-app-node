@@ -10,6 +10,7 @@ const {
 const { formatDateTime } = require('../mappers')
 
 const SECONDS = { hour: 3600, day: 86400 }
+const EXPORT_PRECISION = 3
 
 const BREAKDOWN_COLUMNS = [
   'year', 'month', 'energyConsumedMwh', 'lcoeUsdPerMwh', 'energyCostsUsd', 'operationalCostUsd',
@@ -17,11 +18,17 @@ const BREAKDOWN_COLUMNS = [
   'amortizationPayableUsd', 'marginPct', 'marginUsd', 'monthlyInvoiceUsd'
 ]
 
+function isRangeTs (value) {
+  return Number.isFinite(value) && value > 0
+}
+
+// Same bounds as validateStartEnd, which every fetch below runs into: without
+// them a degenerate range fails there instead, as a 500 rather than a 400.
 function assertRange (params) {
-  if (!Number.isFinite(params.start) || !Number.isFinite(params.end)) {
+  if (!isRangeTs(params.start) || !isRangeTs(params.end)) {
     throw new Error('ERR_EXPORT_RANGE_REQUIRED')
   }
-  if (params.start > params.end) throw new Error('ERR_EXPORT_RANGE_INVALID')
+  if (params.start >= params.end) throw new Error('ERR_EXPORT_RANGE_INVALID')
 }
 
 function dateParts (ts, timezone) {
@@ -40,6 +47,14 @@ function dateParts (ts, timezone) {
 
 function monthName (ts, timezone) {
   return new Intl.DateTimeFormat('en-US', { timeZone: timezone, month: 'long' }).format(new Date(ts))
+}
+
+// The UI rounds every exported figure to 3 decimals; matching it keeps a CSV
+// pulled from the API identical to one saved from the invoice screen.
+function roundRow (row) {
+  return Object.fromEntries(Object.entries(row).map(
+    ([column, value]) => [column, typeof value === 'number' ? Number(value.toFixed(EXPORT_PRECISION)) : value]
+  ))
 }
 
 function num (value) {
@@ -72,12 +87,12 @@ function buildHashesEntry ({ type, interval, seconds, filenamePrefix, periodColu
       async function * rows () {
         for (const entry of log) {
           const hashrateMhs = num(entry.hashrateMhs)
-          yield {
+          yield roundRow({
             ...mapPeriod(entry.ts, timezone),
             hashesDeliveredEh: derive([hashrateMhs], (mhs) => (mhs * seconds) / 1e12),
             pctOfNominal: num(entry.pctOfNominal),
             avgHashratePhs: derive([hashrateMhs], (mhs) => mhs / 1e9)
-          }
+          })
         }
       }
 
@@ -132,7 +147,10 @@ const invoiceBreakdown = {
       getProductionCosts(ctx, start - METRICS_TIME.ONE_DAY_MS, end + METRICS_TIME.ONE_DAY_MS)
     ])
 
-    const { year, month } = dateParts(start, timezone)
+    // The invoice month is read in UTC, not in the requested timezone: the UI asks
+    // for exact UTC month bounds and only sends its own timezone to label rows, so
+    // resolving the month locally would bill a west-of-UTC site against the month before.
+    const { year, month } = dateParts(start, 'UTC')
     const resolved = resolveCostParametersForMonth(costParameters, `${year}-${month}`)
     const costs = productionCosts.find(
       (entry) => Number(entry.year) === Number(year) && Number(entry.month) === Number(month)
@@ -174,7 +192,7 @@ const invoiceBreakdown = {
     }
 
     async function * rows () {
-      yield row
+      yield roundRow(row)
     }
 
     return {

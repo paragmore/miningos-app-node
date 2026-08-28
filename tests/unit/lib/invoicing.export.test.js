@@ -10,7 +10,7 @@ const START = Date.UTC(2026, 7, 1)
 const MHS = 1e11
 const NOMINAL_MHS = 1.25e11
 
-function mockCtx ({ buckets = 3, interval = HOUR_MS, globalData = {} } = {}) {
+function mockCtx ({ buckets = 3, interval = HOUR_MS, globalData = {}, hashrateMhs = MHS } = {}) {
   return withDataProxy({
     conf: { orks: [{ rpcPublicKey: 'key1' }] },
     globalDataLib: { getGlobalData: async ({ type }) => globalData[type] },
@@ -19,7 +19,7 @@ function mockCtx ({ buckets = 3, interval = HOUR_MS, globalData = {} } = {}) {
         ts: START + i * interval,
         ...(params.type === 'powermeter'
           ? { site_power_w: 10e6 }
-          : { hashrate_mhs_5m_sum_aggr: MHS, nominal_hashrate_mhs_sum_aggr: NOMINAL_MHS })
+          : { hashrate_mhs_5m_sum_aggr: hashrateMhs, nominal_hashrate_mhs_sum_aggr: NOMINAL_MHS })
       }))
     }
   })
@@ -46,7 +46,21 @@ test('invoicing exports require a valid range', async (t) => {
   const entry = getExportType('invoice-breakdown')
 
   t.exception(() => entry.assertParams({}), /ERR_EXPORT_RANGE_REQUIRED/)
+  t.exception(() => entry.assertParams({ start: 2 }), /ERR_EXPORT_RANGE_REQUIRED/, 'an absent end is not a range')
+  t.exception(() => entry.assertParams({ start: 0, end: START }), /ERR_EXPORT_RANGE_REQUIRED/)
   t.exception(() => entry.assertParams({ start: 2, end: 1 }), /ERR_EXPORT_RANGE_INVALID/)
+  t.exception(() => entry.assertParams({ start: START, end: START }), /ERR_EXPORT_RANGE_INVALID/, 'an empty range is rejected here, not deeper as a 500')
+  t.pass()
+})
+
+test('invoicing exports round every figure to three decimals', async (t) => {
+  const { out } = await runExport(
+    'invoicing-hourly-hashes',
+    { start: START, end: START + HOUR_MS, timezone: 'UTC', format: 'csv' },
+    { buckets: 1, hashrateMhs: 123456789012.3 }
+  )
+
+  t.is(out.split('\n')[1], '"01/08/2026","00:00","444.444","98.765","123.457"', 'matches the precision the UI exports')
   t.pass()
 })
 
@@ -110,6 +124,24 @@ test('invoice-breakdown - one row, margin applied over energy, ops and payable a
   t.is(row.amortizationPayableUsd, 120000, '80% of the amortization is payable')
   t.is(row.marginUsd, 14900, '10% of energy + ops + payable amortization')
   t.is(row.monthlyInvoiceUsd, 163900)
+  t.pass()
+})
+
+test('invoice-breakdown - the month is read in UTC, not in the label timezone', async (t) => {
+  const globalData = {
+    costParameters: { overrides: { '2026-07': { lcoe: { effectiveUsdPerMwh: 42 } }, '2026-08': { lcoe: { effectiveUsdPerMwh: 50 } } } },
+    productionCosts: [{ site: 'site', year: 2026, month: 8, operationalCost: 5000 }]
+  }
+  const params = { start: START, end: START + 2 * DAY_MS, format: 'json' }
+  const ctxOpts = { buckets: 2, interval: DAY_MS, globalData }
+
+  const utc = JSON.parse((await runExport('invoice-breakdown', { ...params, timezone: 'UTC' }, ctxOpts)).out)
+  const local = JSON.parse((await runExport('invoice-breakdown', { ...params, timezone: 'America/Sao_Paulo' }, ctxOpts)).out)
+
+  t.alike(local.breakdown[0], utc.breakdown[0], 'a west-of-UTC label timezone bills the same month')
+  t.is(local.breakdown[0].month, 8, 'the UTC month start belongs to August')
+  t.is(local.breakdown[0].lcoeUsdPerMwh, 50, 'August override, not July')
+  t.is(local.breakdown[0].operationalCostUsd, 5000)
   t.pass()
 })
 
