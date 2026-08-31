@@ -112,6 +112,11 @@ function computeUtilization (value, nominal) {
   return Math.round((value / nominal) * 1000) / 10
 }
 
+// UI getEfficiencyStat: W / TH/s, unrounded, 0 if either input is missing
+function calculateSiteEfficiency (hashrateMhs, consumptionW) {
+  return (consumptionW && hashrateMhs) ? consumptionW / mhsToThs(hashrateMhs) : 0
+}
+
 function getFirstOrkThings (listThingsResults) {
   if (!Array.isArray(listThingsResults)) return []
   const first = listThingsResults[0]
@@ -180,10 +185,7 @@ function composeSiteStatus (
 
   const hashrateValue = minerStats.hashrate
   const consumptionW = consumption.powerW
-  // UI getEfficiencyStat: W / TH/s, unrounded, 0 if either input is missing
-  const efficiencyWPerTh = (consumptionW && hashrateValue)
-    ? consumptionW / mhsToThs(hashrateValue)
-    : 0
+  const efficiencyWPerTh = calculateSiteEfficiency(hashrateValue, consumptionW)
 
   const alertTotal =
     alertStats.critical +
@@ -250,5 +252,6 @@ module.exports = {
   sumTransformerPowerW,
   extractSiteMeterThing,
   formatDeviceAlerts,
+  calculateSiteEfficiency,
   composeSiteStatus
 }

@@ -54,8 +54,9 @@ const withDataProxy = (ctx) => {
 
 const createMockCtxWithOrks = (orks = [{ rpcPublicKey: 'key1' }], jRequestImpl = async () => ({})) => {
   return withDataProxy({
-    conf: { orks },
-    net_r0: { jRequest: jRequestImpl }
+    conf: { orks, featureConfig: {} },
+    net_r0: { jRequest: jRequestImpl },
+    globalDataLib: { getGlobalData: async () => [{}] }
   })
 }
 

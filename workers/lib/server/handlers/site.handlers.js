@@ -552,5 +552,6 @@ module.exports = {
   getSiteLiveStatus,
   getSiteOverviewGroupsStats,
   getSiteOverviewUnits,
-  getSiteEfficiency
+  getSiteEfficiency,
+  getSiteConsumption
 }

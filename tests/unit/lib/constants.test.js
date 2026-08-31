@@ -59,7 +59,10 @@ test('constants - CUSTOM_ALERT_CONFIG', (t) => {
     t.ok(typeof key === 'string' && key.startsWith('custom.'), `alert key ${key} should be namespaced under custom.`)
     t.ok(conf.configSchema && typeof conf.configSchema === 'object', `${key} should have a configSchema`)
     t.ok(conf.configSchema.enabled && conf.configSchema.enabled.type === 'boolean', `${key} configSchema should have a boolean enabled field`)
-    t.ok(Array.isArray(conf.rackTypes) && conf.rackTypes.length > 0, `${key} should declare at least one rack type`)
+    // An empty array is valid: it marks an alert with no worker-side probe (e.g.
+    // app-node-only synthetic alerts like custom.high_site_efficiency.*), so it's
+    // never pushed to any rack type via setAlertParams.
+    t.ok(Array.isArray(conf.rackTypes), `${key} should declare a rackTypes array`)
     conf.rackTypes.forEach(rackType => {
       t.ok(['miner', 'dcs'].includes(rackType), `${key} rackType ${rackType} should be a known rack type`)
     })

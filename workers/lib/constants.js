@@ -1180,6 +1180,34 @@ const CUSTOM_ALERT_CONFIG = {
       }
     },
     rackTypes: ['dcs']
+  },
+  'custom.high_site_efficiency.warning': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      maxSiteEfficiencyWThs: {
+        type: 'number'
+      }
+    },
+    rackTypes: []
+  },
+  'custom.high_site_efficiency.critical': {
+    configSchema: {
+      enabled: {
+        type: 'boolean'
+      },
+      notes: {
+        type: 'string'
+      },
+      maxSiteEfficiencyWThs: {
+        type: 'number'
+      }
+    },
+    rackTypes: []
   }
 }
 

@@ -1,5 +1,6 @@
 'use strict'
 
+const { randomUUID } = require('crypto')
 const {
   RPC_METHODS,
   SEVERITY_LEVELS,
@@ -18,9 +19,18 @@ const {
   GLOBAL_DATA_TYPES,
   CUSTOM_ALERT_CONFIG,
   AUTH_PERMISSIONS,
-  AUTH_LEVELS
+  AUTH_LEVELS,
+  LOG_KEYS,
+  WORKER_TYPES,
+  WORKER_TAGS,
+  SITE_STATUS_LIVE_AGGR_FIELDS,
+  SITE_STATUS_LIVE_WINDOW_MS,
+  DCS_POWER_METER_FIELDS
 } = require('../../constants')
 const { parseJsonQueryParam, validateFilter, applyMongoFilter, combineAnd, deduplicateAlerts } = require('../../utils')
+const { aggregateMinerStats, calculateSiteEfficiency } = require('./site.utils')
+const { getSiteConsumption } = require('./site.handlers')
+const { isCentralDCSEnabled, fetchDcsThing, extractSiteMainMeterPowerW } = require('../../dcs.utils')
 
 function extractAlertsFromThings (things) {
   const alerts = []
@@ -154,6 +164,73 @@ function alertTypeCondition (type) {
   return undefined
 }
 
+// Mirrors composeSiteStatus's efficiency calc (site.utils.js) using a fresh,
+// lighter-weight fetch (miner hashrate + site power only, no pools/globalConfig).
+async function computeSiteEfficiencyWPerTh (ctx) {
+  const dcsEnabled = isCentralDCSEnabled(ctx)
+
+  const [tailLogResults, powerSource] = await Promise.all([
+    ctx.dataProxy.requestDataMap(RPC_METHODS.TAIL_LOG_MULTI, {
+      keys: [{ key: LOG_KEYS.STAT_RTD, type: WORKER_TYPES.MINER, tag: WORKER_TAGS.MINER }],
+      limit: 1,
+      start: Date.now() - SITE_STATUS_LIVE_WINDOW_MS,
+      aggrFields: SITE_STATUS_LIVE_AGGR_FIELDS
+    }),
+    dcsEnabled
+      ? fetchDcsThing(ctx, { id: 1, code: 1, type: 1, tags: 1, ...DCS_POWER_METER_FIELDS })
+      : getSiteConsumption(ctx)
+  ])
+
+  const { hashrate } = aggregateMinerStats(tailLogResults)
+  const consumptionW = dcsEnabled ? extractSiteMainMeterPowerW(powerSource) : (powerSource?.powerW || 0)
+  return calculateSiteEfficiency(hashrate, consumptionW)
+}
+
+// Site efficiency has no backing thing, so it's synthesized here rather than
+// coming from `thing.last.alerts`. Each tier is gated independently by its own
+// `enabled` flag and `maxSiteEfficiencyWThs` threshold; a missing threshold
+// (not configured) means that tier never alerts.
+const SITE_EFFICIENCY_ALERT_TIERS = [
+  { key: 'custom.high_site_efficiency.critical', severity: 'critical' },
+  { key: 'custom.high_site_efficiency.warning', severity: 'warning' }
+]
+
+function buildSiteEfficiencyAlert (key, severity, efficiencyWPerTh, threshold) {
+  return {
+    name: key,
+    code: key,
+    description: 'High Site Efficiency detected',
+    severity,
+    createdAt: Date.now(),
+    id: null,
+    uuid: randomUUID(),
+    message: `Site efficiency ${efficiencyWPerTh.toFixed(2)} W/TH/s (max ${threshold} W/TH/s)`,
+    deviceId: null,
+    type: 'site'
+  }
+}
+
+async function getSiteEfficiencyAlerts (ctx) {
+  const [alertParams] = await ctx.globalDataLib.getGlobalData({ type: GLOBAL_DATA_TYPES.ALERT_PARAMETERS })
+
+  const activeTiers = SITE_EFFICIENCY_ALERT_TIERS
+    .map(({ key, severity }) => ({ key, severity, conf: alertParams?.[key] }))
+    .filter(({ conf }) => conf?.enabled && typeof conf.maxSiteEfficiencyWThs === 'number')
+
+  if (!activeTiers.length) return []
+
+  const efficiencyWPerTh = await computeSiteEfficiencyWPerTh(ctx)
+
+  const alerts = []
+  for (const { key, severity, conf } of activeTiers) {
+    const threshold = conf.maxSiteEfficiencyWThs
+    if (efficiencyWPerTh > threshold) {
+      alerts.push(buildSiteEfficiencyAlert(key, severity, efficiencyWPerTh, threshold))
+    }
+  }
+  return alerts
+}
+
 async function getSiteAlerts (ctx, req) {
   const filter = validateFilter(
     parseJsonQueryParam(req.query.filter, 'ERR_INVALID_FILTER'),
@@ -170,23 +247,28 @@ async function getSiteAlerts (ctx, req) {
 
   // The summary needs the full alert set, so fetch every alerted thing and
   // apply filter/type/search in memory on the merged result.
-  const results = await ctx.dataProxy.requestDataMap(RPC_METHODS.LIST_THINGS, {
-    status: 1,
-    query: { 'last.alerts': { $ne: null } },
-    fields: {
-      'last.alerts': 1,
-      'info.container': 1,
-      'info.pos': 1,
-      type: 1,
-      id: 1,
-      code: 1
-    }
-  })
+  const [results, workerAlerts, siteEfficiencyAlerts] = await Promise.all([
+    ctx.dataProxy.requestDataMap(RPC_METHODS.LIST_THINGS, {
+      status: 1,
+      query: { 'last.alerts': { $ne: null } },
+      fields: {
+        'last.alerts': 1,
+        'info.container': 1,
+        'info.pos': 1,
+        type: 1,
+        id: 1,
+        code: 1
+      }
+    }),
+    fetchWorkerExtAlerts(ctx, { key: 'alerts' }),
+    getSiteEfficiencyAlerts(ctx)
+  ])
 
   const things = results.flat()
   let alerts = extractAlertsFromThings(things)
 
-  alerts = alerts.concat(await fetchWorkerExtAlerts(ctx, { key: 'alerts' }))
+  alerts = alerts.concat(workerAlerts)
+  alerts = alerts.concat(siteEfficiencyAlerts)
 
   const summary = buildSiteAlertsSummary(alerts)
 
@@ -317,5 +399,8 @@ module.exports = {
   applySort,
   buildSeveritySummary,
   buildSiteAlertsSummary,
-  flattenHistoryAlert
+  flattenHistoryAlert,
+  computeSiteEfficiencyWPerTh,
+  buildSiteEfficiencyAlert,
+  getSiteEfficiencyAlerts
 }
