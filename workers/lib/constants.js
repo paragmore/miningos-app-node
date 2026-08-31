@@ -663,6 +663,7 @@ const SITE_STATUS_LIVE_AGGR_FIELDS = {
   nominal_hashrate_mhs_sum_aggr: 1,
   alerts_aggr: 1,
   online_or_minor_error_miners_amount_aggr: 1,
+  error_miners_amount_aggr: 1,
   not_mining_miners_amount_aggr: 1,
   offline_or_sleeping_miners_amount_aggr: 1,
   hashrate_mhs_1m_cnt_aggr: 1,
