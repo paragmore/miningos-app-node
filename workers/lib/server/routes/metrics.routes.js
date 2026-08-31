@@ -45,7 +45,10 @@ module.exports = (ctx) => {
           req.query.container,
           req.query.current,
           req.query.nominal,
-          req.query.racks
+          req.query.racks,
+          req.query.offset,
+          req.query.limit,
+          req.query.reverse
         ],
         ENDPOINTS.METRICS_HASHRATE,
         getHashrate

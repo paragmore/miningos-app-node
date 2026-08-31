@@ -3920,3 +3920,69 @@ test('getInventoryMinerDistribution - empty fleet', async (t) => {
   t.alike(result, { rows: [], totalMiners: 0 })
   t.pass()
 })
+
+// ==================== Hashrate Pagination Tests ====================
+
+const HOUR_MS = 3600000
+const PAGING_START = Date.UTC(2026, 7, 1)
+
+function pagingCtx (buckets = 5) {
+  return withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => Array.from({ length: buckets }, (_, i) => ({
+        ts: PAGING_START + i * HOUR_MS,
+        hashrate_mhs_5m_sum_aggr: 1e11,
+        nominal_hashrate_mhs_sum_aggr: 1.25e11
+      }))
+    }
+  })
+}
+
+const pagingQuery = {
+  start: PAGING_START,
+  end: PAGING_START + 5 * HOUR_MS,
+  interval: '1h',
+  nominal: true
+}
+
+test('getHashrate - totalCount spans the range, summary is not paged', async (t) => {
+  const ctx = pagingCtx()
+
+  const full = await getHashrate(ctx, { query: pagingQuery })
+  const page = await getHashrate(ctx, { query: { ...pagingQuery, offset: 1, limit: 2 } })
+
+  t.is(full.totalCount, 5, 'unpaged calls report the total too')
+  t.is(page.totalCount, 5, 'total counts every bucket, not the page')
+  t.is(page.log.length, 2, 'page holds only the requested slice')
+  t.alike(page.log.map(e => e.ts), [PAGING_START + HOUR_MS, PAGING_START + 2 * HOUR_MS])
+  t.alike(page.summary, full.summary, 'summary stays computed over the full range')
+  t.is(page.summary.avgPctOfNominal, 80, 'nominal summary survives paging')
+  t.pass()
+})
+
+test('getHashrate - reverse pages newest first', async (t) => {
+  const result = await getHashrate(pagingCtx(), { query: { ...pagingQuery, reverse: true, limit: 2 } })
+
+  t.alike(result.log.map(e => e.ts), [PAGING_START + 4 * HOUR_MS, PAGING_START + 3 * HOUR_MS])
+  t.is(result.totalCount, 5)
+  t.pass()
+})
+
+test('getHashrate - offset past the end yields an empty page', async (t) => {
+  const result = await getHashrate(pagingCtx(), { query: { ...pagingQuery, offset: 99 } })
+
+  t.alike(result.log, [])
+  t.is(result.totalCount, 5, 'the count still describes the range')
+  t.pass()
+})
+
+test('getHashrate - grouped results are paged the same way', async (t) => {
+  const result = await getHashrate(pagingCtx(), {
+    query: { ...pagingQuery, groupBy: 'container', offset: 3 }
+  })
+
+  t.is(result.totalCount, 5)
+  t.is(result.log.length, 2, 'grouped log honours offset')
+  t.pass()
+})

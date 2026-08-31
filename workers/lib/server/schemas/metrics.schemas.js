@@ -17,6 +17,9 @@ const schemas = {
         current: { type: 'boolean' },
         nominal: { type: 'boolean' },
         racks: { type: 'string' },
+        offset: { type: 'integer', minimum: 0 },
+        limit: { type: 'integer', minimum: 1 },
+        reverse: { type: 'boolean' },
         overwriteCache: { type: 'boolean' }
       },
       required: ['start', 'end']
