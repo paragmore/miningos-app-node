@@ -227,7 +227,15 @@ async function resolvePoolHashrateForBuckets (ctx, { start, end, buckets }) {
 
   const results = await ctx.dataProxy.requestData(RPC_METHODS.GET_WRK_EXT_DATA, {
     type: WORKER_TYPES.MINERPOOL,
-    query: { key: MINERPOOL_EXT_DATA_KEYS.STATS_HISTORY, start, end }
+    query: {
+      key: MINERPOOL_EXT_DATA_KEYS.STATS_HISTORY,
+      start,
+      end,
+      // Projected on the rack before the data travels: a month of raw 5m
+      // snapshots is ~10MB with full stat docs but ~2MB with only the fields
+      // this calculation reads.
+      fields: { ts: 1, 'stats.poolType': 1, 'stats.username': 1, 'stats.hashrate': 1 }
+    }
   })
 
   const sorted = buckets.slice().sort((a, b) => a.startTs - b.startTs)

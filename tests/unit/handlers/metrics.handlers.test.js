@@ -501,6 +501,7 @@ test('getHashrate - pool=true merges pool hashrate per bucket, in MH/s', async (
   t.is(capturedExtData.query.key, 'stats-history', 'should read the raw stats snapshots')
   t.is(capturedExtData.query.start, 1700000000000, 'should cover the requested range')
   t.is(capturedExtData.query.end, 1700100000000, 'should cover the requested range')
+  t.ok(capturedExtData.query.fields, 'should ship a rack-side projection to bound the payload')
   t.is(result.log[0].poolHashrateMhs, 200, 'per-account averages summed, H/s converted to MH/s')
   t.is(result.log[1].poolHashrateMhs, null, 'bucket without pool samples is null')
   t.is(result.summary.avgPoolHashrateMhs, 200, 'summary averages only buckets with pool data')

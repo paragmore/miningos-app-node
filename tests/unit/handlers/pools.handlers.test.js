@@ -381,6 +381,11 @@ test('resolvePoolHashrateForBuckets - averages per account then sums accounts', 
 
   t.is(capturedPayload.type, WORKER_TYPES.MINERPOOL, 'should query minerpool workers')
   t.is(capturedPayload.query.key, 'stats-history', 'should read raw stats snapshots')
+  t.alike(
+    capturedPayload.query.fields,
+    { ts: 1, 'stats.poolType': 1, 'stats.username': 1, 'stats.hashrate': 1 },
+    'should project rack-side to only the fields the calculation reads'
+  )
   t.is(byBucket.get(1770000000000), 250, 'avg of a (200e6) plus b (50e6), in MH/s')
   t.is(byBucket.get(1770003600000), 500, 'single sample bucket')
   t.is(byBucket.get(1770007200000), null, 'bucket without samples is null')
