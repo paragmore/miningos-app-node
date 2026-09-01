@@ -33,6 +33,33 @@ test('UserService - parseUserRow', (t) => {
   t.pass()
 })
 
+test('UserService - createUser lowercases email', async (t) => {
+  let createUserArgs = null
+  let lookedUpEmail = null
+  const mockAuth = {
+    createUser: async (data) => {
+      createUserArgs = data
+    },
+    getUserByEmail: async (email) => {
+      lookedUpEmail = email
+      return { id: 123, email, name: 'Test User', roles: '["admin"]' }
+    }
+  }
+  const userService = new UserService({ sqlite: {}, auth: mockAuth })
+
+  const result = await userService.createUser({
+    email: 'Test.User@Example.COM',
+    name: 'Test User',
+    role: 'admin'
+  })
+
+  t.is(createUserArgs.email, 'test.user@example.com', 'should store email in lowercase')
+  t.is(lookedUpEmail, 'test.user@example.com', 'should look up user by lowercase email')
+  t.is(result.email, 'test.user@example.com', 'should return lowercase email')
+
+  t.pass()
+})
+
 test('UserService - createUser', async (t) => {
   let createUserCalled = false
   let createUserArgs = null
@@ -141,6 +168,32 @@ test('UserService - updateUser', async (t) => {
   t.is(result.email, 'updated@example.com', 'should return updated user email')
   t.is(result.name, 'Updated User', 'should return updated user name')
   t.is(result.role, 'admin', 'should return parsed role')
+
+  t.pass()
+})
+
+test('UserService - updateUser lowercases email', async (t) => {
+  let updateUserArgs = null
+  const mockAuth = {
+    genToken: async () => 'mock-token',
+    updateUser: async (data) => {
+      updateUserArgs = data
+    },
+    getUserById: async (id) => {
+      return { id, email: 'updated@example.com', name: 'Updated User', roles: '["admin"]' }
+    }
+  }
+  const userService = new UserService({ sqlite: {}, auth: mockAuth })
+
+  await userService.updateUser({
+    id: 123,
+    email: 'Updated@Example.COM',
+    name: 'Updated User',
+    role: 'admin',
+    callerRoles: ['admin']
+  })
+
+  t.is(updateUserArgs.email, 'updated@example.com', 'should pass email in lowercase')
 
   t.pass()
 })

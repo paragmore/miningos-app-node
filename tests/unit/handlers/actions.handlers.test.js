@@ -11,8 +11,12 @@ const {
   voteAction,
   cancelActionsBatch
 } = require('../../../workers/lib/server/handlers/actions.handlers')
-const { APPROVED_POOL_URLS } = require('../../../workers/lib/constants')
 const { createMockCtxWithOrks, createMockReq, withDataProxy } = require('../helpers/mockHelpers')
+
+const APPROVED_POOL_URLS = [
+  { id: 'pool-1', host: 'pool.example.com', port: 3333, name: 'Example Pool' },
+  { id: 'pool-2', host: 'backup.example.com', port: 4444, name: 'Backup Pool' }
+]
 
 test('queryActionsBatch - basic functionality', async (t) => {
   const mockCtx = createMockCtxWithOrks(

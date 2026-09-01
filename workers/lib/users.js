@@ -19,13 +19,14 @@ class UserService {
   }
 
   async createUser ({ email, name, role }) {
+    const normalizedEmail = email.toLowerCase()
     await this._auth.createUser({
-      email,
+      email: normalizedEmail,
       name,
       roles: [role]
     })
 
-    const user = await this._auth.getUserByEmail(email)
+    const user = await this._auth.getUserByEmail(normalizedEmail)
     return this.parseUserRow(user)
   }
 
@@ -49,7 +50,7 @@ class UserService {
 
     await this._auth.updateUser({
       token,
-      email,
+      email: email.toLowerCase(),
       name,
       roles: [role]
     })

@@ -13,6 +13,7 @@ const MOCK_MINERS = [{
   tags: ['t-miner'],
   rack: 'rack-1',
   comments: [],
+  address: '192.168.1.100',
   opts: { address: '192.168.1.100' },
   ts: Date.now() - 60000,
   last: {
@@ -53,6 +54,7 @@ const MOCK_MINERS = [{
   tags: ['t-miner'],
   rack: 'rack-1',
   comments: [{ text: 'needs maintenance' }],
+  address: '192.168.1.101',
   opts: { address: '192.168.1.101' },
   ts: Date.now() - 120000,
   last: {
@@ -93,6 +95,7 @@ const MOCK_MINERS = [{
   tags: ['t-miner'],
   rack: 'rack-2',
   comments: [],
+  address: '192.168.2.100',
   opts: { address: '192.168.2.100' },
   ts: Date.now() - 180000,
   last: {
@@ -133,6 +136,7 @@ const MOCK_MINERS = [{
   tags: ['t-miner'],
   rack: 'rack-2',
   comments: [],
+  address: '192.168.2.101',
   opts: { address: '192.168.2.101' },
   ts: Date.now() - 240000,
   last: {
@@ -173,6 +177,7 @@ const MOCK_MINERS = [{
   tags: ['t-miner'],
   rack: 'rack-1',
   comments: [],
+  address: '192.168.1.102',
   opts: { address: '192.168.1.102' },
   ts: Date.now() - 300000,
   last: {
