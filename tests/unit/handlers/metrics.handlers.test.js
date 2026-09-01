@@ -470,6 +470,90 @@ test('getHashrate - interval selects the bucket range', async (t) => {
   t.pass()
 })
 
+test('getHashrate - pool=true merges pool hashrate per bucket, in MH/s', async (t) => {
+  let capturedExtData = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (method === 'getWrkExtData') {
+          capturedExtData = payload
+          return [
+            // First bucket: account a averages (100e6 + 200e6) / 2, account b adds 50e6
+            { ts: 1700006460000, stats: [{ poolType: 'f2pool', username: 'a', hashrate: 100e6 }] },
+            { ts: 1700006760000, stats: [{ poolType: 'f2pool', username: 'a', hashrate: 200e6 }, { poolType: 'ocean', username: 'b', hashrate: 50e6 }] }
+            // Second bucket: no samples
+          ]
+        }
+        return [
+          { ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 100000 },
+          { ts: 1700092800000, hashrate_mhs_5m_sum_aggr: 120000 }
+        ]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, pool: true }
+  })
+
+  t.is(capturedExtData.type, 'minerpool', 'should query the minerpool workers')
+  t.is(capturedExtData.query.key, 'stats-history', 'should read the raw stats snapshots')
+  t.is(capturedExtData.query.start, 1700000000000, 'should cover the requested range')
+  t.is(capturedExtData.query.end, 1700100000000, 'should cover the requested range')
+  t.ok(capturedExtData.query.fields, 'should ship a rack-side projection to bound the payload')
+  t.is(result.log[0].poolHashrateMhs, 200, 'per-account averages summed, H/s converted to MH/s')
+  t.is(result.log[1].poolHashrateMhs, null, 'bucket without pool samples is null')
+  t.is(result.summary.avgPoolHashrateMhs, 200, 'summary averages only buckets with pool data')
+  t.pass()
+})
+
+test('getHashrate - pool samples outside the bucket window are excluded', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method) => {
+        if (method === 'getWrkExtData') {
+          return [
+            { ts: 1700006400000, stats: [{ poolType: 'f2pool', username: 'a', hashrate: 100e6 }] },
+            { ts: 1700006400000 + 3600000, stats: [{ poolType: 'f2pool', username: 'a', hashrate: 900e6 }] }
+          ]
+        }
+        return [{ ts: '1700006400000-1700009999999', hashrate_mhs_5m_sum_aggr: 100000 }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, pool: true }
+  })
+
+  t.is(result.log[0].poolHashrateMhs, 100, 'only the sample inside the bucket timeRange counts')
+  t.pass()
+})
+
+test('getHashrate - without pool flag the response is unchanged', async (t) => {
+  const methods = []
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method) => {
+        methods.push(method)
+        return [{ ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 100000 }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000 }
+  })
+
+  t.absent(methods.includes('getWrkExtData'), 'should not query the minerpool workers')
+  t.absent('poolHashrateMhs' in result.log[0], 'entries carry no pool field')
+  t.absent('avgPoolHashrateMhs' in result.summary, 'summary carries no pool field')
+  t.pass()
+})
+
 test('calculateHashrateSummary - calculates from log entries', (t) => {
   const log = [
     { ts: 1700006400000, hashrateMhs: 100000 },

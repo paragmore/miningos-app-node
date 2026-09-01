@@ -8,6 +8,8 @@ const {
   calculatePoolsSummary,
   getPoolBalanceHistory,
   flattenTransactionResults,
+  flattenPoolStatsHistory,
+  resolvePoolHashrateForBuckets,
   groupByBucket,
   getPoolThingConfig,
   getPoolStatsContainers
@@ -324,6 +326,113 @@ test('groupByBucket - handles missing timestamps', (t) => {
   ]
   const buckets = groupByBucket(entries, 86400000)
   t.ok(Object.keys(buckets).length >= 1, 'should skip items without ts')
+  t.pass()
+})
+
+test('flattenPoolStatsHistory - extracts timestamped stats snapshots', (t) => {
+  const results = [
+    [
+      { ts: '1770000000000', stats: [{ poolType: 'f2pool', username: 'a', hashrate: 1e6 }] },
+      { ts: 1770000300000, stats: [{ poolType: 'ocean', username: 'b', hashrate: 2e6 }] },
+      { ts: 1770000600000 }, // no stats array
+      { stats: [] } // no ts
+    ],
+    { error: 'ERR_ORK_DOWN' },
+    null
+  ]
+
+  const entries = flattenPoolStatsHistory(results)
+  t.is(entries.length, 2, 'should keep only valid snapshots')
+  t.is(entries[0].ts, 1770000000000, 'should coerce string timestamps')
+  t.is(entries[1].stats[0].username, 'b')
+  t.pass()
+})
+
+test('flattenPoolStatsHistory - handles non-array input', (t) => {
+  t.alike(flattenPoolStatsHistory(null), [])
+  t.alike(flattenPoolStatsHistory(undefined), [])
+  t.pass()
+})
+
+test('resolvePoolHashrateForBuckets - averages per account then sums accounts', async (t) => {
+  let capturedPayload = null
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        capturedPayload = payload
+        return [
+          { ts: 1770000060000, stats: [{ poolType: 'f2pool', username: 'a', hashrate: 100e6 }] },
+          { ts: 1770000360000, stats: [{ poolType: 'f2pool', username: 'a', hashrate: 300e6 }, { poolType: 'ocean', username: 'b', hashrate: 50e6 }] },
+          { ts: 1770003660000, stats: [{ poolType: 'f2pool', username: 'a', hashrate: 500e6 }] }
+        ]
+      }
+    }
+  })
+
+  const buckets = [
+    { ts: 1770000000000, startTs: 1770000000000, endTs: 1770003599999 },
+    { ts: 1770003600000, startTs: 1770003600000, endTs: 1770007199999 },
+    { ts: 1770007200000, startTs: 1770007200000, endTs: 1770010799999 }
+  ]
+  const byBucket = await resolvePoolHashrateForBuckets(mockCtx, {
+    start: 1770000000000, end: 1770010800000, buckets
+  })
+
+  t.is(capturedPayload.type, WORKER_TYPES.MINERPOOL, 'should query minerpool workers')
+  t.is(capturedPayload.query.key, 'stats-history', 'should read raw stats snapshots')
+  t.alike(
+    capturedPayload.query.fields,
+    { ts: 1, 'stats.poolType': 1, 'stats.username': 1, 'stats.hashrate': 1 },
+    'should project rack-side to only the fields the calculation reads'
+  )
+  t.is(byBucket.get(1770000000000), 250, 'avg of a (200e6) plus b (50e6), in MH/s')
+  t.is(byBucket.get(1770003600000), 500, 'single sample bucket')
+  t.is(byBucket.get(1770007200000), null, 'bucket without samples is null')
+  t.pass()
+})
+
+test('resolvePoolHashrateForBuckets - unsorted buckets and boundary samples', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async () => [
+        { ts: 1770000000000, stats: [{ poolType: 'f2pool', username: 'a', hashrate: 100e6 }] }, // == startTs
+        { ts: 1770003599999, stats: [{ poolType: 'f2pool', username: 'a', hashrate: 300e6 }] }, // == endTs
+        { ts: 1770003600000, stats: [{ poolType: 'f2pool', username: 'a', hashrate: 900e6 }] } // next bucket
+      ]
+    }
+  })
+
+  const buckets = [
+    { ts: 1770003600000, startTs: 1770003600000, endTs: 1770007199999 },
+    { ts: 1770000000000, startTs: 1770000000000, endTs: 1770003599999 }
+  ]
+  const byBucket = await resolvePoolHashrateForBuckets(mockCtx, {
+    start: 1770000000000, end: 1770007200000, buckets
+  })
+
+  t.is(byBucket.get(1770000000000), 200, 'window is inclusive of both bounds')
+  t.is(byBucket.get(1770003600000), 900, 'boundary sample lands in the later bucket')
+  t.pass()
+})
+
+test('resolvePoolHashrateForBuckets - empty buckets or failed orks degrade to null/empty', async (t) => {
+  const failingCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: { jRequest: async () => { throw new Error('ERR_ORK_DOWN') } }
+  })
+
+  const noBuckets = await resolvePoolHashrateForBuckets(failingCtx, {
+    start: 1, end: 2, buckets: []
+  })
+  t.is(noBuckets.size, 0, 'no buckets yields an empty map without an RPC call')
+
+  const buckets = [{ ts: 1770000000000, startTs: 1770000000000, endTs: 1770003599999 }]
+  const byBucket = await resolvePoolHashrateForBuckets(failingCtx, {
+    start: 1770000000000, end: 1770003600000, buckets
+  })
+  t.is(byBucket.get(1770000000000), null, 'a failed ork yields null buckets, not a crash')
   t.pass()
 })
 

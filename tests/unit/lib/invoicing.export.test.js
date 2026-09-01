@@ -9,18 +9,27 @@ const DAY_MS = 24 * HOUR_MS
 const START = Date.UTC(2026, 7, 1)
 const MHS = 1e11
 const NOMINAL_MHS = 1.25e11
+const POOL_HS = 9.9e16 // 99 PH/s, pool stats are in H/s
 
-function mockCtx ({ buckets = 3, interval = HOUR_MS, globalData = {}, hashrateMhs = MHS } = {}) {
+function mockCtx ({ buckets = 3, interval = HOUR_MS, globalData = {}, hashrateMhs = MHS, poolHashrateHs = POOL_HS } = {}) {
   return withDataProxy({
     conf: { orks: [{ rpcPublicKey: 'key1' }] },
     globalDataLib: { getGlobalData: async ({ type }) => globalData[type] },
     net_r0: {
-      jRequest: async (key, method, params) => Array.from({ length: buckets }, (_, i) => ({
-        ts: START + i * interval,
-        ...(params.type === 'powermeter'
-          ? { site_power_w: 10e6 }
-          : { hashrate_mhs_5m_sum_aggr: hashrateMhs, nominal_hashrate_mhs_sum_aggr: NOMINAL_MHS })
-      }))
+      jRequest: async (key, method, params) => {
+        if (method === 'getWrkExtData') {
+          return Array.from({ length: buckets }, (_, i) => ({
+            ts: START + i * interval + 1000,
+            stats: [{ poolType: 'f2pool', username: 'account-a', hashrate: poolHashrateHs }]
+          }))
+        }
+        return Array.from({ length: buckets }, (_, i) => ({
+          ts: START + i * interval,
+          ...(params.type === 'powermeter'
+            ? { site_power_w: 10e6 }
+            : { hashrate_mhs_5m_sum_aggr: hashrateMhs, nominal_hashrate_mhs_sum_aggr: NOMINAL_MHS })
+        }))
+      }
     }
   })
 }
@@ -60,7 +69,7 @@ test('invoicing exports round every figure to three decimals', async (t) => {
     { buckets: 1, hashrateMhs: 123456789012.3 }
   )
 
-  t.is(out.split('\n')[1], '"01/08/2026","00:00","444.444","98.765","123.457"', 'matches the precision the UI exports')
+  t.is(out.split('\n')[1], '"01/08/2026","00:00","444.444","98.765","123.457","99"', 'matches the precision the UI exports')
   t.pass()
 })
 
@@ -73,9 +82,9 @@ test('invoicing-hourly-hashes - one row per hour, EH delivered over the hour', a
   const lines = out.split('\n')
 
   t.ok(filename.startsWith('invoicing_hourly_hashes_'), 'filename names the export')
-  t.is(lines[0], 'date,hour,hashesDeliveredEh,pctOfNominal,avgHashratePhs')
-  t.is(lines[1], '"01/08/2026","00:00","360","80","100"', '1e11 MH/s x 3600 / 1e12 = 360 EH')
-  t.is(lines[3], '"01/08/2026","02:00","360","80","100"')
+  t.is(lines[0], 'date,hour,hashesDeliveredEh,pctOfNominal,avgMinerHashratePhs,avgPoolHashratePhs')
+  t.is(lines[1], '"01/08/2026","00:00","360","80","100","99"', '1e11 MH/s x 3600 / 1e12 = 360 EH')
+  t.is(lines[3], '"01/08/2026","02:00","360","80","100","99"')
   t.is(lines.length, 4, 'header plus one row per bucket')
   t.pass()
 })
@@ -88,9 +97,9 @@ test('invoicing-daily-hashes - one row per day, EH delivered over the day', asyn
   )
   const lines = out.split('\n')
 
-  t.is(lines[0], 'month,day,hashesDeliveredEh,pctOfNominal,avgHashratePhs')
-  t.is(lines[1], '"August","01","8640","80","100"', '1e11 MH/s x 86400 / 1e12 = 8640 EH')
-  t.is(lines[2], '"August","02","8640","80","100"')
+  t.is(lines[0], 'month,day,hashesDeliveredEh,pctOfNominal,avgMinerHashratePhs,avgPoolHashratePhs')
+  t.is(lines[1], '"August","01","8640","80","100","99"', '1e11 MH/s x 86400 / 1e12 = 8640 EH')
+  t.is(lines[2], '"August","02","8640","80","100","99"')
   t.pass()
 })
 
