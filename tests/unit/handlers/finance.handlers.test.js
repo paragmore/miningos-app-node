@@ -1651,11 +1651,11 @@ test('getEbitda - a monthly LCOE override only moves its own month', async (t) =
     },
     net_r0: {
       jRequest: async (key, method, payload) => {
-        if (payload?.keys) {
-          return [[
+        if (method === 'tailLog') {
+          return [
             { ts: octTs, site_power_w: 1000000, hashrate_mhs_5m_sum_aggr: 100 },
             { ts: novTs, site_power_w: 1000000, hashrate_mhs_5m_sum_aggr: 100 }
-          ]]
+          ]
         }
         return []
       }
