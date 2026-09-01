@@ -943,6 +943,64 @@ test('Api', { timeout: 90000 }, async (main) => {
     })
   })
 
+  await main.test('Api: get metrics/hashrate - pool opt-in', async (n) => {
+    const start = 1700000000000
+    const end = 1700100000000
+    const bucketTs = 1700006400000
+    const api = `${appNodeBaseUrl}${ENDPOINTS.METRICS_HASHRATE}?start=${start}&end=${end}&overwriteCache=true`
+
+    const withHashrateMocks = () => {
+      const originalJRequest = worker.worker.net_r0.jRequest
+      worker.worker.net_r0.jRequest = (publicKey, method) => {
+        if (method === 'tailLog') {
+          return Promise.resolve([{ ts: bucketTs, hashrate_mhs_5m_sum_aggr: 100000 }])
+        }
+        if (method === 'getWrkExtData') {
+          return Promise.resolve([
+            { ts: bucketTs + 60000, stats: [{ poolType: 'f2pool', username: 'a', hashrate: 100e6 }] }
+          ])
+        }
+        if (method === 'listThings') return Promise.resolve(mockMiners)
+        if (method === 'getThingsCount') return Promise.resolve(mockMiners.length)
+        return Promise.resolve({})
+      }
+      return () => { worker.worker.net_r0.jRequest = originalJRequest }
+    }
+
+    await n.test('pool=true attaches poolHashrateMhs per bucket and avgPoolHashrateMhs', async (t) => {
+      const restore = withHashrateMocks()
+      try {
+        const headers = await createAuthHeaders(readonlyUser)
+        const { body: data } = await httpClient.get(`${api}&pool=true`, { headers, encoding })
+
+        t.is(data.log.length, 1, 'should return the miner bucket')
+        t.is(data.log[0].hashrateMhs, 100000, 'miner hashrate read from the tail logs')
+        t.is(data.log[0].poolHashrateMhs, 100, 'pool hashrate converted from H/s to MH/s')
+        t.is(data.summary.avgPoolHashrateMhs, 100, 'summary carries the pool average')
+      } catch (e) {
+        t.fail(`Request failed: ${e.message || e}`)
+      } finally {
+        restore()
+      }
+    })
+
+    await n.test('without pool the response is unchanged', async (t) => {
+      const restore = withHashrateMocks()
+      try {
+        const headers = await createAuthHeaders(readonlyUser)
+        const { body: data } = await httpClient.get(api, { headers, encoding })
+
+        t.is(data.log[0].hashrateMhs, 100000, 'miner hashrate read from the tail logs')
+        t.is(data.log[0].poolHashrateMhs, undefined, 'entries carry no pool field')
+        t.is(data.summary.avgPoolHashrateMhs, undefined, 'summary carries no pool field')
+      } catch (e) {
+        t.fail(`Request failed: ${e.message || e}`)
+      } finally {
+        restore()
+      }
+    })
+  })
+
   await main.test('Api: get permissions', async (n) => {
     const api = `${appNodeBaseUrl}${ENDPOINTS.PERMISSIONS}`
     await testGetEndpointSecurity(n, httpClient, api, invalidToken, readonlyUser, encoding)

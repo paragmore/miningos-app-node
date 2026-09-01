@@ -16,6 +16,7 @@ const schemas = {
         container: { type: 'string' },
         current: { type: 'boolean' },
         nominal: { type: 'boolean' },
+        pool: { type: 'boolean' },
         racks: { type: 'string' },
         offset: { type: 'integer', minimum: 0 },
         limit: { type: 'integer', minimum: 1 },

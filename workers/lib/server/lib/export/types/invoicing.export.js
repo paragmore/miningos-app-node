@@ -74,14 +74,14 @@ function buildHashesEntry ({ type, interval, seconds, filenamePrefix, periodColu
     type,
     perms: ['reporting:r'],
     jsonRootKey: 'hashes',
-    columns: [...periodColumns, 'hashesDeliveredEh', 'pctOfNominal', 'avgHashratePhs'],
+    columns: [...periodColumns, 'hashesDeliveredEh', 'pctOfNominal', 'avgMinerHashratePhs', 'avgPoolHashratePhs'],
     filenamePrefix () {
       return filenamePrefix
     },
     assertParams: assertRange,
     async fetchExport (ctx, { params, now, timezone }) {
       const { log } = await getHashrate(ctx, {
-        query: { start: params.start, end: params.end, interval, nominal: true }
+        query: { start: params.start, end: params.end, interval, nominal: true, pool: true }
       })
 
       async function * rows () {
@@ -91,7 +91,8 @@ function buildHashesEntry ({ type, interval, seconds, filenamePrefix, periodColu
             ...mapPeriod(entry.ts, timezone),
             hashesDeliveredEh: derive([hashrateMhs], (mhs) => (mhs * seconds) / 1e12),
             pctOfNominal: num(entry.pctOfNominal),
-            avgHashratePhs: derive([hashrateMhs], (mhs) => mhs / 1e9)
+            avgMinerHashratePhs: derive([hashrateMhs], (mhs) => mhs / 1e9),
+            avgPoolHashratePhs: derive([num(entry.poolHashrateMhs)], (mhs) => mhs / 1e9)
           })
         }
       }

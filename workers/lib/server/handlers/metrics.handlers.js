@@ -41,6 +41,7 @@ const {
   rackFilterFor
 } = require('../../metrics.utils')
 const { parseRacks } = require('../lib/queryUtils')
+const { resolvePoolHashrateForBuckets } = require('./pools.handlers')
 
 function firstOrkEntries (res) {
   return Array.isArray(res?.[0]) ? res[0] : []
@@ -118,6 +119,9 @@ async function resolveHashrate (ctx, req) {
   // bucket, which only the per-bucket aggregate carries. Opt-in: the site nominal alone is
   // served by /auth/site/status/live.
   const withNominal = req.query.nominal === true || req.query.nominal === 'true'
+  // Opt-in pool-reported hashrate per bucket, so invoicing can compare the
+  // miner-telemetry series against what the pools credited.
+  const withPool = req.query.pool === true || req.query.pool === 'true'
 
   const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
     type: WORKER_TYPES.MINER,
@@ -152,13 +156,44 @@ async function resolveHashrate (ctx, req) {
     }
   })
 
+  if (withPool) await mergePoolHashrate(ctx, log, { start, end, groupRange })
+
   const summary = calculateHashrateSummary(log, withNominal)
+
+  if (withPool) summary.avgPoolHashrateMhs = calculateAvgPoolHashrate(log)
 
   if (req.query.current) {
     summary.currentHashrateMhs = await getCurrentHashrate(ctx, aggrField, container)
   }
 
   return { log, summary }
+}
+
+// Attaches the pool-reported hashrate to each miner-telemetry bucket, using the
+// bucket's own time window so both series cover exactly the same period.
+async function mergePoolHashrate (ctx, log, { start, end, groupRange }) {
+  if (!log.length) return
+
+  const bucketMs = RANGE_BUCKETS[groupRange] || (60 * 60 * 1_000) // '1H'
+  const buckets = log.map((entry) => ({
+    ts: entry.ts,
+    startTs: entry.timeRange?.startTs ?? entry.ts,
+    endTs: entry.timeRange?.endTs ?? entry.ts + bucketMs - 1
+  }))
+
+  const poolByBucket = await resolvePoolHashrateForBuckets(ctx, { start, end, buckets })
+
+  for (const entry of log) {
+    entry.poolHashrateMhs = poolByBucket.get(entry.ts) ?? null
+  }
+}
+
+// Unlike the miner average, buckets without pool samples are excluded rather
+// than counted as 0: a gap in pool polling must not read as lost hashrate.
+function calculateAvgPoolHashrate (log) {
+  const values = log.map((entry) => entry.poolHashrateMhs).filter(Number.isFinite)
+  if (!values.length) return null
+  return safeDiv(values.reduce((sum, val) => sum + val, 0), values.length)
 }
 
 const HASHRATE_GROUP_FIELDS = {

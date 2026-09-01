@@ -45,6 +45,7 @@ module.exports = (ctx) => {
           req.query.container,
           req.query.current,
           req.query.nominal,
+          req.query.pool,
           req.query.racks,
           req.query.offset,
           req.query.limit,

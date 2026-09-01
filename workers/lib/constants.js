@@ -766,7 +766,8 @@ const PERIOD_TYPES = {
 
 const MINERPOOL_EXT_DATA_KEYS = {
   TRANSACTIONS: 'transactions',
-  STATS: 'stats'
+  STATS: 'stats',
+  STATS_HISTORY: 'stats-history'
 }
 
 const ELECTRICITY_EXT_DATA_KEYS = {
