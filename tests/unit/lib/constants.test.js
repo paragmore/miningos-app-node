@@ -18,7 +18,8 @@ const {
   RPC_TIMEOUT,
   RPC_CONCURRENCY_LIMIT,
   USER_SETTINGS_TYPE,
-  CUSTOM_ALERT_CONFIG
+  CUSTOM_ALERT_CONFIG,
+  POOL_PROTOCOL
 } = require('../../../workers/lib/constants')
 
 test('constants - SUPER_ADMIN_ROLE', (t) => {
@@ -68,6 +69,12 @@ test('constants - CUSTOM_ALERT_CONFIG', (t) => {
     })
   }
 
+  t.pass()
+})
+
+test('constants - POOL_PROTOCOL', (t) => {
+  t.is(POOL_PROTOCOL, 'stratum+tcp', 'should be stratum+tcp')
+  t.ok(typeof POOL_PROTOCOL === 'string', 'should be string')
   t.pass()
 })
 
@@ -208,6 +215,7 @@ test('constants - all exports are defined', (t) => {
   t.ok(constants.RPC_CONCURRENCY_LIMIT, 'should export RPC_CONCURRENCY_LIMIT')
   t.ok(constants.USER_SETTINGS_TYPE, 'should export USER_SETTINGS_TYPE')
   t.ok(constants.CUSTOM_ALERT_CONFIG, 'should export CUSTOM_ALERT_CONFIG')
+  t.ok(constants.POOL_PROTOCOL, 'should export POOL_PROTOCOL')
 
   t.pass()
 })
