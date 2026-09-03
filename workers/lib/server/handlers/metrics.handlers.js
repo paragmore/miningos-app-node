@@ -292,6 +292,46 @@ function bucketHours (groupRange) {
   return bucketMs ? bucketMs / (60 * 60 * 1_000) : 1 // '1H'
 }
 
+function addBucketValues (acc, val) {
+  if (val && typeof val === 'object') {
+    const out = { ...(acc || {}) }
+    for (const [meter, v] of Object.entries(val)) out[meter] = (out[meter] || 0) + (Number(v) || 0)
+    return out
+  }
+  return (acc || 0) + (Number(val) || 0)
+}
+
+function scaleBucketValues (val, factor) {
+  if (val && typeof val === 'object') {
+    return Object.fromEntries(Object.entries(val).map(([meter, v]) => [meter, v * factor]))
+  }
+  return (Number(val) || 0) * factor
+}
+
+function rollupMonthly (log) {
+  const months = new Map()
+
+  for (const entry of log) {
+    const date = new Date(entry.ts)
+    const ts = Date.UTC(date.getUTCFullYear(), date.getUTCMonth())
+    const month = months.get(ts) || {
+      ts,
+      timeRange: { startTs: ts, endTs: Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1) - 1 },
+      days: 0,
+      powerW: null,
+      consumptionMWh: null
+    }
+    month.days++
+    month.powerW = addBucketValues(month.powerW, entry.powerW)
+    month.consumptionMWh = addBucketValues(month.consumptionMWh, entry.consumptionMWh)
+    months.set(ts, month)
+  }
+
+  return [...months.values()]
+    .sort((a, b) => a.ts - b.ts)
+    .map(({ days, ...month }) => ({ ...month, powerW: scaleBucketValues(month.powerW, 1 / days) }))
+}
+
 async function getConsumption (ctx, req) {
   const { start, end } = validateStartEnd(req)
 
@@ -311,7 +351,9 @@ async function getConsumption (ctx, req) {
   const byMeter = req.query.byMeter === true || req.query.byMeter === 'true'
   if (byMeter) return getByMeterConsumption(ctx, req)
 
-  const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
+  const interval = resolveInterval(start, end, req.query.interval)
+  const monthly = interval === '1M'
+  const { key, groupRange } = getIntervalConfig(monthly ? '1d' : interval)
 
   // Central-DCS sites report site power through the Siemens DCS worker's stat log
   // (site_power_w), not a powermeter worker
@@ -339,7 +381,7 @@ async function getConsumption (ctx, req) {
   })
 
   const hours = bucketHours(groupRange)
-  const log = firstOrkEntries(res).map(val => {
+  const buckets = firstOrkEntries(res).map(val => {
     const powerW = Number(val[AGGR_FIELDS.SITE_POWER]) || 0
     const timeRange = parseEntryTimeRange(val.ts)
     return {
@@ -350,6 +392,7 @@ async function getConsumption (ctx, req) {
     }
   })
 
+  const log = monthly ? rollupMonthly(buckets) : buckets
   const summary = calculateConsumptionSummary(log)
 
   return { log, summary }
@@ -364,7 +407,9 @@ async function getByMeterConsumption (ctx, req) {
     throw new Error('ERR_BY_METER_REQUIRES_CENTRAL_DCS')
   }
 
-  const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
+  const interval = resolveInterval(start, end, req.query.interval)
+  const monthly = interval === '1M'
+  const { key, groupRange } = getIntervalConfig(monthly ? '1d' : interval)
 
   const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
     type: WORKER_TYPES.DCS,
@@ -380,13 +425,13 @@ async function getByMeterConsumption (ctx, req) {
 
   const hours = bucketHours(groupRange)
 
-  return buildByMeterConsumption(firstOrkEntries(res), AGGR_FIELDS.BY_METER_POWER, hours)
+  return buildByMeterConsumption(firstOrkEntries(res), AGGR_FIELDS.BY_METER_POWER, hours, monthly)
 }
 
 // by_meter_power_w arrives as a { meter: powerW } map per bucket. Mirror the
 // grouped-consumption shape so each entry carries per-meter power/consumption.
-function buildByMeterConsumption (entries, aggrField, hours) {
-  const log = entries.map(val => {
+function buildByMeterConsumption (entries, aggrField, hours, monthly = false) {
+  const buckets = entries.map(val => {
     const raw = val[aggrField]
     const powerW = raw && typeof raw === 'object' ? raw : {}
     const timeRange = parseEntryTimeRange(val.ts)
@@ -400,6 +445,7 @@ function buildByMeterConsumption (entries, aggrField, hours) {
     }
   })
 
+  const log = monthly ? rollupMonthly(buckets) : buckets
   const summary = calculateByMeterConsumptionSummary(log)
 
   return { log, summary }
@@ -1823,6 +1869,7 @@ module.exports = {
   calculateHashrateSummary,
   calculateGroupedHashrateSummary,
   getConsumption,
+  rollupMonthly,
   calculateConsumptionSummary,
   calculateByMeterConsumptionSummary,
   calculateGroupedConsumptionSummary,

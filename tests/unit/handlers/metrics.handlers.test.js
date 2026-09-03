@@ -5,6 +5,7 @@ const {
   getHashrate,
   calculateHashrateSummary,
   getConsumption,
+  rollupMonthly,
   calculateConsumptionSummary,
   calculateByMeterConsumptionSummary,
   calculateGroupedConsumptionSummary,
@@ -988,11 +989,11 @@ test('getConsumption - byMeter applies the 1M interval to the ork query and MWh 
   })
 
   t.is(capturedPayload.key, 'stat-3h', 'monthly interval tails the 3h stat log')
-  t.is(capturedPayload.groupRange, '1M', 'and buckets into 1-month windows')
-  t.is(result.log.length, 2, 'one log entry per monthly bucket')
-  t.alike(result.log[0].consumptionMWh, { 'PM-1': 720 }, '1 MW over a 720h bucket is 720 MWh')
-  t.alike(result.log[1].consumptionMWh, { 'PM-1': 1440 }, '2 MW over a 720h bucket is 1440 MWh')
-  t.is(result.summary.groupedBy['PM-1'].totalConsumptionMWh, 2160, 'PM-1 consumption sums both monthly buckets')
+  t.is(capturedPayload.groupRange, '1D', 'via daily buckets, rolled up per calendar month')
+  t.is(result.log.length, 2, 'one log entry per calendar month')
+  t.alike(result.log[0].consumptionMWh, { 'PM-1': 24 }, 'November holds its single covered day, not a full 720h')
+  t.alike(result.log[1].consumptionMWh, { 'PM-1': 48 }, 'December likewise')
+  t.is(result.summary.groupedBy['PM-1'].totalConsumptionMWh, 72, 'PM-1 consumption sums both monthly buckets')
   t.pass()
 })
 
@@ -1016,12 +1017,12 @@ test('getConsumption - site power applies the 1M interval to the ork query and M
   })
 
   t.is(capturedPayload.key, 'stat-3h', 'monthly interval tails the 3h stat log')
-  t.is(capturedPayload.groupRange, '1M', 'and buckets into 1-month windows')
-  t.is(result.log.length, 2, 'one entry per monthly bucket')
-  t.is(result.log[0].consumptionMWh, 1440, '2 MW over a 720h bucket is 1440 MWh')
-  t.is(result.log[1].consumptionMWh, 720, '1 MW over a 720h bucket is 720 MWh')
+  t.is(capturedPayload.groupRange, '1D', 'via daily buckets, rolled up per calendar month')
+  t.is(result.log.length, 2, 'one entry per calendar month')
+  t.is(result.log[0].consumptionMWh, 48, 'November holds its single covered day, not a full 720h')
+  t.is(result.log[1].consumptionMWh, 24, 'December likewise')
   t.is(result.summary.avgPowerW, 1500000, 'summary averages power across both monthly buckets')
-  t.is(result.summary.totalConsumptionMWh, 2160, 'summary sums consumption across both buckets')
+  t.is(result.summary.totalConsumptionMWh, 72, 'summary sums consumption across both buckets')
   t.pass()
 })
 
@@ -4069,4 +4070,34 @@ test('getHashrate - grouped results are paged the same way', async (t) => {
   t.is(result.totalCount, 5)
   t.is(result.log.length, 2, 'grouped log honours offset')
   t.pass()
+})
+
+test('rollupMonthly - one bucket per calendar month, energy is the daily sum', (t) => {
+  const day = 86400000
+  const jul31 = Date.UTC(2026, 6, 31)
+  const daily = [
+    { ts: Date.UTC(2026, 6, 1), powerW: 10, consumptionMWh: 0.24 },
+    { ts: jul31, powerW: 20, consumptionMWh: 0.48 },
+    { ts: jul31 + day, powerW: 30, consumptionMWh: 0.72 }
+  ]
+
+  const log = rollupMonthly(daily)
+
+  t.is(log.length, 2, 'July and August, no epoch straddle')
+  t.is(log[0].ts, Date.UTC(2026, 6, 1), 'first bucket starts at the calendar month')
+  t.is(log[0].timeRange.endTs, Date.UTC(2026, 7, 1) - 1, 'ends at the last ms of the month')
+  t.is(log[0].consumptionMWh, 0.72, 'July energy is the sum of its 2 covered days, not 31 extrapolated')
+  t.is(log[0].powerW, 15, 'power averages over the covered days only')
+  t.is(log[1].consumptionMWh, 0.72, 'August energy')
+})
+
+test('rollupMonthly - per-meter maps roll up meter by meter', (t) => {
+  const log = rollupMonthly([
+    { ts: Date.UTC(2026, 6, 1), powerW: { a: 10, b: 4 }, consumptionMWh: { a: 0.24, b: 0.096 } },
+    { ts: Date.UTC(2026, 6, 2), powerW: { a: 20 }, consumptionMWh: { a: 0.48 } }
+  ])
+
+  t.is(log.length, 1, 'single month')
+  t.alike(log[0].consumptionMWh, { a: 0.72, b: 0.096 }, 'energy summed per meter')
+  t.alike(log[0].powerW, { a: 15, b: 2 }, 'power averaged over the month days')
 })
