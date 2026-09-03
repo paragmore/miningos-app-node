@@ -1,6 +1,5 @@
 'use strict'
 
-const { METRICS_TIME } = require('../../../../constants')
 const { getHashrate, getConsumption } = require('../../../handlers/metrics.handlers')
 const {
   getCostParameters,
@@ -143,9 +142,7 @@ const invoiceBreakdown = {
       getHashrate(ctx, { query: { start, end, interval: '1d', nominal: true } }),
       getConsumption(ctx, { query: { start, end, interval: '1d' } }),
       getCostParameters(ctx),
-      // Widened by a day on each side because getProductionCosts compares month
-      // starts built in local time against the requested range.
-      getProductionCosts(ctx, start - METRICS_TIME.ONE_DAY_MS, end + METRICS_TIME.ONE_DAY_MS)
+      getProductionCosts(ctx, start, end)
     ])
 
     // The invoice month is read in UTC, not in the requested timezone: the UI asks

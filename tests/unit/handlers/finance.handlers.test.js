@@ -25,6 +25,7 @@ const {
   calculateDetailedRevenueSummary,
   getHashRevenue,
   getPowerCost,
+  getProductionCosts,
   getStartOfMonthUtc,
   processDailyRevenueBtc,
   processDailyAvgPrices,
@@ -1712,5 +1713,24 @@ test('getEbitda and getHashRevenue request the historical price key the mempool 
 
   t.ok(requestedKeys.includes('HISTORICAL_PRICES'), 'asks for the key the worker actually serves')
   t.absent(requestedKeys.includes('prices'), 'never asks for the stripped `prices` key')
+  t.pass()
+})
+
+// ==================== Production Costs Tests ====================
+
+test('getProductionCosts - keeps every month overlapping the range', async (t) => {
+  const AUG_1_UTC = Date.UTC(2026, 7, 1)
+  const SEP_1_UTC = Date.UTC(2026, 8, 1)
+  const FOUR_HOURS = 4 * 60 * 60 * 1000
+  const mockCtx = {
+    globalDataLib: {
+      getGlobalData: async () => [7, 8, 9, 10].map(month => ({ site: 'Ivinhema', year: 2026, month, operationalCost: month }))
+    }
+  }
+  const months = async (start, end) => (await getProductionCosts(mockCtx, start, end)).map(r => r.month)
+
+  t.alike(await months(AUG_1_UTC, SEP_1_UTC - 1), [8], 'UTC month bounds select only that month')
+  t.alike(await months(AUG_1_UTC + FOUR_HOURS, SEP_1_UTC + FOUR_HOURS - 1), [8, 9], 'a local-midnight start must not drop the requested month')
+  t.alike(await months(Date.UTC(2026, 7, 15), Date.UTC(2026, 7, 20)), [8], 'a range inside a month keeps that month')
   t.pass()
 })

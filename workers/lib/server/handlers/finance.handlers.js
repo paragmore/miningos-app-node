@@ -7,7 +7,6 @@ const {
   MINERPOOL_EXT_DATA_KEYS,
   RPC_METHODS,
   GLOBAL_DATA_TYPES,
-  METRICS_TIME,
   BTC_SATS
 } = require('../../constants')
 const { getStartOfDay, safeDiv, runParallel } = require('../../utils')
@@ -1223,9 +1222,7 @@ async function getPowerCost (ctx, req) {
       query: { key: 'HISTORICAL_PRICES', start, end }
     }).then(r => cb(null, r)).catch(cb),
 
-    // Widened by a day on each side because getProductionCosts compares
-    // local-time month starts; the month filter below is the precise one.
-    (cb) => getProductionCosts(ctx, startMonthTs - METRICS_TIME.ONE_DAY_MS, end + METRICS_TIME.ONE_DAY_MS)
+    (cb) => getProductionCosts(ctx, start, end)
       .then(r => cb(null, r)).catch(cb)
   ])
 
@@ -1350,13 +1347,9 @@ async function getProductionCosts (ctx, start, end) {
   })
   if (!Array.isArray(costs)) return []
 
-  const startDate = new Date(start)
-  const endDate = new Date(end)
-  return costs.filter(entry => {
-    if (!entry || !entry.year || !entry.month) return false
-    const entryDate = new Date(entry.year, entry.month - 1, 1)
-    return entryDate >= startDate && entryDate <= endDate
-  })
+  return costs.filter(entry => entry && entry.year && entry.month &&
+    Date.UTC(entry.year, entry.month - 1, 1) <= end &&
+    Date.UTC(entry.year, entry.month, 1) > start)
 }
 
 function processCostsData (costs) {
