@@ -1,7 +1,7 @@
 'use strict'
 
 const { parseJsonQueryParam } = require('../../utils')
-const { ACTIONS_MAX_QUERIES } = require('../../constants')
+const { ACTIONS_MAX_QUERIES, POOL_PROTOCOL } = require('../../constants')
 const { detectPayloadFormat, peekFirstChunk, prependChunk } = require('../lib/payloadFormat')
 
 async function queryActionsBatch (ctx, req) {
@@ -120,7 +120,7 @@ const transformPushActionPayload = async (ctx, payload) => {
         const { host, port, name } = poolUrl
         result.push({
           poolUrlId,
-          url: `stratum+tcp://${host}:${port}`,
+          url: host?.startsWith(POOL_PROTOCOL) ? `${host}:${port}` : `${POOL_PROTOCOL}://${host}:${port}`,
           workerName,
           workerPassword,
           pool: name
