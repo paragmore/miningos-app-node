@@ -803,8 +803,6 @@ async function getMinerStatus (ctx, req) {
       [AGGR_FIELDS.MAINTENANCE_CNT]: 1,
       [AGGR_FIELDS.ERROR_CNT]: 1
     },
-    groupRange: '1D',
-    shouldCalculateAvg: true,
     start,
     end
   })
@@ -820,6 +818,10 @@ async function getMinerStatus (ctx, req) {
   return { log, summary }
 }
 
+// Averages the day's stat snapshots app-side instead of via groupRange on the
+// worker: the worker-side average skips snapshots where a grouped-count key is
+// absent, so a status seen in a single snapshot was reported at its full count
+// for the whole day.
 function processMinerStatusData (results) {
   const daily = {}
   for (const entry of iterateRpcEntries(results)) {
@@ -827,27 +829,36 @@ function processMinerStatusData (results) {
     const ts = rawTs ? getStartOfDay(rawTs) : null
     if (!ts) continue
     if (!daily[ts]) {
-      daily[ts] = { online: 0, offline: 0, sleep: 0, maintenance: 0, error: 0 }
-      const timeRange = parseEntryTimeRange(entry.ts || entry.timestamp)
-      if (timeRange) daily[ts].timeRange = timeRange
+      daily[ts] = { total: 0, offline: 0, sleep: 0, maintenance: 0, error: 0, snapshots: new Set() }
     }
 
-    const offlineCnt = sumObjectValues(entry[AGGR_FIELDS.OFFLINE_CNT] || entry.aggrFields?.[AGGR_FIELDS.OFFLINE_CNT])
-    const sleepCnt = sumObjectValues(entry[AGGR_FIELDS.SLEEP_CNT] || entry.aggrFields?.[AGGR_FIELDS.SLEEP_CNT])
-    const maintenanceCnt = sumObjectValues(entry[AGGR_FIELDS.MAINTENANCE_CNT] || entry.aggrFields?.[AGGR_FIELDS.MAINTENANCE_CNT])
-    const errorCnt = sumObjectValues(entry[AGGR_FIELDS.ERROR_CNT] || entry.aggrFields?.[AGGR_FIELDS.ERROR_CNT])
+    const bucket = daily[ts]
+    bucket.snapshots.add(rawTs)
+    bucket.offline += sumObjectValues(entry[AGGR_FIELDS.OFFLINE_CNT] || entry.aggrFields?.[AGGR_FIELDS.OFFLINE_CNT])
+    bucket.sleep += sumObjectValues(entry[AGGR_FIELDS.SLEEP_CNT] || entry.aggrFields?.[AGGR_FIELDS.SLEEP_CNT])
+    bucket.maintenance += sumObjectValues(entry[AGGR_FIELDS.MAINTENANCE_CNT] || entry.aggrFields?.[AGGR_FIELDS.MAINTENANCE_CNT])
+    bucket.error += sumObjectValues(entry[AGGR_FIELDS.ERROR_CNT] || entry.aggrFields?.[AGGR_FIELDS.ERROR_CNT])
+    bucket.total += sumObjectValues(entry[AGGR_FIELDS.TYPE_CNT]) || entry.total_cnt || entry.count || 0
+  }
 
-    daily[ts].offline += offlineCnt
-    daily[ts].sleep += sleepCnt
-    daily[ts].maintenance += maintenanceCnt
-    daily[ts].error += errorCnt
-
-    const totalCount = sumObjectValues(entry[AGGR_FIELDS.TYPE_CNT]) || entry.total_cnt || entry.count || 0
-    if (totalCount > 0) {
-      daily[ts].online += Math.max(0, totalCount - offlineCnt - sleepCnt - maintenanceCnt - errorCnt)
+  const averaged = {}
+  for (const [ts, bucket] of Object.entries(daily)) {
+    const snapshots = bucket.snapshots.size || 1
+    const offline = Math.round(bucket.offline / snapshots)
+    const sleep = Math.round(bucket.sleep / snapshots)
+    const maintenance = Math.round(bucket.maintenance / snapshots)
+    const error = Math.round(bucket.error / snapshots)
+    const total = Math.round(bucket.total / snapshots)
+    averaged[ts] = {
+      online: Math.max(0, total - offline - sleep - maintenance - error),
+      offline,
+      sleep,
+      maintenance,
+      error,
+      timeRange: { startTs: Number(ts), endTs: Number(ts) + METRICS_TIME.ONE_DAY_MS - 1 }
     }
   }
-  return daily
+  return averaged
 }
 
 function calculateMinerStatusSummary (log) {
@@ -898,8 +909,6 @@ async function getGroupedMinerStatus (ctx, req) {
     type: WORKER_TYPES.MINER,
     tag: WORKER_TAGS.MINER,
     aggrFields,
-    groupRange: '1D',
-    shouldCalculateAvg: true,
     start,
     end
   })
@@ -913,6 +922,7 @@ async function getGroupedMinerStatus (ctx, req) {
   return { log }
 }
 
+// Same day-bucket averaging as processMinerStatusData, per miner type.
 function processGroupedMinerStatusData (results) {
   const daily = {}
   for (const entry of iterateRpcEntries(results)) {
@@ -920,11 +930,10 @@ function processGroupedMinerStatusData (results) {
     const ts = rawTs ? getStartOfDay(rawTs) : null
     if (!ts) continue
     if (!daily[ts]) {
-      daily[ts] = { total: {}, online: {}, offline: {}, sleep: {}, maintenance: {}, error: {} }
-      const timeRange = parseEntryTimeRange(entry.ts || entry.timestamp)
-      if (timeRange) daily[ts].timeRange = timeRange
+      daily[ts] = { total: {}, online: {}, offline: {}, sleep: {}, maintenance: {}, error: {}, snapshots: new Set() }
     }
     const bucket = daily[ts]
+    bucket.snapshots.add(rawTs)
     mergeGroupedField(bucket.total, entry[AGGR_FIELDS.TYPE_CNT])
     mergeGroupedField(bucket.offline, entry[AGGR_FIELDS.OFFLINE_TYPE_CNT])
     mergeGroupedField(bucket.sleep, entry[AGGR_FIELDS.SLEEP_TYPE_CNT])
@@ -932,11 +941,19 @@ function processGroupedMinerStatusData (results) {
     mergeGroupedField(bucket.error, entry[AGGR_FIELDS.ERROR_TYPE_CNT])
   }
 
-  for (const bucket of Object.values(daily)) {
+  for (const [ts, bucket] of Object.entries(daily)) {
+    const snapshots = bucket.snapshots.size || 1
+    delete bucket.snapshots
+    for (const field of ['total', 'offline', 'sleep', 'maintenance', 'error']) {
+      for (const key of Object.keys(bucket[field])) {
+        bucket[field][key] = Math.round(bucket[field][key] / snapshots)
+      }
+    }
     for (const type of Object.keys(bucket.total)) {
       const online = bucket.total[type] - (bucket.offline[type] || 0) - (bucket.sleep[type] || 0) - (bucket.maintenance[type] || 0) - (bucket.error[type] || 0)
       bucket.online[type] = Math.max(0, online)
     }
+    bucket.timeRange = { startTs: Number(ts), endTs: Number(ts) + METRICS_TIME.ONE_DAY_MS - 1 }
   }
   return daily
 }

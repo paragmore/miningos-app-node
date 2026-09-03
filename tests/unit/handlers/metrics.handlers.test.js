@@ -2031,6 +2031,59 @@ test('processMinerStatusData - handles entries with aggrFields wrapper', (t) => 
   t.pass()
 })
 
+test('processMinerStatusData - averages the day snapshots, absent statuses count as zero', (t) => {
+  const dayStart = 1700006400000
+  const threeHours = 3 * 60 * 60 * 1000
+  // 4 snapshots in the same day; miners offline in only one of them
+  const results = [[
+    { ts: dayStart, type_cnt: { m50: 100 } },
+    { ts: dayStart + threeHours, type_cnt: { m50: 100 } },
+    { ts: dayStart + 2 * threeHours, type_cnt: { m50: 100 } },
+    { ts: dayStart + 3 * threeHours, type_cnt: { m50: 100 }, offline_cnt: { 'container-1a': 8 } }
+  ]]
+
+  const daily = processMinerStatusData(results)
+  t.is(daily[dayStart].offline, 2, 'offline should average over all snapshots (8/4), not only where present')
+  t.is(daily[dayStart].online, 98, 'online should reflect the averaged offline count')
+  t.pass()
+})
+
+test('processMinerStatusData - averages snapshots per day across multiple orks', (t) => {
+  const dayStart = 1700006400000
+  const threeHours = 3 * 60 * 60 * 1000
+  // two orks, two shared snapshot ticks: counts sum across orks, then average over ticks
+  const results = [
+    [
+      { ts: dayStart, type_cnt: { m50: 60 }, offline_cnt: { 'container-1a': 4 } },
+      { ts: dayStart + threeHours, type_cnt: { m50: 60 } }
+    ],
+    [
+      { ts: dayStart, type_cnt: { m30: 40 }, offline_cnt: { 'container-2b': 2 } },
+      { ts: dayStart + threeHours, type_cnt: { m30: 40 } }
+    ]
+  ]
+
+  const daily = processMinerStatusData(results)
+  t.is(daily[dayStart].offline, 3, 'offline should be the fleet sum per tick averaged over ticks ((4+2)/2)')
+  t.is(daily[dayStart].online, 97, 'online should derive from the averaged totals (100-3)')
+  t.pass()
+})
+
+test('processGroupedMinerStatusData - averages the day snapshots per type', (t) => {
+  const dayStart = 1700006400000
+  const threeHours = 3 * 60 * 60 * 1000
+  const results = [[
+    { ts: dayStart, type_cnt: { m50: 100, s19: 50 } },
+    { ts: dayStart + threeHours, type_cnt: { m50: 100, s19: 50 }, offline_type_cnt: { m50: 10 } }
+  ]]
+
+  const daily = processGroupedMinerStatusData(results)
+  t.is(daily[dayStart].offline.m50, 5, 'per-type offline should average over all snapshots (10/2)')
+  t.is(daily[dayStart].online.m50, 95, 'per-type online should reflect the averaged offline')
+  t.is(daily[dayStart].online.s19, 50, 'types without offline snapshots stay fully online')
+  t.pass()
+})
+
 test('calculateMinerStatusSummary - calculates from log entries', (t) => {
   const log = [
     { ts: 1700006400000, online: 80, offline: 10, sleep: 5, maintenance: 5 },
@@ -3513,6 +3566,7 @@ test('processPowerModeTimelineData - handles non-object powerModeObj', (t) => {
 
 const RANGE_TS = '1770854400000-1771459199999'
 const RANGE_START = 1770854400000
+const DAY_MS = 24 * 60 * 60 * 1000
 
 test('getHashrate - normalizes a grouped range-string ts to its start', async (t) => {
   const mockCtx = withDataProxy({
@@ -3665,11 +3719,11 @@ test('getEfficiency - central DCS path normalizes range ts and exposes timeRange
   t.is(result.log[0].efficiencyWThs, 50, 'efficiency should join power and hashrate on the same bucket')
 })
 
-test('getMinerStatus - exposes the aggregation window as timeRange', async (t) => {
+test('getMinerStatus - exposes the day window as timeRange', async (t) => {
   const mockCtx = withDataProxy({
     conf: { orks: [{ rpcPublicKey: 'key1' }] },
     net_r0: {
-      jRequest: async () => [{ ts: RANGE_TS, type_cnt: { m50: 10 }, offline_cnt: { m50: 2 } }]
+      jRequest: async () => [{ ts: RANGE_START, type_cnt: { m50: 10 }, offline_cnt: { m50: 2 } }]
     }
   })
 
@@ -3677,15 +3731,15 @@ test('getMinerStatus - exposes the aggregation window as timeRange', async (t) =
     query: { start: 1770854400000, end: 1771459199999 }
   })
 
-  t.alike(result.log[0].timeRange, { startTs: RANGE_START, endTs: RANGE_END }, 'timeRange should cover the full window')
+  t.alike(result.log[0].timeRange, { startTs: RANGE_START, endTs: RANGE_START + DAY_MS - 1 }, 'timeRange should cover the day')
   t.is(result.log[0].online, 8, 'counts should be preserved')
 })
 
-test('processGroupedMinerStatusData - exposes the aggregation window as timeRange', (t) => {
-  const daily = processGroupedMinerStatusData([[{ ts: RANGE_TS, type_cnt: { m50: 10 }, offline_type_cnt: { m50: 2 } }]])
+test('processGroupedMinerStatusData - exposes the day window as timeRange', (t) => {
+  const daily = processGroupedMinerStatusData([[{ ts: RANGE_START, type_cnt: { m50: 10 }, offline_type_cnt: { m50: 2 } }]])
 
   const bucket = daily[RANGE_START]
-  t.alike(bucket.timeRange, { startTs: RANGE_START, endTs: RANGE_END }, 'timeRange should cover the full window')
+  t.alike(bucket.timeRange, { startTs: RANGE_START, endTs: RANGE_START + DAY_MS - 1 }, 'timeRange should cover the day')
 })
 
 test('getPowerMode - exposes the aggregation window as timeRange on grouped buckets', async (t) => {
