@@ -3,7 +3,8 @@
 const {
   ENDPOINTS,
   HTTP_METHODS,
-  AUTH_PERMISSIONS
+  AUTH_PERMISSIONS,
+  AUTH_LEVELS
 } = require('../../constants')
 const { getConfigs } = require('../handlers/configs.handlers')
 const { createCachedAuthRoute } = require('../lib/routeHelpers')
@@ -35,7 +36,7 @@ module.exports = (ctx) => {
         (req) => ['configs', req.params.type, req.query.query, req.query.fields],
         ENDPOINTS.CONFIGS,
         getConfigs,
-        [`${AUTH_PERMISSIONS.POOL_CONFIG}:r`]
+        [`${AUTH_PERMISSIONS.POOL_CONFIG}:${AUTH_LEVELS.READ}`]
       )
     }
   ]
