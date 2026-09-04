@@ -1904,7 +1904,7 @@ test('getMinerStatus - groupBy=type returns per-type status counts', async (t) =
   t.is(payload.aggrFields.offline_type_cnt, 1, 'should request per-type offline')
   t.is(payload.aggrFields.error_type_cnt, 1, 'should request per-type error')
   t.alike(result.log[0].total, { 'am-s19': 800, 'wm-m50': 481 }, 'should key total by type')
-  t.is(result.log[0].online['am-s19'], 796, 'per-type online = 800 - 3 maintenance - 1 error')
+  t.is(result.log[0].online['am-s19'], 799, 'per-type online = 800 - 1 error, maintenance is not part of the total')
   t.is(result.log[0].online['wm-m50'], 476, 'per-type online = 481 - 5 offline')
   t.is(result.log[0].error['am-s19'], 1, 'should key error by type')
   t.pass()
@@ -2028,6 +2028,27 @@ test('processMinerStatusData - handles entries with aggrFields wrapper', (t) => 
   t.is(daily[key].offline, 10, 'should extract from aggrFields wrapper')
   t.is(daily[key].sleep, 5, 'should extract sleep from aggrFields')
   t.is(daily[key].maintenance, 3, 'should extract maintenance from aggrFields')
+  t.pass()
+})
+
+test('processMinerStatusData - online comes from the mining count when the worker provides it', (t) => {
+  const dayStart = 1700006400000
+  const threeHours = 3 * 60 * 60 * 1000
+  // type_cnt excludes the 49 maintenance miners here, so deriving online from it
+  // would double-subtract maintenance; the mining count reports it directly
+  const snapshot = (ts, mining) => ({
+    ts,
+    type_cnt: { m63: 1256 },
+    online_or_minor_error_miners_amount_aggr: mining,
+    offline_cnt: { 'group-1': 13 },
+    maintenance_type_cnt: { m63: 49 }
+  })
+  const results = [[snapshot(dayStart, 1243), snapshot(dayStart + threeHours, 1243)]]
+
+  const daily = processMinerStatusData(results)
+  t.is(daily[dayStart].online, 1243, 'online should be the averaged mining count, not total minus maintenance')
+  t.is(daily[dayStart].offline, 13, 'offline should stay the averaged offline count')
+  t.is(daily[dayStart].maintenance, 49, 'maintenance should stay its own bucket')
   t.pass()
 })
 
