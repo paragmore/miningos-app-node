@@ -730,6 +730,7 @@ const AGGR_FIELDS = {
   TEMP_MAX: 'temperature_c_group_max_aggr',
   TEMP_AVG: 'temperature_c_group_avg_aggr',
   TYPE_CNT: 'type_cnt',
+  MINING_CNT: 'online_or_minor_error_miners_amount_aggr',
   OFFLINE_CNT: 'offline_cnt',
   SLEEP_CNT: 'power_mode_sleep_cnt',
   MAINTENANCE_CNT: 'maintenance_type_cnt',

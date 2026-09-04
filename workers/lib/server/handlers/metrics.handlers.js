@@ -798,6 +798,7 @@ async function getMinerStatus (ctx, req) {
     tag: WORKER_TAGS.MINER,
     aggrFields: {
       [AGGR_FIELDS.TYPE_CNT]: 1,
+      [AGGR_FIELDS.MINING_CNT]: 1,
       [AGGR_FIELDS.OFFLINE_CNT]: 1,
       [AGGR_FIELDS.SLEEP_CNT]: 1,
       [AGGR_FIELDS.MAINTENANCE_CNT]: 1,
@@ -829,7 +830,7 @@ function processMinerStatusData (results) {
     const ts = rawTs ? getStartOfDay(rawTs) : null
     if (!ts) continue
     if (!daily[ts]) {
-      daily[ts] = { total: 0, offline: 0, sleep: 0, maintenance: 0, error: 0, snapshots: new Set() }
+      daily[ts] = { total: 0, mining: null, offline: 0, sleep: 0, maintenance: 0, error: 0, snapshots: new Set() }
     }
 
     const bucket = daily[ts]
@@ -839,6 +840,9 @@ function processMinerStatusData (results) {
     bucket.maintenance += sumObjectValues(entry[AGGR_FIELDS.MAINTENANCE_CNT] || entry.aggrFields?.[AGGR_FIELDS.MAINTENANCE_CNT])
     bucket.error += sumObjectValues(entry[AGGR_FIELDS.ERROR_CNT] || entry.aggrFields?.[AGGR_FIELDS.ERROR_CNT])
     bucket.total += sumObjectValues(entry[AGGR_FIELDS.TYPE_CNT]) || entry.total_cnt || entry.count || 0
+
+    const mining = entry[AGGR_FIELDS.MINING_CNT] ?? entry.aggrFields?.[AGGR_FIELDS.MINING_CNT]
+    if (typeof mining === 'number') bucket.mining = (bucket.mining || 0) + mining
   }
 
   const averaged = {}
@@ -849,8 +853,16 @@ function processMinerStatusData (results) {
     const maintenance = Math.round(bucket.maintenance / snapshots)
     const error = Math.round(bucket.error / snapshots)
     const total = Math.round(bucket.total / snapshots)
+    // Online is the actual mining count (same field the live site header uses;
+    // excludes the maintenance container), so the chart agrees with the header
+    // regardless of whether the worker's type_cnt includes maintenance miners.
+    // Workers without the field fall back to the derived value: their type_cnt
+    // still counts maintenance miners, so maintenance is subtracted back out.
+    const online = bucket.mining !== null
+      ? Math.round(bucket.mining / snapshots)
+      : Math.max(0, total - offline - sleep - maintenance - error)
     averaged[ts] = {
-      online: Math.max(0, total - offline - sleep - maintenance - error),
+      online,
       offline,
       sleep,
       maintenance,
@@ -949,8 +961,11 @@ function processGroupedMinerStatusData (results) {
         bucket[field][key] = Math.round(bucket[field][key] / snapshots)
       }
     }
+    // type_cnt does not count miners parked in the maintenance container, so
+    // maintenance must not be subtracted here — it is a separate bucket, not a
+    // slice of the total.
     for (const type of Object.keys(bucket.total)) {
-      const online = bucket.total[type] - (bucket.offline[type] || 0) - (bucket.sleep[type] || 0) - (bucket.maintenance[type] || 0) - (bucket.error[type] || 0)
+      const online = bucket.total[type] - (bucket.offline[type] || 0) - (bucket.sleep[type] || 0) - (bucket.error[type] || 0)
       bucket.online[type] = Math.max(0, online)
     }
     bucket.timeRange = { startTs: Number(ts), endTs: Number(ts) + METRICS_TIME.ONE_DAY_MS - 1 }
