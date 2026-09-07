@@ -269,9 +269,8 @@ async function downloadLogFile (ctx, req, reply) {
     return reply.code(code).send({ error: err.message })
   }
 
-  // The miner decides the payload format — plain text on some models, a gzipped tar of the log
-  // directory on Whatsminers — and the action result carries no format field. Read the leading
-  // bytes so the declared name and type match the payload, then re-emit them ahead of the rest.
+  // The peek doubles as an early-failure probe: if the source dies before the first byte this
+  // still answers with a JSON 500 instead of a truncated stream under confident headers.
   let head = null
   try {
     head = await peekFirstChunk(stream)
@@ -281,13 +280,22 @@ async function downloadLogFile (ctx, req, reply) {
   }
 
   const body = prependChunk(stream, head)
-  const { extension, contentType } = detectPayloadFormat(head)
+
+  // Newer miner workers declare the payload format on the action result. Results from older
+  // workers carry no format field, so the leading bytes decide the name and type for those.
+  let fileName = meta.fileName
+  let contentType = meta.contentType
+  if (!fileName || !contentType) {
+    const detected = detectPayloadFormat(head)
+    if (!fileName) fileName = `miner-log-${meta.minerId || 'unknown'}-${id}.${detected.extension}`
+    if (!contentType) contentType = detected.contentType
+  }
 
   // Set headers only after stream is ready — if set before the try-catch and stream()
   // throws, the error response would carry a binary content-type and Fastify would refuse
   // to serialize the JSON error object.
   const { safeContentDispositionFilename } = require('../lib/queryUtils')
-  const filename = safeContentDispositionFilename(`miner-log-${meta.minerId || 'unknown'}-${id}.${extension}`)
+  const filename = safeContentDispositionFilename(fileName)
   reply.header('Content-Type', contentType)
   reply.header('Content-Disposition', `attachment; filename="${filename}"`)
   reply.header('Content-Length', meta.byteLength)

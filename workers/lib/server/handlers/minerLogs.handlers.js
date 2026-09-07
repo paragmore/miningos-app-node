@@ -164,6 +164,8 @@ async function getMinerLogDownloadStatus (ctx, req, reply) {
     minerId: meta.minerId || minerId,
     byteLength: meta.byteLength,
     expiresAt: meta.expiresAt,
+    ...(meta.fileName && { fileName: meta.fileName }),
+    ...(meta.contentType && { contentType: meta.contentType }),
     fileUrl: `/auth/miners/${encodeURIComponent(minerId)}/download-logs/${jobId}/file`
   })
 }

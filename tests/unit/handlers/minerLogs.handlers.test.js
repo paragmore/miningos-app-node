@@ -252,6 +252,44 @@ test('getMinerLogDownloadStatus - returns ready with metadata when log is availa
   t.pass()
 })
 
+test('getMinerLogDownloadStatus - surfaces fileName and contentType declared by the worker', async (t) => {
+  const ctx = {
+    authLib: { getTokenPerms: async () => ({}) },
+    dataProxy: {
+      requestData: async () => [makeActionResult({
+        data: { fileName: 'miner-log-miner-001-1756300000000.tar.gz', contentType: 'application/gzip' }
+      })]
+    }
+  }
+  const req = makeMockReq('miner-001', '42')
+  const reply = makeMockReply()
+
+  await getMinerLogDownloadStatus(ctx, req, reply)
+
+  t.is(reply.body.status, 'ready', 'should return ready status')
+  t.is(reply.body.fileName, 'miner-log-miner-001-1756300000000.tar.gz', 'should surface the worker fileName')
+  t.is(reply.body.contentType, 'application/gzip', 'should surface the worker contentType')
+  t.pass()
+})
+
+test('getMinerLogDownloadStatus - omits fileName and contentType for results from older workers', async (t) => {
+  const ctx = {
+    authLib: { getTokenPerms: async () => ({}) },
+    dataProxy: {
+      requestData: async () => [makeActionResult()]
+    }
+  }
+  const req = makeMockReq('miner-001', '42')
+  const reply = makeMockReply()
+
+  await getMinerLogDownloadStatus(ctx, req, reply)
+
+  t.is(reply.body.status, 'ready', 'should return ready status')
+  t.is('fileName' in reply.body, false, 'should not invent a fileName')
+  t.is('contentType' in reply.body, false, 'should not invent a contentType')
+  t.pass()
+})
+
 test('getMinerLogDownloadStatus - returns failed when no coreKey in targets', async (t) => {
   const action = {
     votesPos: ['ops@example.com'],
@@ -502,10 +540,10 @@ function makeLogStream (payload) {
   })
 }
 
-function makeFileLegCtx (payload) {
+function makeFileLegCtx (payload, actionData = {}) {
   return {
     dataProxy: {
-      requestData: async () => [makeActionResult()]
+      requestData: async () => [makeActionResult({ data: actionData })]
     },
     logDownloader: {
       stream: async () => makeLogStream(payload)
@@ -549,6 +587,47 @@ test('getMinerLogFile - declares .log for a plain-text payload', async (t) => {
     'should name a text log .log'
   )
   t.is(reply.headers['content-type'], 'text/plain; charset=utf-8', 'should declare text')
+  t.alike(await drain(reply.body), payload, 'should stream every byte, peek included')
+})
+
+test('getMinerLogFile - prefers the fileName and contentType declared by the worker', async (t) => {
+  const payload = Buffer.from('plain text, but the worker says archive')
+
+  const reply = makeMockReply()
+  await getMinerLogFile(
+    makeFileLegCtx(payload, {
+      fileName: 'miner-log-miner-001-1756300000000.tar.gz',
+      contentType: 'application/gzip'
+    }),
+    makeMockReq('miner-001', '42'),
+    reply
+  )
+
+  t.is(
+    reply.headers['content-disposition'],
+    'attachment; filename="miner-log-miner-001-1756300000000.tar.gz"',
+    'should use the worker-declared name over the sniffed one'
+  )
+  t.is(reply.headers['content-type'], 'application/gzip', 'should use the worker-declared type')
+  t.alike(await drain(reply.body), payload, 'should stream every byte, peek included')
+})
+
+test('getMinerLogFile - falls back to sniffing when the worker declares only a fileName', async (t) => {
+  const payload = Buffer.from('[board0]\npass = 1\n')
+
+  const reply = makeMockReply()
+  await getMinerLogFile(
+    makeFileLegCtx(payload, { fileName: 'miner-log-miner-001-1756300000000.log' }),
+    makeMockReq('miner-001', '42'),
+    reply
+  )
+
+  t.is(
+    reply.headers['content-disposition'],
+    'attachment; filename="miner-log-miner-001-1756300000000.log"',
+    'should keep the declared name'
+  )
+  t.is(reply.headers['content-type'], 'text/plain; charset=utf-8', 'should detect the missing type from the bytes')
   t.alike(await drain(reply.body), payload, 'should stream every byte, peek included')
 })
 
