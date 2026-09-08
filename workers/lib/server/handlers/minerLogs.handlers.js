@@ -11,7 +11,9 @@ const WORKER_ERROR_MESSAGES = [
   ['ERR_DOWNLOAD_LOGS_INCOMPLETE', 'The connection to the miner dropped before the full log was transferred'],
   ['ERR_DOWNLOAD_LOGS_CONNECT_FAILED', 'Could not connect to the miner to download logs'],
   ['ERR_LOG_CORE_MANAGER_NOT_READY', 'The rack worker is not ready to serve log transfers yet'],
-  ['ERR_LOG_NOT_AVAILABLE', 'The action completed but produced no downloadable log']
+  ['ERR_LOG_NOT_AVAILABLE', 'The action completed but produced no downloadable log'],
+  ['TIMEOUT_EXCEEDED', 'The rack worker did not deliver the log before the action call timed out'],
+  ['CHANNEL_CLOSED', 'The connection to the rack worker dropped while the action was running']
 ]
 
 function describeWorkerError (errorCode) {
@@ -129,8 +131,10 @@ async function getMinerLogDownloadStatus (ctx, req, reply) {
         meta = call.result.data
         break
       }
-      if (!firstError && call.result?.error_msg) {
-        firstError = call.result.error_msg
+      // A failed call carries either a worker verdict (result.error_msg) or a
+      // transport error like TIMEOUT_EXCEEDED (call.error) — surface whichever exists
+      if (!firstError && (call.result?.error_msg || call.error)) {
+        firstError = call.result?.error_msg || call.error
       }
     }
     if (meta) break
