@@ -252,6 +252,37 @@ test('getMinerLogDownloadStatus - returns ready with metadata when log is availa
   t.pass()
 })
 
+test('getMinerLogDownloadStatus - surfaces a transport error when the rack call never returned', async (t) => {
+  const action = {
+    votesPos: ['ops@example.com'],
+    targets: {
+      'rack-001': {
+        calls: [
+          { id: 'miner-001', error: 'TIMEOUT_EXCEEDED: timeout of 30000ms exceeded' }
+        ]
+      },
+      'rack-002': { calls: [], error: 'CHANNEL_CLOSED: channel closed' }
+    }
+  }
+  const ctx = {
+    authLib: { getTokenPerms: async () => ({}) },
+    dataProxy: { requestData: async () => [action] }
+  }
+  const req = makeMockReq('miner-001', '42')
+  const reply = makeMockReply()
+
+  await getMinerLogDownloadStatus(ctx, req, reply)
+
+  t.is(reply.body.status, 'failed', 'should return failed status')
+  t.is(reply.body.error, 'TIMEOUT_EXCEEDED: timeout of 30000ms exceeded', 'should surface the call-level transport error')
+  t.is(
+    reply.body.message,
+    'The rack worker did not deliver the log before the action call timed out',
+    'should map the timeout to a human message'
+  )
+  t.pass()
+})
+
 test('getMinerLogDownloadStatus - surfaces fileName and contentType declared by the worker', async (t) => {
   const ctx = {
     authLib: { getTokenPerms: async () => ({}) },
