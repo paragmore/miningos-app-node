@@ -6,6 +6,7 @@ const {
   WORK_ORDER_THING_TYPE,
   WORK_ORDER_TYPES,
   WORK_ORDER_TERMINAL_STATUSES,
+  WORK_ORDER_NOTE_KIND,
   WORK_ORDER_VALID_DEVICE_TYPES,
   SPARE_PART_INITIAL_LOCATION,
   MINER_ROOM_LOCATION,
@@ -565,6 +566,48 @@ async function appendWorkLogEntry (ctx, req) {
   })
 }
 
+async function appendWorkOrderNote (ctx, req) {
+  const rackId = await getWorkOrderRackId(ctx)
+
+  const wo = await ctx.dataProxy.requestData('listThings', {
+    query: { id: req.params.id, type: WORK_ORDER_THING_TYPE }
+  })
+  if (!flattenRpcResults(wo).length) {
+    const err = new Error('ERR_WORK_ORDER_NOT_FOUND')
+    err.statusCode = 404
+    throw err
+  }
+
+  return ctx.dataProxy.requestData('saveThingComment', {
+    rackId,
+    thingId: req.params.id,
+    comment: req.body.text,
+    user: req._info.user.metadata.email,
+    kind: WORK_ORDER_NOTE_KIND
+  }, (res, arr) => {
+    if (res?.error) arr.push({ error: res.error })
+    else arr.push(res)
+  })
+}
+
+async function listWorkOrderNotes (ctx, req) {
+  const results = await ctx.dataProxy.requestData('listThings', {
+    query: { id: req.params.id, type: WORK_ORDER_THING_TYPE },
+    commentsKind: WORK_ORDER_NOTE_KIND
+  })
+  const found = flattenRpcResults(results)[0]
+  if (!found) {
+    const err = new Error('ERR_WORK_ORDER_NOT_FOUND')
+    err.statusCode = 404
+    throw err
+  }
+
+  return (found.comments || [])
+    .filter((c) => c?.kind === WORK_ORDER_NOTE_KIND)
+    .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0))
+    .map(({ id, ts, comment, user }) => ({ id, ts, text: comment, user }))
+}
+
 async function _loadWorkOrderByIdOrCode (ctx, idOrCode) {
   const params = {
     query: {
@@ -659,6 +702,8 @@ module.exports = {
   reopenWorkOrder,
   assignWorkOrder,
   appendWorkLogEntry,
+  appendWorkOrderNote,
+  listWorkOrderNotes,
   getWorkOrderAudit,
   exportWorkOrder,
   exportWorkOrdersRma,

@@ -17,6 +17,8 @@ const {
   reopenWorkOrder,
   assignWorkOrder,
   appendWorkLogEntry,
+  appendWorkOrderNote,
+  listWorkOrderNotes,
   getWorkOrderAudit,
   exportWorkOrder,
   exportWorkOrdersRma,
@@ -119,6 +121,18 @@ module.exports = (ctx) => [
     url: ENDPOINTS.WORK_ORDER_LOG,
     schema: schemas.log,
     ...createAuthRoute(ctx, appendWorkLogEntry, [AUTH_PERMISSIONS.WORK_ORDER])
+  },
+  {
+    method: HTTP_METHODS.POST,
+    url: ENDPOINTS.WORK_ORDER_NOTES,
+    schema: schemas.notesAppend,
+    ...createAuthRoute(ctx, appendWorkOrderNote, [AUTH_PERMISSIONS.WORK_ORDER])
+  },
+  {
+    method: HTTP_METHODS.GET,
+    url: ENDPOINTS.WORK_ORDER_NOTES,
+    schema: schemas.notesList,
+    ...createAuthRoute(ctx, listWorkOrderNotes, [AUTH_PERMISSIONS.WORK_ORDER])
   },
   {
     method: HTTP_METHODS.GET,

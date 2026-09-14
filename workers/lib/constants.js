@@ -56,6 +56,7 @@ const WORK_ORDER_THING_TYPE = 'inventory-work_order'
 
 const WORK_ORDER_TYPES = { REGISTER: 1, MOVE: 2, MICROBT_MINER: 3, MICROBT_NON_MINER: 4 }
 const WORK_ORDER_TERMINAL_STATUSES = ['closed', 'cancelled']
+const WORK_ORDER_NOTE_KIND = 'note'
 const WORK_ORDER_VALID_DEVICE_TYPES = ['miner', 'psu', 'hashboard', 'controller']
 const MINER_LOCATIONS = ['workshop.warehouse', 'workshop.lab', 'site.warehouse', 'site.lab', 'site.container', 'miner.room', 'vendor', 'emca.container', 'scrapped', 'disposed', 'unknown']
 const MINER_ROOM_LOCATION = 'miner.room'
@@ -237,6 +238,7 @@ const ENDPOINTS = {
   WORK_ORDER_BY_ID: '/auth/work-orders/:id',
   WORK_ORDER_AUDIT: '/auth/work-orders/:id/audit',
   WORK_ORDER_LOG: '/auth/work-orders/:id/log',
+  WORK_ORDER_NOTES: '/auth/work-orders/:id/notes',
   WORK_ORDER_FILES: '/auth/work-orders/:id/files',
   WORK_ORDER_FILE_BY_ID: '/auth/work-orders/:id/files/:fileId',
   WORK_ORDER_ASSIGN: '/auth/work-orders/:id/assign',
@@ -1458,6 +1460,7 @@ module.exports = {
   WORK_ORDER_THING_TYPE,
   WORK_ORDER_TYPES,
   WORK_ORDER_TERMINAL_STATUSES,
+  WORK_ORDER_NOTE_KIND,
   WORK_ORDER_VALID_DEVICE_TYPES,
   MINER_LOCATIONS,
   MINER_ROOM_LOCATION,
