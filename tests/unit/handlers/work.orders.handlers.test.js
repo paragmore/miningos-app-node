@@ -44,6 +44,7 @@ test('handlers: createWorkOrder Type 3 resolves part and forwards body as info',
   })
   t.is(flow.lastPush.action, 'registerThing')
   t.is(flow.lastPush.params[0].info.deviceIdentifier, 'AM-1')
+  t.is(flow.lastPush.params[0].info.deviceCode, 'PSU-1', 'stores the resolved part code alongside the identifier')
   t.is(flow.lastPush.params[0].info.partsMoves[0].partId, 'part-1')
   t.is(flow.lastPush.params[0].info.partsMoves[0].role, 'diagnosis')
 })
@@ -725,6 +726,7 @@ test('handlers: createWorkOrdersBatch Type 3 keeps the miner as the root subject
   t.is(info.deviceType, 'miner', 'root subject is the miner, not the hashboard')
   t.is(info.deviceModel, 'miner-wm-m63spp')
   t.is(info.deviceIdentifier, 'WM63SPP00750', 'root identifier is the miner SN, not the spare part SN')
+  t.is(info.deviceCode, 'MN-750', 'root device code is the miner code, not the spare part code')
   t.alike(
     info.partsMoves.map(m => m.deviceIdentifier),
     ['QAHB01-WM63SPP00750', 'QAHB02-WM63SPP00750'],
@@ -1100,6 +1102,58 @@ test('handlers: getWorkOrder filters by id+type and 404s when nothing found', as
     () => handlers.getWorkOrder(ctx, { params: { id: 'missing' } }),
     /ERR_WORK_ORDER_NOT_FOUND/
   )
+})
+
+test('handlers: getWorkOrder backfills info.deviceCode from the attached device', async (t) => {
+  let lookups = 0
+  const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, _m, params) => {
+    if (params.query?.id === 'wo-1') {
+      return [{ id: 'wo-1', info: { minerIdentifier: 'miner-1', deviceIdentifier: 'SN-1' } }]
+    }
+    if (params.query?.$or) {
+      lookups++
+      return [{ id: 'miner-1', code: 'WM-M63SPP-0968', type: 'miner-wm-m63spp', info: {} }]
+    }
+    return []
+  })
+  const wo = await handlers.getWorkOrder(ctx, { params: { id: 'wo-1' } })
+  t.is(wo.info.deviceCode, 'WM-M63SPP-0968', 'resolves the code via info.minerIdentifier')
+  t.is(lookups, 1)
+})
+
+test('handlers: getWorkOrder falls back to info.deviceIdentifier when there is no minerIdentifier', async (t) => {
+  const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, _m, params) => {
+    if (params.query?.id === 'wo-1') return [{ id: 'wo-1', info: { deviceIdentifier: 'SN-1' } }]
+    if (params.query?.$or?.some(c => c['info.serialNum'] === 'SN-1')) {
+      return [{ id: 'part-1', code: 'PS-HB-001', type: 'inventory-miner_part-hashboard', info: { serialNum: 'SN-1' } }]
+    }
+    return []
+  })
+  const wo = await handlers.getWorkOrder(ctx, { params: { id: 'wo-1' } })
+  t.is(wo.info.deviceCode, 'PS-HB-001')
+})
+
+test('handlers: getWorkOrder keeps a stored deviceCode without resolving again', async (t) => {
+  let lookups = 0
+  const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, _m, params) => {
+    if (params.query?.id === 'wo-1') {
+      return [{ id: 'wo-1', info: { deviceCode: 'MN-1', minerIdentifier: 'miner-1' } }]
+    }
+    if (params.query?.$or) lookups++
+    return []
+  })
+  const wo = await handlers.getWorkOrder(ctx, { params: { id: 'wo-1' } })
+  t.is(wo.info.deviceCode, 'MN-1')
+  t.is(lookups, 0, 'no lookup when the WO already carries the code')
+})
+
+test('handlers: getWorkOrder leaves the WO untouched when the device cannot be resolved', async (t) => {
+  const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, _m, params) => {
+    if (params.query?.id === 'wo-1') return [{ id: 'wo-1', info: { deviceIdentifier: 'SN-gone' } }]
+    return []
+  })
+  const wo = await handlers.getWorkOrder(ctx, { params: { id: 'wo-1' } })
+  t.is(wo.info.deviceCode, undefined)
 })
 
 test('handlers: appendWorkLogEntry rejects when WO is closed/cancelled', async (t) => {
