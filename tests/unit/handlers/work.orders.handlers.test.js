@@ -685,6 +685,11 @@ test('handlers: createWorkOrdersBatch Type 3 updates the miner named by info.min
   t.is(minerPush.params[0].id, 'miner-1', 'status update targets the miner, not the parts')
   t.is(minerPush.params[0].rackId, 'miner-rack-1')
   t.is(minerPush.params[0].info.status, 'ok_repaired')
+  t.ok(
+    minerPush.authPerms.includes('miner:rw'),
+    'push carries the miner rack write perm so repair roles without it still create the WO'
+  )
+  t.absent(regPush.authPerms.includes('miner:rw'), 'the WO registration itself is not elevated')
   t.is(minerPush.params[0].info.workOrderId, regPush.params[0].id)
   const statusMove = regPush.params[0].info.partsMoves.find(m => m.role === 'status_change')
   t.is(statusMove.partId, 'miner-1')

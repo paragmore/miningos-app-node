@@ -187,7 +187,7 @@ async function createWorkOrder (ctx, req) {
       user: voter
     }]
     if (info.deviceStatus) {
-      const partResults = await submitWorkOrderAction(ctx, req, 'updateThing', { id: part.id, info: { status: info.deviceStatus, workOrderId: woId } }, part.rack)
+      const partResults = await submitWorkOrderAction(ctx, req, 'updateThing', { id: part.id, info: { status: info.deviceStatus, workOrderId: woId } }, part.rack, { elevateRackWrite: true })
       assertActionApplied(partResults, 'ERR_PART_MOVE_PUSH_FAILED')
     }
   } else if (type === WORK_ORDER_TYPES.REGISTER) {
@@ -440,7 +440,7 @@ async function createWorkOrdersBatch (ctx, req) {
       ts,
       user: voter
     })
-    const minerResults = await submitWorkOrderAction(ctx, req, 'updateThing', { id: minerToRepair.id, info: { status: info.deviceStatus, workOrderId: woId } }, minerToRepair.rack)
+    const minerResults = await submitWorkOrderAction(ctx, req, 'updateThing', { id: minerToRepair.id, info: { status: info.deviceStatus, workOrderId: woId } }, minerToRepair.rack, { elevateRackWrite: true })
     assertActionApplied(minerResults, 'ERR_PART_MOVE_PUSH_FAILED')
   }
 

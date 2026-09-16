@@ -19,16 +19,28 @@ async function getWorkOrderRackId (ctx) {
   return rack.id
 }
 
-async function submitWorkOrderAction (ctx, req, action, paramObj, rackId) {
+async function submitWorkOrderAction (ctx, req, action, paramObj, rackId, opts = {}) {
   rackId = rackId || await getWorkOrderRackId(ctx)
   const { permissions } = await ctx.authLib.getTokenPerms(req._info.authToken)
+
+  // The WO route already authorizes the operation, but the ork re-checks the
+  // caller's write permission per target rack and silently drops racks that
+  // fail it. A repaired device's status write targets its own rack (e.g.
+  // miner-*), which roles like repair_technician cannot write directly, so the
+  // push would end with ERR_ORK_ACTION_CALLS_EMPTY. Callers opt into acting
+  // with the target rack's write permission for these WO-scoped updates.
+  let authPerms = permissions || []
+  if (opts.elevateRackWrite) {
+    const rackPerm = `${String(rackId).split('-')[0]}:rw`
+    if (!authPerms.includes(rackPerm)) authPerms = [...authPerms, rackPerm]
+  }
 
   const results = await ctx.dataProxy.requestData('pushAction', {
     action,
     query: { rack: rackId },
     params: [{ rackId, ...paramObj }],
     voter: req._info.user.metadata.email,
-    authPerms: permissions || []
+    authPerms
   }, (res, arr) => {
     if (res?.error) arr.push({ id: null, errors: [res.error] })
     else arr.push(res)

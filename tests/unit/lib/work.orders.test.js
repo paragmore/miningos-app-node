@@ -80,6 +80,42 @@ test('submitWorkOrderAction - submits pushAction against the resolved WO rack', 
   t.alike(out, [{ id: 'action-1', errors: [] }])
 })
 
+test('submitWorkOrderAction - elevateRackWrite appends the target rack write perm', async (t) => {
+  const captured = {}
+  await submitWorkOrderAction(
+    buildCtx({ captured }), woReq(), 'updateThing',
+    { id: 'miner-1', info: { status: 'ok_repaired' } },
+    'miner-wm-m63spp-shelf-1',
+    { elevateRackWrite: true }
+  )
+  t.alike(
+    captured.payload.authPerms,
+    ['inventory:rw', 'work_order:rw', 'actions:rw', 'miner:rw'],
+    'miner rack write perm appended so the ork does not drop the target rack'
+  )
+})
+
+test('submitWorkOrderAction - elevateRackWrite does not duplicate a perm the caller has', async (t) => {
+  const captured = {}
+  await submitWorkOrderAction(
+    buildCtx({ captured }), woReq(), 'updateThing',
+    { id: 'part-1', info: { status: 'faulty' } },
+    'inventory-miner_part-psu-shelf-1',
+    { elevateRackWrite: true }
+  )
+  t.alike(captured.payload.authPerms, ['inventory:rw', 'work_order:rw', 'actions:rw'])
+})
+
+test('submitWorkOrderAction - no elevation without the opt-in', async (t) => {
+  const captured = {}
+  await submitWorkOrderAction(
+    buildCtx({ captured }), woReq(), 'updateThing',
+    { id: 'miner-1', info: { status: 'ok_repaired' } },
+    'miner-wm-m63spp-shelf-1'
+  )
+  t.alike(captured.payload.authPerms, ['inventory:rw', 'work_order:rw', 'actions:rw'])
+})
+
 test('submitWorkOrderAction - maps an rpc error into the result array', async (t) => {
   const out = await submitWorkOrderAction(buildCtx({ pushResult: { error: 'boom' } }), woReq(), 'updateThing', { id: 'wo-1' })
   t.is(out[0].id, null)
