@@ -4,9 +4,12 @@ const { setTimeout: sleep } = require('timers/promises')
 const {
   WORK_ORDER_THING_TYPE,
   WORK_ORDER_ACTION_WAIT_ATTEMPTS,
-  WORK_ORDER_ACTION_WAIT_MS
+  WORK_ORDER_ACTION_WAIT_MS,
+  AUTH_PERMISSIONS
 } = require('../../constants')
 const { flattenRpcResults } = require('../../utils')
+
+const RACK_PERM_NAMES = new Set(Object.values(AUTH_PERMISSIONS))
 
 async function getWorkOrderRackId (ctx) {
   if (ctx._workOrderRackId) return ctx._workOrderRackId
@@ -31,8 +34,14 @@ async function submitWorkOrderAction (ctx, req, action, paramObj, rackId, opts =
   // with the target rack's write permission for these WO-scoped updates.
   let authPerms = permissions || []
   if (opts.elevateRackWrite) {
-    const rackPerm = `${String(rackId).split('-')[0]}:rw`
-    if (!authPerms.includes(rackPerm)) authPerms = [...authPerms, rackPerm]
+    const cap = String(rackId).split('-')[0]
+    if (!RACK_PERM_NAMES.has(cap)) throw new Error(`ERR_WO_RACK_PERM_UNKNOWN:${cap}`)
+    const rackPerm = `${cap}:rw`
+    if (!authPerms.includes(rackPerm)) {
+      // AuthLib._permsMatch resolves a capability from its first entry, so the
+      // caller's own level (e.g. miner:r) is replaced rather than appended to.
+      authPerms = [...authPerms.filter(p => !p.startsWith(`${cap}:`)), rackPerm]
+    }
   }
 
   const results = await ctx.dataProxy.requestData('pushAction', {

@@ -72,7 +72,7 @@ test('handlers: createWorkOrder Type 2 (move) relocates the part on its own rack
   const pushed = []
   const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
     if (method === 'pushAction') { pushed.push(params); return { id: 'a', errors: [] } }
-    if (method === 'listThings') return [{ id: 'part-1', type: 'inventory-miner_part-psu', rack: 'psu-rack-1', info: { location: 'site.lab' } }]
+    if (method === 'listThings') return [{ id: 'part-1', type: 'inventory-miner_part-psu', rack: 'inventory-psu-rack-1', info: { location: 'site.lab' } }]
     return null
   })
   ctx.authLib = mockAuthLib
@@ -83,7 +83,7 @@ test('handlers: createWorkOrder Type 2 (move) relocates the part on its own rack
   })
   const partPush = pushed.find(p => p.action === 'updateThing')
   const regPush = pushed.find(p => p.action === 'registerThing')
-  t.is(partPush.params[0].rackId, 'psu-rack-1', 'relocation targets the part rack')
+  t.is(partPush.params[0].rackId, 'inventory-psu-rack-1', 'relocation targets the part rack')
   t.is(partPush.params[0].info.location, 'site.warehouse', 'part moved to the destination')
   t.ok(partPush.params[0].info.workOrderId, 'relocation carries a workOrderId (part-move gate)')
   t.is(partPush.params[0].info.workOrderId, regPush.params[0].id, 'relocation references the created WO id')
@@ -95,7 +95,7 @@ test('handlers: createWorkOrder Type 2 (move) surfaces a failed relocation push 
       if (params.action === 'updateThing') return { id: null, errors: ['ERR_ORK_ACTION_CALLS_EMPTY'] }
       return { id: 'a', errors: [] }
     }
-    if (method === 'listThings') return [{ id: 'part-1', type: 'inventory-miner_part-psu', rack: 'psu-rack-1', info: { location: 'site.lab' } }]
+    if (method === 'listThings') return [{ id: 'part-1', type: 'inventory-miner_part-psu', rack: 'inventory-psu-rack-1', info: { location: 'site.lab' } }]
     return null
   })
   ctx.authLib = mockAuthLib
@@ -156,7 +156,7 @@ test('handlers: createWorkOrdersBatch Type 2 (move) relocates every part', async
     if (method === 'pushAction') { pushed.push(params); return { id: 'a', errors: [] } }
     if (method === 'listThings') {
       const sn = (params.query?.$or || []).map(c => c['info.serialNum']).find(Boolean)
-      return [{ id: sn, type: 'inventory-miner_part-psu', rack: 'psu-rack-1', info: { location: 'site.warehouse' } }]
+      return [{ id: sn, type: 'inventory-miner_part-psu', rack: 'inventory-psu-rack-1', info: { location: 'site.warehouse' } }]
     }
     return null
   })
@@ -205,8 +205,8 @@ function buildAttachedPartsCtx (pushed, parts) {
 }
 
 const ATTACHED = [
-  { id: 'part-1', code: 'CB-1', type: 'inventory-miner_part-controller', rack: 'cb-rack-1', info: { location: 'miner.room', parentDeviceId: 'miner-1' } },
-  { id: 'part-2', code: 'PS-1', type: 'inventory-miner_part-psu', rack: 'psu-rack-1', info: { location: 'miner.room', parentDeviceId: 'miner-1' } }
+  { id: 'part-1', code: 'CB-1', type: 'inventory-miner_part-controller', rack: 'inventory-cb-rack-1', info: { location: 'miner.room', parentDeviceId: 'miner-1' } },
+  { id: 'part-2', code: 'PS-1', type: 'inventory-miner_part-psu', rack: 'inventory-psu-rack-1', info: { location: 'miner.room', parentDeviceId: 'miner-1' } }
 ]
 
 test('handlers: createWorkOrder Type 2 (move) relocates every attached part with the miner', async (t) => {
@@ -219,7 +219,7 @@ test('handlers: createWorkOrder Type 2 (move) relocates every attached part with
   const regPush = pushed.find(p => p.action === 'registerThing')
   const partPushes = pushed.filter(p => p.action === 'updateThing' && p.params[0].rackId !== 'miner-rack-1')
   t.is(partPushes.length, 2, 'one relocation per attached part')
-  t.alike(partPushes.map(p => p.params[0].rackId), ['cb-rack-1', 'psu-rack-1'], 'each part moves on its own rack')
+  t.alike(partPushes.map(p => p.params[0].rackId), ['inventory-cb-rack-1', 'inventory-psu-rack-1'], 'each part moves on its own rack')
   t.ok(partPushes.every(p => p.params[0].info.location === 'site.lab'))
   t.ok(partPushes.every(p => p.params[0].info.workOrderId === regPush.params[0].id), 'relocations carry the WO id')
   const attached = regPush.params[0].info.partsMoves.filter(m => m.role === 'attached')
@@ -346,6 +346,10 @@ test('handlers: createWorkOrdersBatch Type 2 (move) applies the shared deviceSta
   const regPush = pushed.find(p => p.action === 'registerThing')
   t.ok(minerPushes.every(p => p.params[0].info.status === 'faulty'))
   t.ok(regPush.params[0].info.partsMoves.every(m => m.fromStatus === 'in_operation' && m.toStatus === 'faulty'))
+  t.ok(
+    minerPushes.every(p => p.authPerms.includes('miner:rw')),
+    'the moves act with the miner rack write perm so repair roles can move devices too'
+  )
 })
 
 test('handlers: createWorkOrder Type 2 (move) 400s when a miner heads to miner.room without a group/socket', async (t) => {
@@ -364,7 +368,7 @@ test('handlers: createWorkOrder Type 2 (move) leaves parts untouched by miner pl
   const pushed = []
   const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
     if (method === 'pushAction') { pushed.push(params); return { id: 'a', errors: [] } }
-    if (method === 'listThings') return [{ id: 'part-1', type: 'inventory-miner_part-psu', rack: 'psu-rack-1', info: { location: 'miner.room' } }]
+    if (method === 'listThings') return [{ id: 'part-1', type: 'inventory-miner_part-psu', rack: 'inventory-psu-rack-1', info: { location: 'miner.room' } }]
     return null
   })
   ctx.authLib = mockAuthLib
@@ -533,7 +537,7 @@ test('handlers: replacement 400s when the WO is not a move', async (t) => {
 })
 
 test('handlers: replacement 400s for non-miner devices', async (t) => {
-  const psu = { id: 'part-1', code: 'PS-1', type: 'inventory-miner_part-psu', rack: 'psu-rack-1', info: { serialNum: 'SN-PSU', location: 'miner.room', container: 'group-3', pos: '3_1' } }
+  const psu = { id: 'part-1', code: 'PS-1', type: 'inventory-miner_part-psu', rack: 'inventory-psu-rack-1', info: { serialNum: 'SN-PSU', location: 'miner.room', container: 'group-3', pos: '3_1' } }
   await rejects(t, {
     type: 2,
     devices: [{ deviceType: 'psu', deviceModel: 'P', deviceIdentifier: 'SN-PSU', replacementIdentifier: 'SN-SPARE' }],
@@ -557,7 +561,7 @@ test('handlers: replacement 400s when the move does not empty a socket', async (
 test('handlers: replacement 400s when the replacement miner cannot be used', async (t) => {
   await rejects(t, moveOutBody({}, { replacementIdentifier: 'SN-NOPE' }), /ERR_WO_REPLACEMENT_NOT_FOUND/, [OUTGOING])
 
-  const psu = { id: 'part-1', code: 'PS-1', type: 'inventory-miner_part-psu', rack: 'psu-rack-1', info: { serialNum: 'SN-PSU', location: 'site.warehouse' } }
+  const psu = { id: 'part-1', code: 'PS-1', type: 'inventory-miner_part-psu', rack: 'inventory-psu-rack-1', info: { serialNum: 'SN-PSU', location: 'site.warehouse' } }
   await rejects(t, moveOutBody({}, { replacementIdentifier: 'SN-PSU' }), /ERR_WO_REPLACEMENT_DEVICE_TYPE_INVALID/, [OUTGOING, psu])
 
   const inRoom = { ...SPARE, info: { ...SPARE.info, location: 'miner.room', container: 'group-9', pos: '9_1' } }
@@ -665,7 +669,7 @@ test('handlers: createWorkOrdersBatch Type 3 updates the miner named by info.min
       const wantsMiner = or.some(c => c.id === 'miner-1')
       if (wantsMiner) return [{ id: 'miner-1', code: 'MN-1', type: 'miner-whatsminer', rack: 'miner-rack-1', info: { status: 'faulty' } }]
       const sn = or.map(c => c['info.serialNum']).find(Boolean)
-      return [{ id: sn, code: sn, type: 'inventory-miner_part-hashboard', rack: 'hb-rack-1', info: {} }]
+      return [{ id: sn, code: sn, type: 'inventory-miner_part-hashboard', rack: 'inventory-hb-rack-1', info: {} }]
     }
     return null
   })
@@ -709,7 +713,7 @@ test('handlers: createWorkOrdersBatch Type 3 keeps the miner as the root subject
         return [{ id: 'pirxAnVkFzZLTEZ', code: 'MN-750', type: 'miner-wm-m63spp', rack: 'miner-rack-1', info: { serialNum: 'WM63SPP00750' } }]
       }
       const sn = or.map(c => c.id).find(Boolean)
-      return [{ id: sn, code: sn, type: 'inventory-miner_part-hashboard', rack: 'hb-rack-1', info: {} }]
+      return [{ id: sn, code: sn, type: 'inventory-miner_part-hashboard', rack: 'inventory-hb-rack-1', info: {} }]
     }
     return null
   })
@@ -765,7 +769,7 @@ test('handlers: createWorkOrdersBatch Type 3 without deviceStatus leaves the min
   const pushed = []
   const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
     if (method === 'pushAction') { pushed.push(params); return { id: 'a', errors: [] } }
-    if (method === 'listThings') return [{ id: 'part-1', code: 'HB-1', type: 'inventory-miner_part-hashboard', rack: 'hb-rack-1', info: {} }]
+    if (method === 'listThings') return [{ id: 'part-1', code: 'HB-1', type: 'inventory-miner_part-hashboard', rack: 'inventory-hb-rack-1', info: {} }]
     return null
   })
   ctx.authLib = mockAuthLib

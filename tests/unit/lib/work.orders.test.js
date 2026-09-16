@@ -12,10 +12,15 @@ const woReq = (email = 'op@test') => ({
   _info: { authToken: 'tok', user: { metadata: { email } } }
 })
 
-function buildCtx ({ racks = [{ id: RACK_ID }], pushResult = { id: 'action-1', errors: [] }, captured } = {}) {
+function buildCtx ({
+  racks = [{ id: RACK_ID }],
+  pushResult = { id: 'action-1', errors: [] },
+  perms = ['inventory:rw', 'work_order:rw', 'actions:rw'],
+  captured
+} = {}) {
   return {
     authLib: {
-      getTokenPerms: async () => ({ permissions: ['inventory:rw', 'work_order:rw', 'actions:rw'] })
+      getTokenPerms: async () => ({ permissions: perms })
     },
     dataProxy: {
       requestData: async (method, payload, errorHandler) => {
@@ -92,6 +97,30 @@ test('submitWorkOrderAction - elevateRackWrite appends the target rack write per
     captured.payload.authPerms,
     ['inventory:rw', 'work_order:rw', 'actions:rw', 'miner:rw'],
     'miner rack write perm appended so the ork does not drop the target rack'
+  )
+})
+
+test('submitWorkOrderAction - elevateRackWrite replaces a read-only entry for the same capability', async (t) => {
+  const captured = {}
+  await submitWorkOrderAction(
+    buildCtx({ captured, perms: ['miner:r', 'inventory:rw', 'work_order:rw'] }), woReq(), 'updateThing',
+    { id: 'miner-1', info: { status: 'ok_repaired' } },
+    'miner-wm-m63spp-shelf-1',
+    { elevateRackWrite: true }
+  )
+  t.alike(
+    captured.payload.authPerms,
+    ['inventory:rw', 'work_order:rw', 'miner:rw'],
+    'miner:r is replaced, not shadowing the elevated entry for first-match consumers'
+  )
+})
+
+test('submitWorkOrderAction - elevateRackWrite throws on a rack prefix that is not a permission', async (t) => {
+  await t.exception(
+    () => submitWorkOrderAction(
+      buildCtx(), woReq(), 'updateThing', { id: 'x' }, 'bogus-rack-1', { elevateRackWrite: true }
+    ),
+    /ERR_WO_RACK_PERM_UNKNOWN:bogus/
   )
 })
 

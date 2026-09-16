@@ -113,7 +113,7 @@ async function _moveAttachedParts (ctx, req, { miner, deviceType, toLocation, wo
     const partResults = await submitWorkOrderAction(ctx, req, 'updateThing', {
       id: part.id,
       info: { location: toLocation, workOrderId: woId }
-    }, part.rack)
+    }, part.rack, { elevateRackWrite: true })
     assertActionApplied(partResults, `ERR_ATTACHED_PART_MOVE_PUSH_FAILED:${part.id}`)
     moves.push({
       partId: part.id,
@@ -258,7 +258,7 @@ async function createWorkOrder (ctx, req) {
           ...(info.deviceStatus ? { status: info.deviceStatus } : {}),
           ...placement
         }
-      }, part.rack)
+      }, part.rack, { elevateRackWrite: true })
       assertActionApplied(partResults, 'ERR_PART_MOVE_PUSH_FAILED')
       info.partsMoves.push(...await _moveAttachedParts(ctx, req, {
         miner: part, deviceType, toLocation: info.location, woId, voter, ts
@@ -269,7 +269,7 @@ async function createWorkOrder (ctx, req) {
       const replacementResults = await submitWorkOrderAction(ctx, req, 'updateThing', {
         id: replacement.thing.id,
         info: _replacementInfo(replacement, woId)
-      }, replacement.thing.rack)
+      }, replacement.thing.rack, { elevateRackWrite: true })
       assertActionApplied(replacementResults, 'ERR_WO_REPLACEMENT_PUSH_FAILED')
     }
   }
@@ -412,7 +412,7 @@ async function createWorkOrdersBatch (ctx, req) {
           ...(info.deviceStatus ? { status: info.deviceStatus } : {}),
           ...placement
         }
-      }, part.rack)
+      }, part.rack, { elevateRackWrite: true })
       assertActionApplied(partResults, 'ERR_PART_MOVE_PUSH_FAILED')
       partsMoves.push(...await _moveAttachedParts(ctx, req, {
         miner: part, deviceType: device.deviceType, toLocation: info.location, woId, voter, ts
@@ -423,7 +423,7 @@ async function createWorkOrdersBatch (ctx, req) {
       const replacementResults = await submitWorkOrderAction(ctx, req, 'updateThing', {
         id: replacement.thing.id,
         info: _replacementInfo(replacement, woId)
-      }, replacement.thing.rack)
+      }, replacement.thing.rack, { elevateRackWrite: true })
       assertActionApplied(replacementResults, 'ERR_WO_REPLACEMENT_PUSH_FAILED')
     }
   }
