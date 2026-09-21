@@ -4535,6 +4535,45 @@ test('indexForecastDecisionsByHour - manual mine override wins over a not_mine d
   t.pass()
 })
 
+test('indexForecastDecisionsByHour - wait statuses count as not mining', (t) => {
+  const byHour = indexForecastDecisionsByHour([[{
+    hourlyForecast: [
+      { start: DOWNTIME_DAY_TS, decision: 'wait_prod' },
+      { start: DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS, decision: 'wait_spot' },
+      { start: DOWNTIME_DAY_TS + 2 * DOWNTIME_HOUR_MS, decision: 'wait_prod', manualOverrideMine: true }
+    ]
+  }]])
+
+  t.is(byHour.get(DOWNTIME_DAY_TS).notMining, true, 'wait_prod is not a mining hour')
+  t.is(byHour.get(DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS).notMining, true, 'wait_spot is not a mining hour')
+  t.is(byHour.get(DOWNTIME_DAY_TS + 2 * DOWNTIME_HOUR_MS).notMining, false, 'unless overridden to mine')
+  t.pass()
+})
+
+test('getDowntime - available energy on a wait hour counts as energy sold', async (t) => {
+  const mockCtx = downtimeCtx({
+    powerRows: [downtimeHourRow(DOWNTIME_DAY_TS, 0)],
+    forecast: [{
+      hourlyForecast: [{
+        start: DOWNTIME_DAY_TS,
+        end: DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS,
+        decision: 'wait_spot',
+        availableMw: 5,
+        availableEnergy: 1
+      }]
+    }]
+  })
+
+  const result = await getDowntime(mockCtx, {
+    query: { start: DOWNTIME_DAY_TS, end: DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS, interval: '1h' }
+  })
+
+  t.is(result.log[0].curtailmentRate, 0.5, 'unavailable half is curtailment')
+  t.is(result.log[0].energySoldRate, 0.5, 'produced energy on a non-mining hour is sold')
+  t.is(result.log[0].operationalIssuesRate, 0, 'fully explained')
+  t.pass()
+})
+
 test('indexForecastDecisionsByHour - ignores malformed payloads and entries', (t) => {
   const byHour = indexForecastDecisionsByHour([
     null,

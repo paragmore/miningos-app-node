@@ -2020,9 +2020,10 @@ function indexForecastDecisionsByHour (forecastResults) {
         const start = Number(item?.start)
         if (!Number.isFinite(start)) continue
         const hourTs = Math.floor(start / HOUR_MS) * HOUR_MS
+        // wait_prod / wait_spot hours are not mining hours either
         const notMining = item.manualOverrideMine === true
           ? false
-          : item.decision === 'not_mine'
+          : item.decision !== 'mine'
         const availableMw = Number(item.availableMw)
         const availableW = Number.isFinite(availableMw) && availableMw >= 0
           ? availableMw * 1e6
