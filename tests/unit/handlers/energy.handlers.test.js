@@ -21,13 +21,13 @@ const OVERRIDE_BODY = {
 }
 
 const AVAILABLE_ENERGY_DATA = [
-  { ts: 1700000000000, availableMw: 12.5 }
+  { start: 1700000000000, end: 1700003600000, availableMw: 5.5 }
 ]
 
 const AVAILABLE_ENERGY_HISTORY_BODY = {
   start: 1700000000000,
   end: 1700100000000,
-  available: true
+  availableMw: 6.5
 }
 
 test('setForecastOverrideHistory - writes forecastOverrideHist with the request body', async (t) => {

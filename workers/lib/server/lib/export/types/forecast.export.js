@@ -16,7 +16,7 @@ const BASE_COLUMNS = [
   'miningRevenue', 'miningRevenuePerMwh', 'taxesAndFees', 'taxesAndFeesPerMwh',
   'energySalesRevenue', 'energySalesRevenuePerMwh', 'energySalesTaxesAndFees',
   'energySalesTaxesAndFeesPerMwh', 'energySellPrice', 'energyBuyPrice',
-  'decision', 'available'
+  'decision', 'available', 'availableMw'
 ]
 
 const OVERVIEW_COLUMNS = [...BASE_COLUMNS, 'expectedRevenue', 'expectedRevenuePerMwh']
@@ -57,7 +57,8 @@ function mapHourlyRow (item, timezone, includeExpected) {
     energySellPrice: item.energySellPrice,
     energyBuyPrice: item.energyBuyPrice,
     decision: item.decision,
-    available: normalizeAvailability(item)
+    available: normalizeAvailability(item),
+    availableMw: typeof item.availableMw === 'number' ? item.availableMw : ''
   }
   if (includeExpected) {
     row.expectedRevenue = item.expectedRevenue

@@ -6,7 +6,21 @@ const schemas = {
       type: 'object',
       properties: {
         data: {
-          type: 'array'
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              start: { type: 'integer', minimum: 0 },
+              end: { type: 'integer', minimum: 0 },
+              availableMw: { type: 'number', minimum: 0, maximum: 10 },
+              available: { type: ['boolean', 'integer'], minimum: 0, maximum: 1 }
+            },
+            required: ['start'],
+            anyOf: [
+              { required: ['availableMw'] },
+              { required: ['available'] }
+            ]
+          }
         }
       },
       required: ['data']
@@ -16,12 +30,16 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
+        availableMw: { type: 'number', minimum: 0, maximum: 10 },
         available: { type: 'boolean' }
       },
       required: [
         'start',
-        'end',
-        'available'
+        'end'
+      ],
+      anyOf: [
+        { required: ['availableMw'] },
+        { required: ['available'] }
       ]
     },
     forecastSettings: {

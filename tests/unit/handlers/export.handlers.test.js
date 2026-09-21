@@ -370,6 +370,7 @@ function forecastPayload () {
         miningRevenue: 10,
         decision: 'mine',
         availableEnergy: '1',
+        availableMw: 5.5,
         expectedRevenue: 9,
         expectedRevenuePerMwh: 3
       },
@@ -384,7 +385,7 @@ function forecastPayload () {
   }
 }
 
-test('forecast-overview exports 19 columns with normalized availability', async (t) => {
+test('forecast-overview exports 20 columns with normalized availability', async (t) => {
   const ctx = makeMockCtx(async (method, params) => {
     t.is(method, 'getWrkExtData')
     t.is(params.type, 'electricity')
@@ -397,17 +398,19 @@ test('forecast-overview exports 19 columns with normalized availability', async 
   const csv = await drain(reply.body)
   const lines = csv.split('\n')
   const header = lines[0].split(',')
-  t.is(header.length, 19)
+  t.is(header.length, 20)
   t.is(header[0], 'startUtc')
   t.is(header[16], 'available')
-  t.is(header[18], 'expectedRevenuePerMwh')
+  t.is(header[17], 'availableMw')
+  t.is(header[19], 'expectedRevenuePerMwh')
   t.ok(lines[1].includes('"2026-01-01T00:00:00.000Z"'))
   t.ok(lines[1].includes('"mine"'))
   t.ok(lines[1].includes('"1"'))
+  t.ok(lines[1].includes('"5.5"'))
   t.ok(lines[2].includes('"not_mine"'))
 })
 
-test('historical-forecast passes range through and exports 17 columns with summary in JSON', async (t) => {
+test('historical-forecast passes range through and exports 18 columns with summary in JSON', async (t) => {
   let seenParams = null
   const ctx = makeMockCtx(async (method, params) => {
     seenParams = params
@@ -430,6 +433,8 @@ test('historical-forecast passes range through and exports 17 columns with summa
   })
   t.is(parsed.hourlyForecast.length, 2)
   t.is(parsed.hourlyForecast[0].available, 1)
+  t.is(parsed.hourlyForecast[0].availableMw, 5.5)
+  t.is(parsed.hourlyForecast[1].availableMw, '')
   t.is(parsed.hourlyForecast[0].expectedRevenue, undefined)
   t.ok(/^attachment; filename="historical_forecast_.+\.json"$/.test(reply.headers['content-disposition']))
 })

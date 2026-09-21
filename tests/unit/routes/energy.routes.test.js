@@ -62,8 +62,32 @@ test('energy routes - available-history schema matches availableEnergyHistory', 
   t.ok(route.schema.body, 'should have body schema')
   t.ok(route.schema.body.required.includes('start'), 'start should be required')
   t.ok(route.schema.body.required.includes('end'), 'end should be required')
-  t.ok(route.schema.body.required.includes('available'), 'available should be required')
   t.is(route.schema.body.properties.available.type, 'boolean', 'available should be a boolean')
+  t.is(route.schema.body.properties.availableMw.type, 'number', 'availableMw should be a number')
+  t.is(route.schema.body.properties.availableMw.minimum, 0, 'availableMw min should be 0')
+  t.is(route.schema.body.properties.availableMw.maximum, 10, 'availableMw max should be 10')
+  t.pass()
+})
+
+test('energy routes - availableEnergy schema validates availableMw items', (t) => {
+  const Ajv = require('ajv')
+  const schemas = require('../../../workers/lib/server/schemas/energy.schemas')
+  const ajv = new Ajv({ coerceTypes: true })
+  const validate = ajv.compile(schemas.body.availableEnergy)
+  const validateHist = ajv.compile(schemas.body.availableEnergyHistory)
+
+  t.ok(validate({ data: [{ start: 1000, end: 2000, availableMw: 5.5 }] }), 'accepts availableMw item')
+  t.ok(validate({ data: [{ start: 1000, availableMw: 0 }] }), 'accepts zero availableMw')
+  t.ok(validate({ data: [{ start: 1000, end: 2000, available: 1 }] }), 'accepts legacy available item')
+  t.absent(validate({ data: [{ start: 1000, availableMw: 10.1 }] }), 'rejects availableMw above 10')
+  t.absent(validate({ data: [{ start: 1000, availableMw: -1 }] }), 'rejects negative availableMw')
+  t.absent(validate({ data: [{ start: 1000 }] }), 'rejects item without availableMw or available')
+  t.absent(validate({ data: [{ availableMw: 5 }] }), 'rejects item without start')
+
+  t.ok(validateHist({ start: 1000, end: 2000, availableMw: 6.5 }), 'history accepts availableMw')
+  t.ok(validateHist({ start: 1000, end: 2000, available: true }), 'history accepts legacy available')
+  t.absent(validateHist({ start: 1000, end: 2000 }), 'history rejects missing both fields')
+  t.absent(validateHist({ start: 1000, end: 2000, availableMw: 11 }), 'history rejects availableMw above 10')
   t.pass()
 })
 
