@@ -4550,6 +4550,31 @@ test('indexForecastDecisionsByHour - wait statuses count as not mining', (t) => 
   t.pass()
 })
 
+test('getDowntime - production above nominal capacity never reads as negative curtailment', async (t) => {
+  const mockCtx = downtimeCtx({
+    powerRows: [downtimeHourRow(DOWNTIME_DAY_TS, 0)],
+    forecast: [{
+      hourlyForecast: [{
+        start: DOWNTIME_DAY_TS,
+        end: DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS,
+        decision: 'not_mine',
+        availableMw: 48,
+        availableEnergy: 1
+      }]
+    }]
+  })
+
+  const result = await getDowntime(mockCtx, {
+    query: { start: DOWNTIME_DAY_TS, end: DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS, interval: '1h' }
+  })
+
+  t.is(result.log[0].downtimeRate, 1, 'site idle')
+  t.is(result.log[0].curtailmentRate, 0, 'surplus production is not curtailment')
+  t.is(result.log[0].energySoldRate, 1, 'sold rate capped at the observed downtime')
+  t.is(result.log[0].operationalIssuesRate, 0, 'fully explained')
+  t.pass()
+})
+
 test('getDowntime - available energy on a wait hour counts as energy sold', async (t) => {
   const mockCtx = downtimeCtx({
     powerRows: [downtimeHourRow(DOWNTIME_DAY_TS, 0)],
