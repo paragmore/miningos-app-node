@@ -2006,9 +2006,11 @@ function calculateCoolingSummary (log) {
 
 const HOUR_MS = 60 * 60 * 1000
 
-// Maps each forecast hour to whether the site was intentionally curtailed.
-// manualOverrideMine forces mining regardless of the stored decision, and an
-// unavailable-energy hour counts as curtailed even if the decision was 'mine'.
+// Maps each forecast hour to the inputs the downtime split needs: whether the
+// forecast said not to mine (manualOverrideMine forces mining regardless of
+// the stored decision) and how much energy was available. availableW is the
+// power-production input (MW for the whole hour); a legacy yes/no flag maps to
+// full capacity / zero, and null means "assume full capacity".
 function indexForecastDecisionsByHour (forecastResults) {
   const byHour = new Map()
   for (const orkResult of Array.isArray(forecastResults) ? forecastResults : []) {
@@ -2018,18 +2020,27 @@ function indexForecastDecisionsByHour (forecastResults) {
         const start = Number(item?.start)
         if (!Number.isFinite(start)) continue
         const hourTs = Math.floor(start / HOUR_MS) * HOUR_MS
-        const curtailed = item.manualOverrideMine === true
+        const notMining = item.manualOverrideMine === true
           ? false
-          : normalizeAvailability(item) === 0 || item.decision === 'not_mine'
-        byHour.set(hourTs, curtailed)
+          : item.decision === 'not_mine'
+        const availableMw = Number(item.availableMw)
+        const availableW = Number.isFinite(availableMw) && availableMw >= 0
+          ? availableMw * 1e6
+          : normalizeAvailability(item) === 0 ? 0 : null
+        byHour.set(hourTs, { notMining, availableW })
       }
     }
   }
   return byHour
 }
 
-// Hours without a forecast entry count as 'mine', so an unexplained shortfall
-// surfaces as an operational issue rather than being hidden as curtailment.
+// Splits each hour's shortfall against nominal capacity into three buckets:
+// curtailment is the energy that was never available (nominal minus the
+// power-production input), energy sold is the available energy routed to the
+// grid on a not-mining hour, and whatever shortfall is left is operational.
+// Hours without a forecast entry count as 'mine' at full availability, so an
+// unexplained shortfall surfaces as an operational issue rather than being
+// hidden as curtailment.
 function buildHourlyDowntime (entries, nominalPowerW, decisionByHour) {
   return entries.map(val => {
     const ts = parseEntryTs(val.ts)
@@ -2038,13 +2049,25 @@ function buildHourlyDowntime (entries, nominalPowerW, decisionByHour) {
 
     let downtimeRate = null
     let curtailmentRate = null
+    let energySoldRate = null
     let operationalIssuesRate = null
     if (nominalPowerW) {
       downtimeRate = Math.max(0, nominalPowerW - powerW) / nominalPowerW
       const hourTs = Math.floor(ts / HOUR_MS) * HOUR_MS
-      const curtailed = decisionByHour.get(hourTs) === true
-      curtailmentRate = curtailed ? downtimeRate : 0
-      operationalIssuesRate = curtailed ? 0 : downtimeRate
+      const hour = decisionByHour.get(hourTs)
+      const availableW = hour?.availableW ?? nominalPowerW
+
+      // capped at the observed downtime so the three buckets always sum to it
+      // (a site mining on purchased energy has no available production, yet no
+      // downtime either)
+      curtailmentRate = Math.min(
+        Math.max(0, nominalPowerW - availableW) / nominalPowerW,
+        downtimeRate
+      )
+      energySoldRate = hour?.notMining && availableW > 0
+        ? Math.min(availableW / nominalPowerW, downtimeRate - curtailmentRate)
+        : 0
+      operationalIssuesRate = Math.max(0, downtimeRate - curtailmentRate - energySoldRate)
     }
 
     return {
@@ -2054,6 +2077,7 @@ function buildHourlyDowntime (entries, nominalPowerW, decisionByHour) {
       nominalPowerW,
       downtimeRate,
       curtailmentRate,
+      energySoldRate,
       operationalIssuesRate
     }
   })
@@ -2078,6 +2102,7 @@ function aggregateDowntimeDaily (hourlyLog) {
       nominalPowerW: hours[0].nominalPowerW,
       downtimeRate: meanOfField(hours, 'downtimeRate'),
       curtailmentRate: meanOfField(hours, 'curtailmentRate'),
+      energySoldRate: meanOfField(hours, 'energySoldRate'),
       operationalIssuesRate: meanOfField(hours, 'operationalIssuesRate')
     }))
 }
@@ -2096,6 +2121,7 @@ function calculateDowntimeSummary (log, nominalPowerW, hasForecastData) {
   return {
     avgDowntimeRate: meanOfField(log, 'downtimeRate'),
     avgCurtailmentRate: meanOfField(log, 'curtailmentRate'),
+    avgEnergySoldRate: meanOfField(log, 'energySoldRate'),
     avgOperationalIssuesRate: meanOfField(log, 'operationalIssuesRate'),
     avgPowerW: meanOfField(log, 'powerW'),
     minPowerW: powers.length ? Math.min(...powers) : null,

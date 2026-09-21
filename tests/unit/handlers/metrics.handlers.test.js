@@ -4276,13 +4276,14 @@ test('getDowntime - shortfall on a mine hour is an operational issue', async (t)
   t.is(result.log[0].nominalPowerW, 10000000, 'nominal power from global config')
   t.is(result.log[0].downtimeRate, 0.4, '4 MW short of 10 MW nominal')
   t.is(result.log[0].curtailmentRate, 0, 'no curtailment on a mine hour')
+  t.is(result.log[0].energySoldRate, 0, 'nothing sold on a mine hour')
   t.is(result.log[0].operationalIssuesRate, 0.4, 'shortfall attributed to op issues')
   t.is(result.summary.avgDowntimeRate, 0.4, 'summary averages the buckets')
   t.is(result.summary.hasForecastData, true, 'forecast data was present')
   t.pass()
 })
 
-test('getDowntime - shortfall on a not_mine hour is curtailment', async (t) => {
+test('getDowntime - shortfall on a not_mine hour with available energy is energy sold', async (t) => {
   const mockCtx = downtimeCtx({
     powerRows: [downtimeHourRow(DOWNTIME_DAY_TS, 6000000)],
     forecast: [{
@@ -4295,10 +4296,77 @@ test('getDowntime - shortfall on a not_mine hour is curtailment', async (t) => {
   })
 
   t.is(result.log[0].downtimeRate, 0.4, 'same shortfall')
-  t.is(result.log[0].curtailmentRate, 0.4, 'attributed to curtailment')
+  t.is(result.log[0].curtailmentRate, 0, 'energy was fully available, so no curtailment')
+  t.is(result.log[0].energySoldRate, 0.4, 'available energy on a not-mining hour is sold')
   t.is(result.log[0].operationalIssuesRate, 0, 'not an op issue')
-  t.is(result.summary.avgCurtailmentRate, 0.4, 'summary reflects curtailment')
+  t.is(result.summary.avgEnergySoldRate, 0.4, 'summary reflects energy sold')
+  t.is(result.summary.avgCurtailmentRate, 0, 'summary reflects no curtailment')
   t.is(result.summary.avgOperationalIssuesRate, 0, 'summary reflects no op issues')
+  t.pass()
+})
+
+test('getDowntime - power production input drives the curtailment / energy sold split', async (t) => {
+  const hour2 = DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS
+  const hour3 = DOWNTIME_DAY_TS + 2 * DOWNTIME_HOUR_MS
+  const mockCtx = downtimeCtx({
+    powerRows: [
+      downtimeHourRow(DOWNTIME_DAY_TS, 0), // not mining, selling 5 MW
+      downtimeHourRow(hour2, 5000000), // mining on the 5 MW produced
+      downtimeHourRow(hour3, 3000000) // mining on 5 MW available but only 3 MW drawn
+    ],
+    forecast: [{
+      hourlyForecast: [
+        { start: DOWNTIME_DAY_TS, end: hour2, decision: 'not_mine', availableMw: 5, availableEnergy: 1 },
+        { start: hour2, end: hour3, decision: 'mine', availableMw: 5, availableEnergy: 1 },
+        { start: hour3, end: hour3 + DOWNTIME_HOUR_MS, decision: 'mine', availableMw: 5, availableEnergy: 1 }
+      ]
+    }]
+  })
+
+  const result = await getDowntime(mockCtx, {
+    query: { start: DOWNTIME_DAY_TS, end: hour3 + DOWNTIME_HOUR_MS, interval: '1h' }
+  })
+
+  const [selling, miningFull, miningShort] = result.log
+
+  t.is(selling.downtimeRate, 1, 'site idle while selling')
+  t.is(selling.curtailmentRate, 0.5, '5 of 10 MW never available')
+  t.is(selling.energySoldRate, 0.5, 'the 5 MW produced went to the grid')
+  t.is(selling.operationalIssuesRate, 0, 'fully explained')
+
+  t.is(miningFull.downtimeRate, 0.5, 'half of nominal drawn')
+  t.is(miningFull.curtailmentRate, 0.5, 'shortfall explained by limited production')
+  t.is(miningFull.energySoldRate, 0, 'nothing sold while mining')
+  t.is(miningFull.operationalIssuesRate, 0, 'no operational gap')
+
+  t.is(miningShort.downtimeRate, 0.7, '7 MW short of nominal')
+  t.is(miningShort.curtailmentRate, 0.5, 'availability explains 5 MW of it')
+  t.ok(Math.abs(miningShort.operationalIssuesRate - 0.2) < 1e-9, 'the rest is operational')
+  t.pass()
+})
+
+test('getDowntime - zero power production makes the whole shortfall curtailment', async (t) => {
+  const mockCtx = downtimeCtx({
+    powerRows: [downtimeHourRow(DOWNTIME_DAY_TS, 0)],
+    forecast: [{
+      hourlyForecast: [{
+        start: DOWNTIME_DAY_TS,
+        end: DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS,
+        decision: 'not_mine',
+        availableMw: 0,
+        availableEnergy: 0
+      }]
+    }]
+  })
+
+  const result = await getDowntime(mockCtx, {
+    query: { start: DOWNTIME_DAY_TS, end: DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS, interval: '1h' }
+  })
+
+  t.is(result.log[0].downtimeRate, 1, 'site idle')
+  t.is(result.log[0].curtailmentRate, 1, 'no energy available at all')
+  t.is(result.log[0].energySoldRate, 0, 'nothing to sell')
+  t.is(result.log[0].operationalIssuesRate, 0, 'fully explained')
   t.pass()
 })
 
@@ -4427,7 +4495,8 @@ test('getDowntime - interval=1d attributes hourly then aggregates per UTC day', 
     'day-spanning time range')
   t.is(result.log[0].powerW, 7500000, 'daily power is the mean of the hourly power')
   t.is(result.log[0].downtimeRate, 0.25, 'mean of 0.5 and 0 hourly downtime')
-  t.is(result.log[0].curtailmentRate, 0.25, 'curtailed-hour shortfall averaged over covered hours')
+  t.is(result.log[0].curtailmentRate, 0, 'energy was available, so nothing curtailed')
+  t.is(result.log[0].energySoldRate, 0.25, 'not-mining-hour shortfall averaged over covered hours')
   t.is(result.log[0].operationalIssuesRate, 0, 'no op issues on day one')
   t.is(result.log[1].downtimeRate, 0.5, 'second day from its single covered hour')
   t.is(result.log[1].operationalIssuesRate, 0.5, 'mine-hour shortfall is op issues')
@@ -4435,17 +4504,21 @@ test('getDowntime - interval=1d attributes hourly then aggregates per UTC day', 
   t.pass()
 })
 
-test('indexForecastDecisionsByHour - availability zero curtails even a mine decision', (t) => {
+test('indexForecastDecisionsByHour - availability maps to available power', (t) => {
   const cases = [
     { start: DOWNTIME_DAY_TS, decision: 'mine', available: 0 },
     { start: DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS, decision: 'mine', available: '0' },
-    { start: DOWNTIME_DAY_TS + 2 * DOWNTIME_HOUR_MS, decision: 'mine', availableEnergy: false }
+    { start: DOWNTIME_DAY_TS + 2 * DOWNTIME_HOUR_MS, decision: 'mine', availableEnergy: false },
+    { start: DOWNTIME_DAY_TS + 3 * DOWNTIME_HOUR_MS, decision: 'mine', availableMw: 5.5, availableEnergy: 1 },
+    { start: DOWNTIME_DAY_TS + 4 * DOWNTIME_HOUR_MS, decision: 'mine', available: 1 }
   ]
   const byHour = indexForecastDecisionsByHour([[{ hourlyForecast: cases }]])
 
-  t.is(byHour.get(DOWNTIME_DAY_TS), true, 'numeric 0 availability curtails')
-  t.is(byHour.get(DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS), true, 'string "0" availability curtails')
-  t.is(byHour.get(DOWNTIME_DAY_TS + 2 * DOWNTIME_HOUR_MS), true, 'availableEnergy false curtails')
+  t.alike(byHour.get(DOWNTIME_DAY_TS), { notMining: false, availableW: 0 }, 'numeric 0 availability means no power')
+  t.alike(byHour.get(DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS), { notMining: false, availableW: 0 }, 'string "0" availability means no power')
+  t.alike(byHour.get(DOWNTIME_DAY_TS + 2 * DOWNTIME_HOUR_MS), { notMining: false, availableW: 0 }, 'availableEnergy false means no power')
+  t.alike(byHour.get(DOWNTIME_DAY_TS + 3 * DOWNTIME_HOUR_MS), { notMining: false, availableW: 5500000 }, 'availableMw carries the exact power')
+  t.alike(byHour.get(DOWNTIME_DAY_TS + 4 * DOWNTIME_HOUR_MS), { notMining: false, availableW: null }, 'legacy yes means full capacity')
   t.pass()
 })
 
@@ -4457,8 +4530,8 @@ test('indexForecastDecisionsByHour - manual mine override wins over a not_mine d
     ]
   }]])
 
-  t.is(byHour.get(DOWNTIME_DAY_TS), false, 'override forces the hour to count as mining')
-  t.is(byHour.get(DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS), true, 'without override not_mine curtails')
+  t.is(byHour.get(DOWNTIME_DAY_TS).notMining, false, 'override forces the hour to count as mining')
+  t.is(byHour.get(DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS).notMining, true, 'without override not_mine stands')
   t.pass()
 })
 
@@ -4475,12 +4548,13 @@ test('indexForecastDecisionsByHour - ignores malformed payloads and entries', (t
 
 test('calculateDowntimeSummary - averages skip null-rate entries', (t) => {
   const summary = calculateDowntimeSummary([
-    { powerW: 6000000, downtimeRate: 0.4, curtailmentRate: 0.4, operationalIssuesRate: 0 },
-    { powerW: 8000000, downtimeRate: null, curtailmentRate: null, operationalIssuesRate: null }
+    { powerW: 6000000, downtimeRate: 0.4, curtailmentRate: 0.4, energySoldRate: 0.2, operationalIssuesRate: 0 },
+    { powerW: 8000000, downtimeRate: null, curtailmentRate: null, energySoldRate: null, operationalIssuesRate: null }
   ], 10000000, true)
 
   t.is(summary.avgDowntimeRate, 0.4, 'null rates excluded from the mean')
   t.is(summary.avgCurtailmentRate, 0.4, 'null rates excluded from the mean')
+  t.is(summary.avgEnergySoldRate, 0.2, 'null rates excluded from the mean')
   t.is(summary.avgPowerW, 7000000, 'power averaged over all entries')
   t.is(summary.minPowerW, 6000000, 'min power')
   t.is(summary.maxPowerW, 8000000, 'max power')
