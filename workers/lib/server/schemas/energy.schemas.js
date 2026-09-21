@@ -12,7 +12,7 @@ const schemas = {
             properties: {
               start: { type: 'integer', minimum: 0 },
               end: { type: 'integer', minimum: 0 },
-              availableMw: { type: 'number', minimum: 0, maximum: 10 },
+              availableMw: { type: 'number', minimum: 0, maximum: 48 },
               available: { type: ['boolean', 'integer'], minimum: 0, maximum: 1 }
             },
             required: ['start'],
@@ -30,7 +30,7 @@ const schemas = {
       properties: {
         start: { type: 'integer', minimum: 0 },
         end: { type: 'integer', minimum: 0 },
-        availableMw: { type: 'number', minimum: 0, maximum: 10 },
+        availableMw: { type: 'number', minimum: 0, maximum: 48 },
         available: { type: 'boolean' }
       },
       required: [
