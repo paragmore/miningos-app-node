@@ -445,6 +445,122 @@ function rollupMonthly (log) {
     .map(({ days, ...month }) => ({ ...month, powerW: scaleBucketValues(month.powerW, 1 / days) }))
 }
 
+const ROLLUP_INTERVALS = new Set(['1h', '1d', '1w', '1M'])
+
+// The DCS worker persists hourly averages of the 5-minute power samples in its
+// energy-1h rollup log (12 samples/h vs the 2 the stat-30m path sees). The
+// rollup only exists from featureConfig.energyRollup.sinceTs onward (backfill
+// included), so older ranges keep using the legacy stat-log path.
+function canUseEnergyRollup (ctx, start, interval) {
+  if (!isCentralDCSEnabled(ctx) || !ROLLUP_INTERVALS.has(interval)) return false
+  const sinceTs = ctx.conf?.featureConfig?.energyRollup?.sinceTs
+  return Number.isFinite(sinceTs) && start >= sinceTs
+}
+
+async function fetchEnergyRollupEntries (ctx, start, end) {
+  const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    type: WORKER_TYPES.DCS,
+    tag: getDCSTag(ctx),
+    key: LOG_KEYS.ENERGY_1H,
+    start,
+    end,
+    // the worker only sizes reads automatically for stat-* keys; without an
+    // explicit limit a ranged read of a non-stat log falls back to 100 entries
+    limit: Math.ceil((end - start) / HOUR_MS) + 2,
+    fields: { [LOG_FIELDS.SITE_POWER]: 1, [LOG_FIELDS.BY_METER_POWER]: 1 },
+    aggrFields: { [AGGR_FIELDS.SITE_POWER]: 1, [AGGR_FIELDS.BY_METER_POWER]: 1 }
+  })
+
+  return firstOrkEntries(res)
+    .map(entry => ({ ...entry, ts: parseEntryTs(entry.ts) }))
+    .filter(entry => Number.isFinite(entry.ts))
+    .sort((a, b) => a.ts - b.ts)
+}
+
+function rollupHourlyLog (entries, byMeter) {
+  return entries.map(entry => {
+    const timeRange = { startTs: entry.ts, endTs: entry.ts + HOUR_MS - 1 }
+
+    if (byMeter) {
+      const raw = entry[AGGR_FIELDS.BY_METER_POWER]
+      const powerW = raw && typeof raw === 'object' ? raw : {}
+      return {
+        ts: entry.ts,
+        timeRange,
+        powerW,
+        consumptionMWh: Object.fromEntries(
+          Object.entries(powerW).map(([meter, w]) => [meter, (Number(w) || 0) / 1000000])
+        )
+      }
+    }
+
+    const powerW = Number(entry[AGGR_FIELDS.SITE_POWER]) || 0
+    return { ts: entry.ts, timeRange, powerW, consumptionMWh: powerW / 1000000 }
+  })
+}
+
+function addBucketCounts (acc, val) {
+  if (val && typeof val === 'object') {
+    const out = { ...(acc || {}) }
+    for (const meter of Object.keys(val)) out[meter] = (out[meter] || 0) + 1
+    return out
+  }
+  return (acc || 0) + 1
+}
+
+function averageBucketValues (total, counts) {
+  if (total && typeof total === 'object') {
+    return Object.fromEntries(
+      Object.entries(total).map(([meter, v]) => [meter, safeDiv(v, counts?.[meter]) ?? 0])
+    )
+  }
+  return safeDiv(Number(total) || 0, counts) ?? 0
+}
+
+// Coarser buckets built from stored hourly integrals: consumption is the exact
+// sum of the hourly MWh, power the mean over the hours that reported.
+function rollupHourlyToRange (hourly, rangeMs) {
+  const buckets = new Map()
+
+  for (const entry of hourly) {
+    const ts = Math.floor(entry.ts / rangeMs) * rangeMs
+    const bucket = buckets.get(ts) || {
+      ts,
+      timeRange: { startTs: ts, endTs: ts + rangeMs - 1 },
+      counts: null,
+      powerW: null,
+      consumptionMWh: null
+    }
+    bucket.counts = addBucketCounts(bucket.counts, entry.powerW)
+    bucket.powerW = addBucketValues(bucket.powerW, entry.powerW)
+    bucket.consumptionMWh = addBucketValues(bucket.consumptionMWh, entry.consumptionMWh)
+    buckets.set(ts, bucket)
+  }
+
+  return [...buckets.values()]
+    .sort((a, b) => a.ts - b.ts)
+    .map(({ counts, ...bucket }) => ({ ...bucket, powerW: averageBucketValues(bucket.powerW, counts) }))
+}
+
+function buildRollupConsumption (entries, interval, byMeter) {
+  const hourly = rollupHourlyLog(entries, byMeter)
+
+  let log
+  if (interval === '1h') {
+    log = hourly
+  } else if (interval === '1M') {
+    log = rollupMonthly(rollupHourlyToRange(hourly, RANGE_BUCKETS['1D']))
+  } else {
+    log = rollupHourlyToRange(hourly, RANGE_BUCKETS[interval === '1w' ? '1W' : '1D'])
+  }
+
+  const summary = byMeter
+    ? calculateByMeterConsumptionSummary(log)
+    : calculateConsumptionSummary(log)
+
+  return { log, summary }
+}
+
 async function getConsumption (ctx, req) {
   const { start, end } = resolveStartEnd(ctx, req)
   // Downstream grouped/by-meter/rack paths read start/end straight off req.query,
@@ -468,6 +584,12 @@ async function getConsumption (ctx, req) {
   if (byMeter) return getByMeterConsumption(ctx, req)
 
   const interval = resolveInterval(start, end, req.query.interval)
+
+  if (canUseEnergyRollup(ctx, start, interval)) {
+    const entries = await fetchEnergyRollupEntries(ctx, start, end)
+    if (entries.length) return buildRollupConsumption(entries, interval, false)
+  }
+
   const monthly = interval === '1M'
   const { key, groupRange } = getIntervalConfig(monthly ? '1d' : interval)
 
@@ -524,6 +646,12 @@ async function getByMeterConsumption (ctx, req) {
   }
 
   const interval = resolveInterval(start, end, req.query.interval)
+
+  if (canUseEnergyRollup(ctx, start, interval)) {
+    const entries = await fetchEnergyRollupEntries(ctx, start, end)
+    if (entries.length) return buildRollupConsumption(entries, interval, true)
+  }
+
   const monthly = interval === '1M'
   const { key, groupRange } = getIntervalConfig(monthly ? '1d' : interval)
 

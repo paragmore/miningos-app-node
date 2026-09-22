@@ -54,6 +54,9 @@
     "centralDCSSetup": {
       "enabled": false,
       "tag": "t-dcs"
+    },
+    "energyRollup": {
+      "sinceTs": null
     }
   },
   "ttl": 300,
