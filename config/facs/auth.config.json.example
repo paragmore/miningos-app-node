@@ -152,7 +152,7 @@
         "ticket:rw",
         "alerts:rw",
         "work_order:rw",
-        "forecast_summary:r",
+        "forecast_summary:rw",
         "pool_config:r"
       ],
       "field_operator": [

@@ -43,7 +43,7 @@ module.exports = (ctx) => [
     url: ENDPOINTS.ENERGY_AVAILABLE,
     ...createAuthRoute(ctx, async (ctx, req) => {
       return await setAvailableEnergy(ctx, req)
-    }, [AUTH_PERMISSIONS.FORECAST_OVERVIEW]),
+    }, [AUTH_PERMISSIONS.FORECAST_SUMMARY]),
     schema: {
       body: schemas.body.availableEnergy
     }
