@@ -4894,7 +4894,11 @@ test('indexForecastDecisionsByHour - availability maps to available power', (t) 
     { start: DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS, decision: 'mine', available: '0' },
     { start: DOWNTIME_DAY_TS + 2 * DOWNTIME_HOUR_MS, decision: 'mine', availableEnergy: false },
     { start: DOWNTIME_DAY_TS + 3 * DOWNTIME_HOUR_MS, decision: 'mine', availableMw: 5.5, availableEnergy: 1 },
-    { start: DOWNTIME_DAY_TS + 4 * DOWNTIME_HOUR_MS, decision: 'mine', available: 1 }
+    { start: DOWNTIME_DAY_TS + 4 * DOWNTIME_HOUR_MS, decision: 'mine', available: 1 },
+    { start: DOWNTIME_DAY_TS + 5 * DOWNTIME_HOUR_MS, decision: 'mine', availableMw: 0, availableEnergy: 1 },
+    { start: DOWNTIME_DAY_TS + 6 * DOWNTIME_HOUR_MS, decision: 'not_mine', availableMw: null, availableEnergy: 1 },
+    { start: DOWNTIME_DAY_TS + 7 * DOWNTIME_HOUR_MS, decision: 'wait_prod', availableMw: null },
+    { start: DOWNTIME_DAY_TS + 8 * DOWNTIME_HOUR_MS, decision: 'mine', availableMw: null, availableEnergy: 0 }
   ]
   const byHour = indexForecastDecisionsByHour([[{ hourlyForecast: cases }]])
 
@@ -4903,6 +4907,10 @@ test('indexForecastDecisionsByHour - availability maps to available power', (t) 
   t.alike(byHour.get(DOWNTIME_DAY_TS + 2 * DOWNTIME_HOUR_MS), { notMining: false, availableW: 0 }, 'availableEnergy false means no power')
   t.alike(byHour.get(DOWNTIME_DAY_TS + 3 * DOWNTIME_HOUR_MS), { notMining: false, availableW: 5500000 }, 'availableMw carries the exact power')
   t.alike(byHour.get(DOWNTIME_DAY_TS + 4 * DOWNTIME_HOUR_MS), { notMining: false, availableW: null }, 'legacy yes means full capacity')
+  t.alike(byHour.get(DOWNTIME_DAY_TS + 5 * DOWNTIME_HOUR_MS), { notMining: false, availableW: 0 }, 'an explicit 0 MW input beats the legacy yes')
+  t.alike(byHour.get(DOWNTIME_DAY_TS + 6 * DOWNTIME_HOUR_MS), { notMining: true, availableW: null }, 'availableMw null is no input, the legacy yes stands')
+  t.alike(byHour.get(DOWNTIME_DAY_TS + 7 * DOWNTIME_HOUR_MS), { notMining: true, availableW: null }, 'availableMw null with no legacy flag means full capacity')
+  t.alike(byHour.get(DOWNTIME_DAY_TS + 8 * DOWNTIME_HOUR_MS), { notMining: false, availableW: 0 }, 'availableMw null falls back to a legacy no')
   t.pass()
 })
 

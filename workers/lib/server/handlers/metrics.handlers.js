@@ -2168,7 +2168,9 @@ function indexForecastDecisionsByHour (forecastResults) {
         const notMining = item.manualOverrideMine === true
           ? false
           : item.decision !== 'mine'
-        const availableMw = Number(item.availableMw)
+        // hours without a power input carry availableMw: null, which is "no
+        // input" (fall back to the legacy flag), not an explicit 0 MW
+        const availableMw = typeof item.availableMw === 'number' ? item.availableMw : NaN
         const availableW = Number.isFinite(availableMw) && availableMw >= 0
           ? availableMw * 1e6
           : normalizeAvailability(item) === 0 ? 0 : null
