@@ -470,6 +470,66 @@ async function _appendWorkOrderNote (ctx, req, woId, text) {
   }, (res, arr) => { arr.push(res) })
 }
 
+// The attach flow stamps parentDeviceId with the WO's raw miner identifier,
+// which is not always the thing id — the code and serial written alongside it
+// identify the miner just as reliably.
+function _isPartAttachedToMiner (part, miner) {
+  const info = part.info || {}
+  if (info.parentDeviceId === miner.id) return true
+  if (miner.code && info.parentDeviceCode === miner.code) return true
+  return Boolean(miner.info?.serialNum && info.parentDeviceSN === miner.info.serialNum)
+}
+
+async function _pushMinerMacAddress (ctx, req, miner, macAddress, woId) {
+  const results = await submitWorkOrderAction(ctx, req, 'updateThing', {
+    id: miner.id,
+    info: { macAddress, workOrderId: woId }
+  }, miner.rack, { elevateRackWrite: miner.type })
+  assertActionApplied(results, 'ERR_WO_MINER_MAC_SYNC_FAILED')
+  const ids = results.map(r => r?.id).filter(Boolean)
+  await assertActionsExecuted(ctx, req, 'ERR_WO_MINER_MAC_SYNC_FAILED', ids)
+}
+
+const STRICT_MAC_RX = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/
+
+// A MAC exists on exactly one physical board, so once the board is verified
+// attached to this WO's miner, any other miner on the same rack still
+// recording that MAC is a leftover from the board's previous life. Clear those
+// records so the rack's uniqueness check lets the reassignment through. Only
+// same-rack holders matter: the rack validates uniqueness against its own
+// things alone, so a match elsewhere never caused the refusal.
+async function _reclaimMinerMacAddress (ctx, req, wo, miner, macAddress) {
+  if (!STRICT_MAC_RX.test(macAddress)) return false
+
+  const pattern = `^${macAddress.split(':').map(escapeRegex).join('[:-]')}$`
+  const results = await ctx.dataProxy.requestData('listThings', {
+    query: {
+      tags: 't-miner',
+      'info.macAddress': { $regex: pattern, $options: 'i' }
+    }
+  })
+  const holders = flattenRpcResults(results).filter(t =>
+    t?.rack === miner.rack && t.id !== miner.id &&
+    _formatMacAddress(t.info?.macAddress) === macAddress)
+  if (!holders.length) return false
+
+  const clearIds = []
+  for (const holder of holders) {
+    const cleared = await submitWorkOrderAction(ctx, req, 'updateThing', {
+      id: holder.id,
+      info: { macAddress: null, workOrderId: wo.id }
+    }, holder.rack, { elevateRackWrite: holder.type })
+    assertActionApplied(cleared, 'ERR_WO_MINER_MAC_SYNC_FAILED')
+    clearIds.push(...cleared.map(r => r?.id).filter(Boolean))
+  }
+  await assertActionsExecuted(ctx, req, 'ERR_WO_MINER_MAC_SYNC_FAILED', clearIds)
+
+  await _pushMinerMacAddress(ctx, req, miner, macAddress, wo.id)
+  await _appendWorkOrderNote(ctx, req, wo.id,
+    `MAC ${macAddress} moved to ${miner.code || miner.id}; cleared the stale record on ${holders.map(h => h.code || h.id).join(', ')}`)
+  return true
+}
+
 // A miner's MAC address belongs to its control board, so a WO that records a
 // controller replacement must carry the new board's MAC onto the miner record —
 // otherwise Inventory keeps reporting the removed board's MAC.
@@ -487,25 +547,27 @@ async function _syncMinerMacAddress (ctx, req, woId, partsMoves) {
   if (!miner || !_isMiner(miner)) return
 
   const part = await _resolvePartByIdentifier(ctx, replacement.partId)
-  if (!part || part.info?.parentDeviceId !== miner.id) return
+  if (!part || !_isPartAttachedToMiner(part, miner)) return
 
   const macAddress = _formatMacAddress(part.info?.macAddress)
   if (!macAddress || macAddress === _formatMacAddress(miner.info?.macAddress)) return
 
-  // The rack can legitimately refuse the write — e.g. another miner still
-  // holds this MAC from the board's previous life — and that must not block
-  // the WO from saving, so the failure becomes a note on the WO instead.
+  // The rack can legitimately refuse the write and that must not block the WO
+  // from saving. A duplicate-MAC refusal means the board's previous miner
+  // still records this MAC — reclaim it; anything else becomes a note.
   try {
-    const results = await submitWorkOrderAction(ctx, req, 'updateThing', {
-      id: miner.id,
-      info: { macAddress, workOrderId: wo.id }
-    }, miner.rack, { elevateRackWrite: miner.type })
-    assertActionApplied(results, 'ERR_WO_MINER_MAC_SYNC_FAILED')
-    const ids = results.map(r => r?.id).filter(Boolean)
-    await assertActionsExecuted(ctx, req, 'ERR_WO_MINER_MAC_SYNC_FAILED', ids)
+    await _pushMinerMacAddress(ctx, req, miner, macAddress, wo.id)
   } catch (err) {
+    let failure = err
+    if (err.message.includes('ERR_THING_MACADDRESS_EXISTS')) {
+      try {
+        if (await _reclaimMinerMacAddress(ctx, req, wo, miner, macAddress)) return
+      } catch (retryErr) {
+        failure = retryErr
+      }
+    }
     await _appendWorkOrderNote(ctx, req, wo.id,
-      `Miner ${miner.code || miner.id} MAC address was not updated to ${macAddress}: ${err.message}`)
+      `Miner ${miner.code || miner.id} MAC address was not updated to ${macAddress}: ${failure.message}`)
   }
 }
 

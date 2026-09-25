@@ -936,12 +936,26 @@ test('handlers: updateWorkOrder forwards warranty payload to updateThing', async
   t.is(flow.lastPush.params[0].info.warranty.fields.rmaNumber, 'RMA-1')
 })
 
-function buildMacSyncCtx (pushed, { wo, miner, part, pushError, woPushError, notes } = {}) {
+const normalizeMockMac = (mac) => String(mac || '').toLowerCase().replace(/-/g, ':')
+
+function buildMacSyncCtx (pushed, { wo, miner, part, pushError, woPushError, notes, holders = [], stubbornRack } = {}) {
   const ctx = createMockCtxWithOrks([{ rpcPublicKey: 'k' }], async (_k, method, params) => {
     if (method === 'pushAction') {
       pushed.push(params)
       if (woPushError && params.query?.rack === RACK) return { error: woPushError }
-      if (pushError && params.query?.rack === miner?.rack) return { error: pushError }
+      const target = params.params?.[0]
+      const holder = holders.find(h => h.id === target?.id)
+      if (holder) {
+        // clearing a holder frees the MAC in the mock rack
+        if (target.info?.macAddress === null) holder.info = { ...holder.info, macAddress: null }
+        return { id: 'a', errors: [] }
+      }
+      if (miner && params.query?.rack === miner.rack && target?.id === miner.id) {
+        if (pushError) return { error: pushError }
+        const dupe = holders.some(h => h.rack === miner.rack && h.info?.macAddress &&
+          normalizeMockMac(h.info.macAddress) === normalizeMockMac(target.info?.macAddress))
+        if (dupe || stubbornRack) return { error: 'ERR_THING_MACADDRESS_EXISTS' }
+      }
       return { id: 'a', errors: [] }
     }
     if (method === 'saveThingComment') {
@@ -949,6 +963,7 @@ function buildMacSyncCtx (pushed, { wo, miner, part, pushError, woPushError, not
       return { id: 'note-1' }
     }
     if (method === 'listThings') {
+      if (params.query?.tags === 't-miner') return [...holders, ...(miner ? [miner] : [])]
       if (params.query?.type === 'inventory-work_order') return wo ? [wo] : []
       const id = (params.query?.$or || []).map(c => c.id).find(Boolean)
       if (miner && id === miner.id) return [miner]
@@ -1071,6 +1086,130 @@ test('handlers: updateWorkOrder skips the MAC sync when the WO write itself fail
   const results = await handlers.updateWorkOrder(ctx, { ...userMeta(), ...macSyncBody([CB_REPLACEMENT_MOVE]) })
   t.is(pushed.length, 1, 'no MAC push after a failed WO write')
   t.is(results[0].errors[0], 'ERR_WO_WRITE')
+})
+
+const macSyncHolder = (over = {}) => ({
+  id: 'miner-2',
+  code: 'MN-2',
+  type: 'miner-whatsminer',
+  rack: 'miner-whatsminer-rack-1',
+  info: { macAddress: '9c-2f-d8-55-f1-c6' },
+  ...over
+})
+
+test('handlers: updateWorkOrder reclaims a MAC still recorded on the board\'s previous miner', async (t) => {
+  const pushed = []
+  const notes = []
+  const holder = macSyncHolder()
+  const ctx = buildMacSyncCtx(pushed, { wo: MAC_SYNC_WO, miner: MAC_SYNC_MINER, part: MAC_SYNC_PART, notes, holders: [holder] })
+  await handlers.updateWorkOrder(ctx, { ...userMeta(), ...macSyncBody([CB_REPLACEMENT_MOVE]) })
+
+  t.is(pushed.length, 4, 'WO update, refused sync, holder clear, successful retry')
+  const [, firstSync, clearPush, retryPush] = pushed
+  t.is(firstSync.params[0].id, 'miner-1')
+  t.is(clearPush.params[0].id, 'miner-2')
+  t.is(clearPush.params[0].info.macAddress, null, 'stale record is cleared, not overwritten')
+  t.is(clearPush.params[0].info.workOrderId, 'wo-1')
+  t.ok(clearPush.authPerms.includes('miner:rw'), 'clear is elevated like the sync itself')
+  t.is(retryPush.params[0].id, 'miner-1')
+  t.is(retryPush.params[0].info.macAddress, '9C:2F:D8:55:F1:C6')
+  t.is(holder.info.macAddress, null)
+  t.is(notes.length, 1, 'a single audit note, no failure note')
+  t.ok(notes[0].comment.includes('moved to MN-1'), 'audit note names the new holder')
+  t.ok(notes[0].comment.includes('MN-2'), 'audit note names the previous holder')
+})
+
+test('handlers: updateWorkOrder clears every stale same-rack holder before retrying', async (t) => {
+  const pushed = []
+  const notes = []
+  const holders = [macSyncHolder(), macSyncHolder({ id: 'miner-3', code: 'MN-3', info: { macAddress: '9C:2F:D8:55:F1:C6' } })]
+  const ctx = buildMacSyncCtx(pushed, { wo: MAC_SYNC_WO, miner: MAC_SYNC_MINER, part: MAC_SYNC_PART, notes, holders })
+  await handlers.updateWorkOrder(ctx, { ...userMeta(), ...macSyncBody([CB_REPLACEMENT_MOVE]) })
+
+  t.is(pushed.length, 5, 'WO update, refused sync, two clears, retry')
+  const clearedIds = pushed.slice(2, 4).map(p => p.params[0].id).sort()
+  t.alike(clearedIds, ['miner-2', 'miner-3'])
+  t.ok(holders.every(h => h.info.macAddress === null))
+  t.is(pushed[4].params[0].info.macAddress, '9C:2F:D8:55:F1:C6')
+  t.ok(notes[0].comment.includes('MN-2') && notes[0].comment.includes('MN-3'), 'audit note names both holders')
+})
+
+test('handlers: updateWorkOrder never clears a matching miner on another rack', async (t) => {
+  const pushed = []
+  const notes = []
+  const holder = macSyncHolder({ id: 'miner-9', code: 'MN-9', type: 'miner-avalon', rack: 'miner-avalon-rack-1', info: { macAddress: '9C:2F:D8:55:F1:C6' } })
+  const ctx = buildMacSyncCtx(pushed, {
+    wo: MAC_SYNC_WO, miner: MAC_SYNC_MINER, part: MAC_SYNC_PART, notes, holders: [holder], stubbornRack: true
+  })
+  await handlers.updateWorkOrder(ctx, { ...userMeta(), ...macSyncBody([CB_REPLACEMENT_MOVE]) })
+
+  t.is(pushed.length, 2, 'no clear and no retry for a cross-rack match')
+  t.ok(pushed.every(p => p.params[0].id !== 'miner-9'))
+  t.is(holder.info.macAddress, '9C:2F:D8:55:F1:C6', 'the other rack\'s record is untouched')
+  t.is(notes.length, 1)
+  t.ok(notes[0].comment.includes('ERR_THING_MACADDRESS_EXISTS'), 'falls back to the failure note')
+})
+
+test('handlers: updateWorkOrder retries once and notes the failure when the rack keeps refusing', async (t) => {
+  const pushed = []
+  const notes = []
+  const holder = macSyncHolder()
+  const ctx = buildMacSyncCtx(pushed, {
+    wo: MAC_SYNC_WO, miner: MAC_SYNC_MINER, part: MAC_SYNC_PART, notes, holders: [holder], stubbornRack: true
+  })
+  await handlers.updateWorkOrder(ctx, { ...userMeta(), ...macSyncBody([CB_REPLACEMENT_MOVE]) })
+
+  t.is(pushed.length, 4, 'exactly one retry after the clears — no loop')
+  t.is(notes.length, 1, 'only the failure note')
+  t.ok(notes[0].comment.includes('not updated'))
+  t.ok(notes[0].comment.includes('ERR_THING_MACADDRESS_EXISTS'))
+})
+
+test('handlers: updateWorkOrder does not reclaim on non-duplicate failures', async (t) => {
+  const pushed = []
+  const notes = []
+  const holder = macSyncHolder()
+  const ctx = buildMacSyncCtx(pushed, {
+    wo: MAC_SYNC_WO, miner: MAC_SYNC_MINER, part: MAC_SYNC_PART, notes, holders: [holder], pushError: 'ERR_SLAVE_BLOCK'
+  })
+  await handlers.updateWorkOrder(ctx, { ...userMeta(), ...macSyncBody([CB_REPLACEMENT_MOVE]) })
+
+  t.is(pushed.length, 2, 'no clear is attempted')
+  t.is(holder.info.macAddress, '9c-2f-d8-55-f1-c6', 'holder untouched')
+  t.ok(notes[0].comment.includes('ERR_SLAVE_BLOCK'))
+})
+
+test('handlers: updateWorkOrder skips reclaiming for a malformed MAC', async (t) => {
+  const pushed = []
+  const notes = []
+  const part = { ...MAC_SYNC_PART, info: { ...MAC_SYNC_PART.info, macAddress: 'NOT:A:MAC' } }
+  const ctx = buildMacSyncCtx(pushed, {
+    wo: MAC_SYNC_WO, miner: MAC_SYNC_MINER, part, notes, holders: [macSyncHolder()], pushError: 'ERR_THING_MACADDRESS_EXISTS'
+  })
+  await handlers.updateWorkOrder(ctx, { ...userMeta(), ...macSyncBody([CB_REPLACEMENT_MOVE]) })
+
+  t.is(pushed.length, 2, 'no clear is attempted for a value that is not a MAC')
+  t.is(notes.length, 1)
+  t.ok(notes[0].comment.includes('NOT:A:MAC'))
+})
+
+test('handlers: updateWorkOrder matches the attachment by device code when parentDeviceId is a raw identifier', async (t) => {
+  const pushed = []
+  const part = { ...MAC_SYNC_PART, info: { ...MAC_SYNC_PART.info, parentDeviceId: 'SN-QA-01', parentDeviceCode: 'MN-1' } }
+  const ctx = buildMacSyncCtx(pushed, { wo: MAC_SYNC_WO, miner: MAC_SYNC_MINER, part })
+  await handlers.updateWorkOrder(ctx, { ...userMeta(), ...macSyncBody([CB_REPLACEMENT_MOVE]) })
+  t.is(pushed.length, 2)
+  t.is(pushed[1].params[0].info.macAddress, '9C:2F:D8:55:F1:C6')
+})
+
+test('handlers: updateWorkOrder matches the attachment by serial number when parentDeviceId is a raw identifier', async (t) => {
+  const pushed = []
+  const miner = { ...MAC_SYNC_MINER, info: { ...MAC_SYNC_MINER.info, serialNum: 'SN-QA-01' } }
+  const part = { ...MAC_SYNC_PART, info: { ...MAC_SYNC_PART.info, parentDeviceId: 'SN-QA-01', parentDeviceSN: 'SN-QA-01' } }
+  const ctx = buildMacSyncCtx(pushed, { wo: MAC_SYNC_WO, miner, part })
+  await handlers.updateWorkOrder(ctx, { ...userMeta(), ...macSyncBody([CB_REPLACEMENT_MOVE]) })
+  t.is(pushed.length, 2)
+  t.is(pushed[1].params[0].info.macAddress, '9C:2F:D8:55:F1:C6')
 })
 
 test('handlers: closeWorkOrder maps to updateThing with status=closed and finalResult', async (t) => {
