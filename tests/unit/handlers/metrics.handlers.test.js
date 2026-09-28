@@ -4725,7 +4725,34 @@ test('getDowntime - power production input drives the curtailment / energy sold 
 
   t.is(miningShort.downtimeRate, 0.7, '7 MW short of nominal')
   t.is(miningShort.curtailmentRate, 0.5, 'availability explains 5 MW of it')
-  t.ok(Math.abs(miningShort.operationalIssuesRate - 0.2) < 1e-9, 'the rest is operational')
+  t.ok(Math.abs(miningShort.operationalIssuesRate - 0.4) < 1e-9,
+    '2 of the 5 available MW went unused, as a share of the available energy')
+  t.pass()
+})
+
+test('getDowntime - mine-hour op issues are measured against the available energy, not nominal', async (t) => {
+  const mockCtx = downtimeCtx({
+    powerRows: [downtimeHourRow(DOWNTIME_DAY_TS, 10000000)],
+    forecast: [{
+      hourlyForecast: [{
+        start: DOWNTIME_DAY_TS,
+        end: DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS,
+        decision: 'mine',
+        availableMw: 48,
+        availableEnergy: 1
+      }]
+    }]
+  })
+
+  const result = await getDowntime(mockCtx, {
+    query: { start: DOWNTIME_DAY_TS, end: DOWNTIME_DAY_TS + DOWNTIME_HOUR_MS, interval: '1h' }
+  })
+
+  t.is(result.log[0].downtimeRate, 0, 'site at full nominal draw')
+  t.is(result.log[0].curtailmentRate, 0, 'nothing withheld when more than nominal was available')
+  t.is(result.log[0].energySoldRate, 0, 'nothing sold while mining')
+  t.ok(Math.abs(result.log[0].operationalIssuesRate - 38 / 48) < 1e-9,
+    '38 of the 48 available MWh went unmined')
   t.pass()
 })
 

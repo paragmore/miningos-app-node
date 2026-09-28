@@ -2181,13 +2181,16 @@ function indexForecastDecisionsByHour (forecastResults) {
   return byHour
 }
 
-// Splits each hour's shortfall against nominal capacity into three buckets:
-// curtailment is the energy that was never available (nominal minus the
-// power-production input), energy sold is the available energy routed to the
-// grid on a not-mining hour, and whatever shortfall is left is operational.
-// Hours without a forecast entry count as 'mine' at full availability, so an
-// unexplained shortfall surfaces as an operational issue rather than being
-// hidden as curtailment.
+// Splits each hour's downtime into three buckets: curtailment is the energy
+// that was never available (nominal minus the power-production input, as a
+// share of nominal), energy sold is the available energy routed to the grid
+// on a not-mining hour, and the operational rate on a mining hour is the gap
+// between the hour's available energy and the metered draw, as a share of the
+// available energy — mining is assumed to take the full production, so this
+// bucket can exceed the nominal-based downtime when more than nominal was
+// available. Hours without a forecast entry count as 'mine' at full
+// availability, so an unexplained shortfall surfaces as an operational issue
+// rather than being hidden as curtailment.
 function buildHourlyDowntime (entries, nominalPowerW, decisionByHour) {
   return entries.map(val => {
     const ts = parseEntryTs(val.ts)
@@ -2214,7 +2217,9 @@ function buildHourlyDowntime (entries, nominalPowerW, decisionByHour) {
       energySoldRate = hour?.notMining && availableW > 0
         ? Math.min(availableW / nominalPowerW, downtimeRate - curtailmentRate)
         : 0
-      operationalIssuesRate = Math.max(0, downtimeRate - curtailmentRate - energySoldRate)
+      operationalIssuesRate = !hour?.notMining && availableW > 0
+        ? Math.max(0, availableW - powerW) / availableW
+        : Math.max(0, downtimeRate - curtailmentRate - energySoldRate)
     }
 
     return {
