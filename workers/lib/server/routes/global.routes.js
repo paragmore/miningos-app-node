@@ -38,8 +38,11 @@ module.exports = (ctx) => {
           req.query.lte,
           req.query.lt,
           req.query.limit,
+          req.query.offset,
           req.query.reverse,
           req.query.query,
+          req.query.sort,
+          req.query.fields,
           req.query.groupBy,
           req.query.model
         ],

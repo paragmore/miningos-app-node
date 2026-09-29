@@ -807,18 +807,36 @@ test('GlobalDataLib - override payloads are validated like the base payload', as
 })
 
 test('GlobalDataLib - poolRebates rows are put by ts, removed with remove:true, and validated', async function (t) {
-  const puts = []
-  const dels = []
-  const bee = { sub: () => ({ put: async (k, v) => puts.push(JSON.parse(v)), del: async (k) => dels.push(k) }) }
+  const txid = 'a'.repeat(64)
+  const subs = new Map()
+  const bee = {
+    sub: (name) => {
+      if (!subs.has(name)) {
+        const rows = new Map()
+        subs.set(name, {
+          rows,
+          get: async (k) => rows.has(k.toString('hex')) ? { value: rows.get(k.toString('hex')) } : null,
+          put: async (k, v) => rows.set(k.toString('hex'), v),
+          del: async (k) => rows.delete(k.toString('hex')),
+          createReadStream: () => (async function * () {
+            for (const v of rows.values()) yield { value: Buffer.from(v) }
+          })()
+        })
+      }
+      return subs.get(name)
+    }
+  }
   const globalDataLib = new GlobalDataLib(bee, 'test-site')
   const set = (data) => globalDataLib.setGlobalData(data, GLOBAL_DATA_TYPES.POOL_REBATES)
+  const rebateRows = () => [...subs.get(GLOBAL_DATA_TYPES.POOL_REBATES).rows.values()].map(JSON.parse)
 
-  await set({ ts: 1700006400000, amountBTC: 0.5, txid: 'abc' })
-  t.alike(puts[0], { site: 'test-site', ts: 1700006400000, amountBTC: 0.5, txid: 'abc' })
+  await set({ ts: 1700006400000, amountBTC: 0.5, txid })
+  t.alike(rebateRows()[0], { site: 'test-site', ts: 1700006400000, amountBTC: 0.5, txid, source: 'manual' })
 
   await set({ ts: 1700006400000, remove: true })
-  t.is(dels.length, 1)
+  t.is(rebateRows().length, 0)
 
   await t.exception(() => set({ ts: 1.5, amountBTC: 1 }), /ERR_INVALID_TS/)
   await t.exception(() => set({ ts: 1700006400000, amountBTC: 0 }), /ERR_INVALID_AMOUNT/)
+  await t.exception(() => set({ ts: 1700006400000, amountBTC: 1, txid: 'abc' }), /ERR_INVALID_TXID/)
 })

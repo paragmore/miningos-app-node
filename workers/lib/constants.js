@@ -10,6 +10,11 @@ const GLOBAL_DATA_TYPES = {
   POOL_REBATES: 'poolRebates'
 }
 
+const POOL_REBATE_SOURCES = {
+  AUTO: 'auto',
+  MANUAL: 'manual'
+}
+
 const LCOE_SOURCES = ['current', 'custom']
 
 const USER_SETTINGS_TYPE = 'userSettings'
@@ -788,6 +793,12 @@ const MINERPOOL_EXT_DATA_KEYS = {
   HASHRATE_HISTORY: 'hashrate-history'
 }
 
+const MEMPOOL_EXT_DATA_KEYS = {
+  POOL_REBATES: 'POOL_REBATES',
+  POOL_REBATES_UPDATE: 'POOL_REBATES_UPDATE',
+  POOL_REBATES_DELETE: 'POOL_REBATES_DELETE'
+}
+
 // Bucket sizes /auth/metrics/pool-hashrate serves; keys are the wire values of
 // its interval param. stats-history rows arrive every 5 min, so 5m is the floor.
 const POOL_HASHRATE_INTERVALS_MS = {
@@ -1463,6 +1474,8 @@ module.exports = {
   AGGR_FIELDS,
   PERIOD_TYPES,
   MINERPOOL_EXT_DATA_KEYS,
+  MEMPOOL_EXT_DATA_KEYS,
+  POOL_REBATE_SOURCES,
   POOL_HASHRATE_INTERVALS_MS,
   NON_METRIC_KEYS,
   BTC_SATS,

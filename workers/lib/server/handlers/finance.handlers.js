@@ -25,6 +25,7 @@ const {
   historyLimit,
   addRebates
 } = require('./finance.utils')
+const { getCombinedPoolRebates } = require('./rebates.utils')
 
 // First instant of the local calendar month (in `timezone`) containing `ts`.
 function localMonthStart (ts, timezone) {
@@ -332,11 +333,7 @@ function processEnergyData (results, aggrField, timezone) {
 
 async function getPoolRebates (ctx, start, end) {
   if (!ctx.globalDataLib) return []
-  const rebates = await ctx.globalDataLib.getGlobalData({
-    type: GLOBAL_DATA_TYPES.POOL_REBATES,
-    range: { gte: start, lte: end }
-  })
-  return Array.isArray(rebates) ? rebates : []
+  return await getCombinedPoolRebates(ctx, { start, end })
 }
 
 function processForecastHistory (results, timezone) {
