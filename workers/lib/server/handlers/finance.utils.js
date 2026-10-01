@@ -112,6 +112,10 @@ function priceBucket (ts) {
   return Math.floor(ts / PRICE_BUCKET_MS) * PRICE_BUCKET_MS
 }
 
+// Far above any realistic payout density (Ocean finds ~1-3 blocks a day, so a
+// year is ~1500 distinct buckets); purely a guard against pathological input.
+const MAX_PRICE_BUCKETS_PER_REQUEST = 5000
+
 // Tells a caller whether every payout in the response was valued at the price of
 // the moment it arrived, or whether some fell back to a daily price. Anything
 // other than 0 means the server-side backfill still owes this range.
@@ -183,9 +187,27 @@ async function priceDailyRevenue (ctx, {
     })
   }
 
+  // A zero-value payout needs no price: it contributes nothing to revenueUSD,
+  // so it must neither cost a bucket lookup nor flag the range as unpriced.
+  const priceable = (p) => p.amountBTC > 0 || p.feeBTC > 0
+
   const needed = [...new Set(
-    payouts.filter((p) => !p.storedPriceUSD).map((p) => priceBucket(p.ts))
+    payouts.filter((p) => !p.storedPriceUSD && priceable(p)).map((p) => priceBucket(p.ts))
   )]
+
+  // Bounds the RPC payload and the worker-side scan on pathological ranges; a
+  // request past the cap could only ever time out at the ork and fall back
+  // wholesale anyway. Newest buckets win the slots - they are the ones the
+  // sampler has actually recorded - and everything past the cap degrades to
+  // the daily price and is reported as unpriced.
+  let requested = needed
+  if (needed.length > MAX_PRICE_BUCKETS_PER_REQUEST) {
+    requested = [...needed].sort((a, b) => b - a).slice(0, MAX_PRICE_BUCKETS_PER_REQUEST)
+    console.warn(
+      new Date().toISOString(),
+      `WARN_PRICE_BUCKETS_CAPPED requested=${needed.length} cap=${MAX_PRICE_BUCKETS_PER_REQUEST}`
+    )
+  }
 
   // requestData throws when every ork fails; per-ork failures arrive as
   // {error} entries that fetchBucketPrices already skips. Either way the
@@ -193,7 +215,7 @@ async function priceDailyRevenue (ctx, {
   // price and is reported as unpriced, exactly the pre-feature behaviour.
   let bucketPrices = {}
   try {
-    bucketPrices = await fetchBucketPrices(ctx, needed)
+    bucketPrices = await fetchBucketPrices(ctx, requested)
   } catch (err) {
     console.error(new Date().toISOString(), 'ERR_FETCH_BUCKET_PRICES', err.message)
   }
@@ -217,7 +239,7 @@ async function priceDailyRevenue (ctx, {
     const exactPrice = p.storedPriceUSD || bucketPrices[bucketTs]
     const price = exactPrice || dailyPrices[dayTs] || currentBtcPrice || 0
 
-    if (!exactPrice) {
+    if (!exactPrice && priceable(p)) {
       day.unpricedPayouts++
       missingBuckets.add(bucketTs)
     }

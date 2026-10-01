@@ -654,3 +654,41 @@ test('fetchBucketPrices asks nothing when there is nothing to price', async (t) 
   t.alike(await fetchBucketPrices(ctx, []), {})
   t.absent(called, 'no payouts means no RPC at all')
 })
+
+test('priceDailyRevenue ignores zero-value payouts when judging pricing completeness', async (t) => {
+  const asked = []
+  const ctx = ctxWithPrices({ [priceBucket(MORNING)]: 30000 }, (q) => asked.push(...q.timestamps))
+
+  const { daily, missingPriceBuckets } = await priceDailyRevenue(ctx, {
+    txEntries: [
+      { ts: MORNING, amountBTC: 1, feeBTC: 0 },
+      // A transaction that nets to nothing - must not cost a lookup nor
+      // flag the range as unpriced.
+      { ts: EVENING, amountBTC: 0, feeBTC: 0 }
+    ]
+  })
+
+  t.alike(asked, [priceBucket(MORNING)], 'the worthless payout requests no bucket')
+  t.is(daily[DAY].unpricedPayouts, 0)
+  t.is(missingPriceBuckets, 0)
+  t.is(daily[DAY].revenueBTC, 1)
+})
+
+test('priceDailyRevenue caps the bucket request on pathological ranges', async (t) => {
+  const PRICE_BUCKET_MS = 5 * 60 * 1000
+  const queries = []
+  const ctx = ctxWithPrices({}, (q) => queries.push(q.timestamps))
+
+  const txEntries = Array.from({ length: 5001 }, (_, i) => ({
+    ts: DAY + i * PRICE_BUCKET_MS,
+    amountBTC: 0.001,
+    feeBTC: 0
+  }))
+
+  const { missingPriceBuckets } = await priceDailyRevenue(ctx, { txEntries })
+
+  t.is(queries.length, 1)
+  t.is(queries[0].length, 5000, 'the RPC payload is bounded')
+  t.is(queries[0][0], priceBucket(DAY + 5000 * PRICE_BUCKET_MS), 'newest buckets win the slots')
+  t.is(missingPriceBuckets, 5001, 'everything unresolved is still reported honestly')
+})
