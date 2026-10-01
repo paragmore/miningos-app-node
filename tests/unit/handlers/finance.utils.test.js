@@ -567,6 +567,23 @@ test('priceDailyRevenue degrades to daily pricing when the price worker errors',
   t.is(daily[DAY].unpricedPayouts, 1)
 })
 
+test('priceDailyRevenue degrades the same way when every ork is down and the RPC throws', async (t) => {
+  // requestData propagates the first error when no ork answered at all - a
+  // total outage must not 500 a finance endpoint that used to succeed.
+  const ctx = {
+    dataProxy: { requestData: async () => { throw new Error('CHANNEL_CLOSED') } }
+  }
+
+  const { daily, missingPriceBuckets } = await priceDailyRevenue(ctx, {
+    txEntries: [{ ts: MORNING, amountBTC: 1, feeBTC: 0 }],
+    dailyPrices: { [DAY]: 50000 }
+  })
+
+  t.is(daily[DAY].revenueUSD, 50000)
+  t.is(daily[DAY].unpricedPayouts, 1)
+  t.is(missingPriceBuckets, 1)
+})
+
 test('priceDailyRevenue splits payouts across their own local days', async (t) => {
   const nextDay = DAY + 86400000
   const ctx = ctxWithPrices({ [priceBucket(MORNING)]: 30000, [priceBucket(nextDay)]: 40000 })

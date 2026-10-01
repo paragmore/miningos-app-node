@@ -186,7 +186,17 @@ async function priceDailyRevenue (ctx, {
   const needed = [...new Set(
     payouts.filter((p) => !p.storedPriceUSD).map((p) => priceBucket(p.ts))
   )]
-  const bucketPrices = await fetchBucketPrices(ctx, needed)
+
+  // requestData throws when every ork fails; per-ork failures arrive as
+  // {error} entries that fetchBucketPrices already skips. Either way the
+  // response must not die over pricing - everything falls back to the daily
+  // price and is reported as unpriced, exactly the pre-feature behaviour.
+  let bucketPrices = {}
+  try {
+    bucketPrices = await fetchBucketPrices(ctx, needed)
+  } catch (err) {
+    console.error(new Date().toISOString(), 'ERR_FETCH_BUCKET_PRICES', err.message)
+  }
 
   const daily = {}
   const missingBuckets = new Set()
