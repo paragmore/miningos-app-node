@@ -1,6 +1,12 @@
 'use strict'
 
-const { BTC_SATS } = require('../../constants')
+const {
+  BTC_SATS,
+  PRICE_BUCKET_MS,
+  RPC_METHODS,
+  WORKER_TYPES,
+  MEMPOOL_EXT_DATA_KEYS
+} = require('../../constants')
 const { localDayStart } = require('../../utils')
 const {
   assertTimezone,
@@ -51,6 +57,10 @@ function normalizeTimestampMs (ts) {
   return ts < 1e12 ? ts * 1000 : ts
 }
 
+// Returns the day-bucketed BTC sums the BTC-denominated views rely on, plus the
+// individual transactions behind them. USD valuation needs the latter: a payout
+// at 00:05 and one at 23:55 are worth different amounts, and the day bucket has
+// already thrown that away.
 // `opts.start`/`opts.end` drop transactions whose own (mining) date falls outside the
 // window: the store selects records by their settle time, so a payout inside the window
 // can still carry a mining_date before or after it.
@@ -59,6 +69,7 @@ function processTransactions (results, opts, timezone) {
   const start = Number.isFinite(opts?.start) ? opts.start : -Infinity
   const end = Number.isFinite(opts?.end) ? opts.end : Infinity
   const daily = {}
+  const txEntries = []
   for (const res of results) {
     if (!res || res.error) continue
     const data = Array.isArray(res) ? res : (res.data || res.result || [])
@@ -76,33 +87,151 @@ function processTransactions (results, opts, timezone) {
         const day = daily[ts] ??= trackFees
           ? { revenueBTC: 0, feesBTC: 0 }
           : { revenueBTC: 0 }
+
+        let amountBTC = 0
+        let feeBTC = 0
         if (t.satoshis_net_earned) {
-          day.revenueBTC += Math.abs(t.satoshis_net_earned) / BTC_SATS
-          if (trackFees) {
-            day.feesBTC += (t.fees_colected_satoshis || 0) / BTC_SATS
-          }
+          amountBTC = Math.abs(t.satoshis_net_earned) / BTC_SATS
+          feeBTC = (t.fees_colected_satoshis || 0) / BTC_SATS
         } else {
-          day.revenueBTC += Math.abs(t.changed_balance || t.amount || t.value || 0)
-          if (trackFees) {
-            day.feesBTC += (t.mining_extra?.tx_fee || 0)
-          }
+          amountBTC = Math.abs(t.changed_balance || t.amount || t.value || 0)
+          feeBTC = (t.mining_extra?.tx_fee || 0)
         }
+
+        day.revenueBTC += amountBTC
+        if (trackFees) day.feesBTC += feeBTC
+
+        txEntries.push({ ts: rawMs, amountBTC, feeBTC })
       }
     }
   }
-  return daily
+  return { daily, txEntries }
 }
 
-function addRebates (daily, rebates, timezone) {
-  for (const day of Object.values(daily)) day.payoutBTC = day.revenueBTC
-  for (const r of rebates) {
-    if (!Number.isFinite(r?.ts) || !Number.isFinite(r?.amountBTC)) continue
-    const ts = localDayStart(r.ts, timezone)
-    const day = daily[ts] ??= { revenueBTC: 0, payoutBTC: 0 }
-    day.revenueBTC += r.amountBTC
-    day.rebateBTC = (day.rebateBTC || 0) + r.amountBTC
+function priceBucket (ts) {
+  return Math.floor(ts / PRICE_BUCKET_MS) * PRICE_BUCKET_MS
+}
+
+// Tells a caller whether every payout in the response was valued at the price of
+// the moment it arrived, or whether some fell back to a daily price. Anything
+// other than 0 means the server-side backfill still owes this range.
+function pricingStatus (missingPriceBuckets) {
+  return {
+    missingPriceBuckets,
+    pricingComplete: missingPriceBuckets === 0
   }
-  return daily
+}
+
+// The mempool worker answers from its own cache and never fetches, so this stays
+// well inside the RPC timeout.
+//
+// The reply arrives nested: the ork wraps each rack's object in an array and
+// concatenates across racks, then one such array comes back per ork. Racks
+// without a mempool worker contribute nothing. So walk whatever shape arrives
+// and merge every price map found - a missed layer here would silently price
+// every payout off the daily fallback.
+async function fetchBucketPrices (ctx, buckets) {
+  if (!buckets.length) return {}
+
+  const results = await ctx.dataProxy.requestData(RPC_METHODS.GET_WRK_EXT_DATA, {
+    type: WORKER_TYPES.MEMPOOL,
+    query: { key: MEMPOOL_EXT_DATA_KEYS.PRICE_AT_TIMESTAMPS, timestamps: buckets }
+  })
+
+  const prices = {}
+  const collect = (node) => {
+    if (!node || node.error) return
+    if (Array.isArray(node)) return node.forEach(collect)
+    if (node.prices) return Object.assign(prices, node.prices)
+    if (node.data || node.result) collect(node.data || node.result)
+  }
+  collect(results)
+
+  return prices
+}
+
+/**
+ * Values every payout and rebate at the BTC price recorded for the 5-minute
+ * bucket it actually landed in, rather than one price for the whole day.
+ *
+ * A bucket with no recorded price falls back to the day price, which is exactly
+ * the old behaviour - so accuracy degrades to the previous baseline instead of
+ * breaking. Each day reports how many of its payouts needed that fallback, so
+ * it is never silent; the server-side backfill is what clears them. A count
+ * rather than a flag because `aggregateByPeriod` sums unknown fields, and a
+ * count still means something once days are rolled up into months.
+ */
+async function priceDailyRevenue (ctx, {
+  txEntries = [],
+  rebates = [],
+  dailyPrices = {},
+  currentBtcPrice = 0,
+  timezone = 'UTC',
+  trackFees = false
+} = {}) {
+  const payouts = txEntries.map((t) => ({ ...t, isRebate: false }))
+  const validRebates = rebates.filter((r) => Number.isFinite(r?.ts) && Number.isFinite(r?.amountBTC))
+
+  for (const r of validRebates) {
+    payouts.push({
+      ts: r.ts,
+      amountBTC: r.amountBTC,
+      feeBTC: 0,
+      // Priced when the rebate was recorded; only older rows lack it.
+      storedPriceUSD: Number.isFinite(r.priceUSD) ? r.priceUSD : null,
+      isRebate: true
+    })
+  }
+
+  const needed = [...new Set(
+    payouts.filter((p) => !p.storedPriceUSD).map((p) => priceBucket(p.ts))
+  )]
+  const bucketPrices = await fetchBucketPrices(ctx, needed)
+
+  const daily = {}
+  const missingBuckets = new Set()
+
+  for (const p of payouts) {
+    const dayTs = localDayStart(p.ts, timezone)
+    const day = daily[dayTs] ??= {
+      revenueBTC: 0,
+      payoutBTC: 0,
+      rebateBTC: 0,
+      revenueUSD: 0,
+      feesBTC: 0,
+      feesUSD: 0,
+      unpricedPayouts: 0
+    }
+
+    const bucketTs = priceBucket(p.ts)
+    const exactPrice = p.storedPriceUSD || bucketPrices[bucketTs]
+    const price = exactPrice || dailyPrices[dayTs] || currentBtcPrice || 0
+
+    if (!exactPrice) {
+      day.unpricedPayouts++
+      missingBuckets.add(bucketTs)
+    }
+
+    day.revenueBTC += p.amountBTC
+    day.revenueUSD += p.amountBTC * price
+    if (p.isRebate) day.rebateBTC += p.amountBTC
+    else day.payoutBTC += p.amountBTC
+
+    if (trackFees) {
+      day.feesBTC += p.feeBTC
+      day.feesUSD += p.feeBTC * price
+    }
+  }
+
+  for (const [dayTs, day] of Object.entries(daily)) {
+    // The blended price the day's revenue actually realised, so the reported
+    // btcPrice stays consistent with revenueUSD instead of contradicting it.
+    day.btcPrice = day.revenueBTC > 0
+      ? day.revenueUSD / day.revenueBTC
+      : (dailyPrices[dayTs] || currentBtcPrice || 0)
+  }
+
+  return { daily, missingPriceBuckets: missingBuckets.size }
 }
 
 function extractCurrentPrice (results) {
@@ -182,5 +311,8 @@ module.exports = {
   extractCurrentPrice,
   processBlockData,
   historyLimit,
-  addRebates
+  priceBucket,
+  fetchBucketPrices,
+  priceDailyRevenue,
+  pricingStatus
 }

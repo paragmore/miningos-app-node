@@ -242,12 +242,22 @@ class GlobalDataLib {
       throw new Error('ERR_DUPLICATE_TXID')
     }
 
+    let prevRow
     if (prevTs !== undefined) {
-      if (!rows.some((row) => row.ts === prevTs)) throw new Error('ERR_REBATE_NOT_FOUND')
+      prevRow = rows.find((row) => row.ts === prevTs)
+      if (!prevRow) throw new Error('ERR_REBATE_NOT_FOUND')
       await db.del(utilsStore.convIntToBin(prevTs))
     }
 
     const { amountBTC, sender, receiver } = data
+
+    // priceUSD is the BTC price when the rebate was received, derived by the
+    // handler at write time. When an edit could not re-derive it (bucket not
+    // recorded, worker unreachable), the previous value is only safe to keep
+    // if the timestamp did not move - a shifted rebate with the old moment's
+    // price would be silently wrong.
+    let priceUSD = Number.isFinite(data.priceUSD) ? data.priceUSD : undefined
+    if (priceUSD === undefined && prevRow && prevRow.ts === data.ts) priceUSD = prevRow.priceUSD
 
     // Keys are timestamps, so two manual rows at the same instant would
     // otherwise overwrite each other.
@@ -257,7 +267,7 @@ class GlobalDataLib {
     await db.put(
       utilsStore.convIntToBin(ts),
       JSON.stringify({
-        site: this.site, ts, amountBTC, txid, sender, receiver, source: POOL_REBATE_SOURCES.MANUAL
+        site: this.site, ts, amountBTC, txid, sender, receiver, priceUSD, source: POOL_REBATE_SOURCES.MANUAL
       })
     )
     return true

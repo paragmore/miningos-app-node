@@ -35,6 +35,7 @@ const {
   localMonthStart
 } = require('../../../workers/lib/server/handlers/finance.handlers')
 const { getConsumption } = require('../../../workers/lib/server/handlers/metrics.handlers')
+const { priceBucket } = require('../../../workers/lib/server/handlers/finance.utils')
 const { withDataProxy } = require('../helpers/mockHelpers')
 
 // ==================== Energy Balance Tests ====================
@@ -490,6 +491,88 @@ test('getEnergyBalance monthly - rates use MEAN, totals use SUM, per-MW is RECOM
   t.is(m.sitePowerMW, 4, 'sitePowerMW averaged: (5+3+4)/3')
   t.ok(Math.abs(m.energyRevenueUSD_MW - 12000) < 1e-6, 'per-MW recomputed from sum / mean, not summed daily values')
   t.ok(Math.abs(m.energyRevenueBTC_MW - 0.3) < 1e-9, 'BTC per-MW recomputed')
+})
+
+// A day holding several payouts at different times, with the mempool worker
+// serving a price per 5-minute bucket. `bucketPrices` maps bucket ts -> price;
+// anything absent models a bucket the server-side backfill has not reached yet.
+function makeReceiptPricedCtx (dayTs, payouts, bucketPrices, dailyPrice) {
+  return withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (_key, method, payload) => {
+        if (method === 'tailLog') {
+          return [{ ts: dayTs, site_power_w: 1_000_000, hashrate_mhs_5m_sum_aggr: 100 }]
+        }
+        if (method === 'getWrkExtData') {
+          const key = payload.query && payload.query.key
+          if (key === 'transactions') {
+            return [{ ts: dayTs, transactions: payouts.map(p => ({ ts: p.ts, changed_balance: p.btc })) }]
+          }
+          if (key === 'HISTORICAL_PRICES') return [{ ts: dayTs, priceUSD: dailyPrice }]
+          if (key === 'current_price') return [{ currentPrice: dailyPrice }]
+          if (key === 'PRICE_AT_TIMESTAMPS') {
+            const prices = {}
+            for (const ts of payload.query.timestamps) {
+              if (bucketPrices[ts]) prices[ts] = bucketPrices[ts]
+            }
+            // Array-wrapped, as the ork actually replies: it wraps each rack's
+            // object reply and concatenates across racks.
+            return [{ prices, missing: payload.query.timestamps.filter(ts => !bucketPrices[ts]) }]
+          }
+          if (key === 'stats-history') return []
+        }
+        if (method === 'getGlobalConfig') return { nominalPowerAvailability_MW: 10 }
+        return {}
+      }
+    },
+    globalDataLib: { getGlobalData: async () => [] }
+  })
+}
+
+test('getRevenueSummary values same-day payouts at the price each one arrived at', async (t) => {
+  const day = Date.UTC(2024, 0, 15)
+  const morning = day + 30 * 60 * 1000
+  const evening = day + 22 * 60 * 60 * 1000
+  const payouts = [{ ts: morning, btc: 1 }, { ts: evening, btc: 1 }]
+  const bucketPrices = {
+    [priceBucket(morning)]: 30000,
+    [priceBucket(evening)]: 50000
+  }
+
+  const result = await getRevenueSummary(
+    makeReceiptPricedCtx(day, payouts, bucketPrices, 99999),
+    { query: { start: day - 1000, end: day + 86400000, period: 'daily' } },
+    {}
+  )
+
+  const entry = result.log[0]
+  t.is(entry.revenueUSD, 80000, 'each payout valued at its own moment, not one daily price')
+  t.is(entry.btcPrice, 40000, 'the reported price is the blend actually realised')
+  t.is(entry.unpricedPayouts, 0)
+  t.is(result.summary.pricingComplete, true)
+  t.is(result.summary.missingPriceBuckets, 0)
+})
+
+test('getRevenueSummary flags the range when a payout had no recorded price', async (t) => {
+  const day = Date.UTC(2024, 0, 15)
+  const morning = day + 30 * 60 * 1000
+  const evening = day + 22 * 60 * 60 * 1000
+  const payouts = [{ ts: morning, btc: 1 }, { ts: evening, btc: 1 }]
+  // Only the morning bucket was ever recorded.
+  const bucketPrices = { [priceBucket(morning)]: 30000 }
+
+  const result = await getRevenueSummary(
+    makeReceiptPricedCtx(day, payouts, bucketPrices, 50000),
+    { query: { start: day - 1000, end: day + 86400000, period: 'daily' } },
+    {}
+  )
+
+  const entry = result.log[0]
+  t.is(entry.revenueUSD, 80000, 'the unpriced payout keeps the previous daily-price behaviour')
+  t.is(entry.unpricedPayouts, 1)
+  t.is(result.summary.pricingComplete, false, 'the response says so rather than hiding the fallback')
+  t.is(result.summary.missingPriceBuckets, 1)
 })
 
 test('getRevenueSummary monthly - rates use MEAN, totals use SUM', async (t) => {

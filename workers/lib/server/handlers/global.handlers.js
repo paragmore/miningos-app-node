@@ -8,6 +8,7 @@ const {
   updateAutoPoolRebate,
   deleteAutoPoolRebate
 } = require('./rebates.utils')
+const { priceBucket, fetchBucketPrices } = require('./finance.utils')
 
 async function getGlobalData (ctx, req) {
   const type = req.query.type
@@ -123,7 +124,28 @@ async function setPoolRebatesData (ctx, data) {
     if (auto.some((row) => row.txid === txid)) throw new Error('ERR_DUPLICATE_TXID')
   }
 
-  return await ctx.globalDataLib.setGlobalData(data, GLOBAL_DATA_TYPES.POOL_REBATES)
+  return await ctx.globalDataLib.setGlobalData(await priceRebateAtReceipt(ctx, data), GLOBAL_DATA_TYPES.POOL_REBATES)
+}
+
+// Captures what the rebate was worth when it was received, so its USD value
+// stays fixed instead of being re-derived from a daily price later. A rebate
+// entered close to real time is a straight cache hit on the mempool worker's
+// 5m price store; a backdated one may have no recorded price yet, and must not
+// fail the write for it - the finance read path falls back to the daily price
+// and the server-side backfill fills the gap. The client never supplies the
+// price: it is derived here or not at all.
+async function priceRebateAtReceipt (ctx, data) {
+  const { priceUSD, ...rest } = data || {}
+  if (!Number.isFinite(rest?.ts)) return rest
+
+  try {
+    const bucketTs = priceBucket(rest.ts)
+    const prices = await fetchBucketPrices(ctx, [bucketTs])
+    if (prices[bucketTs]) return { ...rest, priceUSD: prices[bucketTs] }
+  } catch (err) {
+    console.error(new Date().toISOString(), 'ERR_PRICE_REBATE_AT_RECEIPT', err.message)
+  }
+  return rest
 }
 
 async function getFeatureConfig (ctx) {

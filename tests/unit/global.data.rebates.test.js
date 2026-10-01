@@ -151,3 +151,46 @@ test('rebate keys stay range-queryable by ts', async (t) => {
   const stored = await db.get(bin)
   t.ok(stored, 'row is keyed by convIntToBin(ts)')
 })
+
+test('setPoolRebatesData persists a handler-derived receipt price', async (t) => {
+  const { lib } = makeLib()
+
+  await lib.setPoolRebatesData({ ts: 1000, amountBTC: 0.5, priceUSD: 42000 })
+
+  const [row] = await readRebates(lib)
+  t.is(row.priceUSD, 42000)
+})
+
+test('an edit keeping the same ts preserves the stored receipt price', async (t) => {
+  const { lib } = makeLib()
+  await lib.setPoolRebatesData({ ts: 1000, amountBTC: 0.5, priceUSD: 42000 })
+
+  // The handler could not re-derive a price (no bucket recorded), so the data
+  // arrives without one; the moment is unchanged, so the old price still holds.
+  await lib.setPoolRebatesData({ ts: 1000, prevTs: 1000, amountBTC: 0.75 })
+
+  const [row] = await readRebates(lib)
+  t.is(row.amountBTC, 0.75)
+  t.is(row.priceUSD, 42000)
+})
+
+test('an edit moving the ts drops a price it cannot re-derive', async (t) => {
+  const { lib } = makeLib()
+  await lib.setPoolRebatesData({ ts: 1000, amountBTC: 0.5, priceUSD: 42000 })
+
+  await lib.setPoolRebatesData({ ts: 2000, prevTs: 1000, amountBTC: 0.5 })
+
+  const [row] = await readRebates(lib)
+  t.is(row.ts, 2000)
+  t.is(row.priceUSD, undefined, 'the old moment\'s price would be wrong for the new one')
+})
+
+test('an edit moving the ts takes a freshly derived price', async (t) => {
+  const { lib } = makeLib()
+  await lib.setPoolRebatesData({ ts: 1000, amountBTC: 0.5, priceUSD: 42000 })
+
+  await lib.setPoolRebatesData({ ts: 2000, prevTs: 1000, amountBTC: 0.5, priceUSD: 43000 })
+
+  const [row] = await readRebates(lib)
+  t.is(row.priceUSD, 43000)
+})
