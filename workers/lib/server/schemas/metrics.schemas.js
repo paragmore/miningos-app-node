@@ -21,6 +21,7 @@ const schemas = {
         container: { type: 'string' },
         current: { type: 'boolean' },
         nominal: { type: 'boolean' },
+        siteNominal: { type: 'boolean' },
         pool: { type: 'boolean' },
         racks: { type: 'string' },
         offset: { type: 'integer', minimum: 0 },

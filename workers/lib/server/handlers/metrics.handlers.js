@@ -157,6 +157,7 @@ async function getMonthlyHashrate (ctx, req, phase = null) {
   const now = Date.now()
   const flags = {
     nominal: req.query.nominal === true || req.query.nominal === 'true',
+    siteNominal: req.query.siteNominal === true || req.query.siteNominal === 'true',
     pool: req.query.pool === true || req.query.pool === 'true',
     container: req.query.container || null,
     phase: phase?.id || null
@@ -246,6 +247,8 @@ async function resolveHashrate (ctx, req, phase = null) {
   // bucket, which only the per-bucket aggregate carries. Opt-in: the site nominal alone is
   // served by /auth/site/status/live.
   const withNominal = req.query.nominal === true || req.query.nominal === 'true'
+  // Invoicing bills against the configured site nominal instead of the installed capacity.
+  const withSiteNominal = withNominal && (req.query.siteNominal === true || req.query.siteNominal === 'true')
   // Opt-in pool-reported hashrate per bucket, so invoicing can compare the
   // miner-telemetry series against what the pools credited.
   const withPool = req.query.pool === true || req.query.pool === 'true'
@@ -261,6 +264,7 @@ async function resolveHashrate (ctx, req, phase = null) {
     fields: { [field]: 1, ...(withNominal && { [LOG_FIELDS.NOMINAL_HASHRATE_SUM]: 1 }) },
     aggrFields: { [aggrField]: 1, ...(withNominal && { [AGGR_FIELDS.NOMINAL_HASHRATE_SUM]: 1 }) }
   })
+  const siteNominalMhs = withSiteNominal ? await getSiteNominalHashrate(ctx) : null
 
   const log = firstOrkEntries(res).map(val => {
     const timeRange = parseEntryTimeRange(val.ts)
@@ -273,7 +277,7 @@ async function resolveHashrate (ctx, req, phase = null) {
       }
     }
 
-    const nominalHashrateMhs = Number(val[AGGR_FIELDS.NOMINAL_HASHRATE_SUM]) || 0
+    const nominalHashrateMhs = siteNominalMhs ?? (Number(val[AGGR_FIELDS.NOMINAL_HASHRATE_SUM]) || 0)
     return {
       ts: parseEntryTs(val.ts),
       ...(timeRange && { timeRange }),
@@ -297,6 +301,13 @@ async function resolveHashrate (ctx, req, phase = null) {
   }
 
   return { log, summary }
+}
+
+async function getSiteNominalHashrate (ctx) {
+  const res = await ctx.dataProxy.requestDataMap(RPC_METHODS.GLOBAL_CONFIG, {
+    fields: { nominalSiteHashrate_MHS: 1 }
+  })
+  return res.map((config) => Number(config?.nominalSiteHashrate_MHS)).find((mhs) => mhs > 0) ?? null
 }
 
 // Attaches the pool-reported hashrate to each miner-telemetry bucket, using the

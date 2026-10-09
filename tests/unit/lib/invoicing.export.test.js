@@ -12,12 +12,13 @@ const MHS = 1e11
 const NOMINAL_MHS = 1.25e11
 const POOL_HS = 9.9e16 // 99 PH/s, pool stats are in H/s
 
-function mockCtx ({ buckets = 3, interval = HOUR_MS, globalData = {}, hashrateMhs = MHS, poolHashrateHs = POOL_HS, poolBuckets = null } = {}) {
+function mockCtx ({ buckets = 3, interval = HOUR_MS, globalData = {}, hashrateMhs = MHS, poolHashrateHs = POOL_HS, poolBuckets = null, siteNominalMhs } = {}) {
   return withDataProxy({
     conf: { orks: [{ rpcPublicKey: 'key1' }] },
     globalDataLib: { getGlobalData: async ({ type }) => globalData[type] },
     net_r0: {
       jRequest: async (key, method, params) => {
+        if (method === 'getGlobalConfig') return { nominalSiteHashrate_MHS: siteNominalMhs }
         if (method === 'getWrkExtData') {
           return [{
             hashrateHistory: poolHashrateHs === null
@@ -299,6 +300,21 @@ test('invoice-breakdown - localMonth bills the requested timezone month from hou
   t.is(row.operationalCostUsd, 5000)
   t.is(row.energyConsumedMwh, 480, '10 MW over 48 hourly buckets, each an hour long')
   t.is(row.pctOfNominal, 79.2, 'pool vs nominal over the hourly buckets')
+  t.pass()
+})
+
+test('invoicing exports measure % of nominal against the configured site nominal', async (t) => {
+  const params = { start: START, end: START + 2 * DAY_MS, timezone: 'UTC', format: 'json', localMonth: 'true' }
+  const ctxOpts = { buckets: 48, interval: HOUR_MS, siteNominalMhs: 1.5e11 }
+
+  const { out: breakdown } = await runExport('invoice-breakdown', params, ctxOpts)
+  t.is(JSON.parse(breakdown).breakdown[0].pctOfNominal, 66, '99 PH/s pool vs the 150 PH/s site nominal, not the 125 PH/s installed')
+
+  const { out: hourly } = await runExport('invoicing-hourly-hashes', params, ctxOpts)
+  t.is(JSON.parse(hourly).hashes[0].pctOfNominal, 66)
+
+  const { out: unset } = await runExport('invoice-breakdown', params, { buckets: 48, interval: HOUR_MS })
+  t.is(JSON.parse(unset).breakdown[0].pctOfNominal, 79.2, 'falls back to the installed nominal when the site nominal is not configured')
   t.pass()
 })
 

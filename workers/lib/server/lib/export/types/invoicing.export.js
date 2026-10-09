@@ -81,7 +81,7 @@ function buildHashesEntry ({ type, interval, seconds, rollup, filenamePrefix, pe
     assertParams: assertRange,
     async fetchExport (ctx, { params, now, timezone }) {
       const { log } = await getHashrate(ctx, {
-        query: { start: params.start, end: params.end, interval, nominal: true, pool: true }
+        query: { start: params.start, end: params.end, interval, nominal: true, siteNominal: true, pool: true }
       })
       const buckets = rollup ? rollup(log, timezone) : log
 
@@ -162,7 +162,7 @@ const invoiceBreakdown = {
     const localMonth = params.localMonth === true || params.localMonth === 'true'
     const interval = localMonth ? '1h' : '1d'
     const [hashrate, consumption, costParameters, productionCosts] = await Promise.all([
-      getHashrate(ctx, { query: { start, end, interval, nominal: true, pool: true } }),
+      getHashrate(ctx, { query: { start, end, interval, nominal: true, siteNominal: true, pool: true } }),
       getConsumption(ctx, { query: { start, end, interval } }),
       getCostParameters(ctx),
       getProductionCosts(ctx, start, end)

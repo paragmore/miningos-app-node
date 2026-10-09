@@ -4250,6 +4250,53 @@ test('getHashrate - nominal adds per-bucket nominal and pct', async (t) => {
   t.pass()
 })
 
+test('getHashrate - siteNominal replaces the installed nominal with the configured site nominal', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method) => {
+        if (method === 'getGlobalConfig') return { nominalSiteHashrate_MHS: 7.5e11 }
+        return [
+          { ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 3e11, nominal_hashrate_mhs_sum_aggr: 2.6112e11 },
+          { ts: 1700010000000, hashrate_mhs_5m_sum_aggr: 6e11, nominal_hashrate_mhs_sum_aggr: 0 }
+        ]
+      }
+    }
+  })
+  const query = { start: 1700000000000, end: 1700100000000, nominal: true }
+
+  const site = await getHashrate(mockCtx, { query: { ...query, siteNominal: 'true' } })
+  t.alike(site.log.map((entry) => entry.nominalHashrateMhs), [7.5e11, 7.5e11], 'every bucket carries the site nominal')
+  t.alike(site.log.map((entry) => entry.pctOfNominal), [40, 80])
+  t.is(site.summary.nominalHashrateMhs, 7.5e11)
+
+  const installed = await getHashrate(mockCtx, { query })
+  t.is(installed.log[0].nominalHashrateMhs, 2.6112e11, 'without siteNominal the installed nominal is unchanged')
+
+  const noNominal = await getHashrate(mockCtx, { query: { ...query, nominal: false, siteNominal: true } })
+  t.absent('nominalHashrateMhs' in noNominal.log[0], 'siteNominal alone does not opt into the nominal series')
+  t.pass()
+})
+
+test('getHashrate - siteNominal falls back to the installed nominal when the site nominal is unset', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method) => {
+        if (method === 'getGlobalConfig') return { nominalSiteHashrate_MHS: 0 }
+        return [{ ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 1e11, nominal_hashrate_mhs_sum_aggr: 2e11 }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, nominal: true, siteNominal: true }
+  })
+  t.is(result.log[0].nominalHashrateMhs, 2e11)
+  t.is(result.log[0].pctOfNominal, 50)
+  t.pass()
+})
+
 test('getHashrate - nominal accepts the string form and tolerates a zero nominal', async (t) => {
   const mockCtx = withDataProxy({
     conf: { orks: [{ rpcPublicKey: 'key1' }] },
