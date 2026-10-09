@@ -92,7 +92,9 @@ function processTransactions (results, opts, timezone) {
         let feeBTC = 0
         if (t.satoshis_net_earned) {
           amountBTC = Math.abs(t.satoshis_net_earned) / BTC_SATS
-          feeBTC = (t.fees_colected_satoshis || 0) / BTC_SATS
+          // Ocean spells it fees_collected_satoshis; the single-l spelling is
+          // kept for any rows stored before this fix.
+          feeBTC = (t.fees_collected_satoshis || t.fees_colected_satoshis || 0) / BTC_SATS
         } else {
           amountBTC = Math.abs(t.changed_balance || t.amount || t.value || 0)
           feeBTC = (t.mining_extra?.tx_fee || 0)

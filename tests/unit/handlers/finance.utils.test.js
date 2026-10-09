@@ -247,6 +247,22 @@ test('processTransactions - with trackFees (Ocean data)', (t) => {
   t.pass()
 })
 
+test('processTransactions - trackFees reads the api spelling fees_collected_satoshis', (t) => {
+  const results = [
+    [{
+      transactions: [{
+        ts: 1700006400000,
+        satoshis_net_earned: 50000000,
+        fees_collected_satoshis: 1000000
+      }]
+    }]
+  ]
+  const { daily } = processTransactions(results, { trackFees: true }, 'UTC')
+  const key = Object.keys(daily)[0]
+  t.is(daily[key].feesBTC, 0.01, 'fees land instead of silently reading 0')
+  t.pass()
+})
+
 test('processTransactions - with trackFees (F2Pool data)', (t) => {
   const results = [
     [{
