@@ -90,6 +90,24 @@ test('getFeatureConfig - returns feature config from context', async (t) => {
   t.pass()
 })
 
+test('getFeatureConfig - serves phases without their pool accounts', async (t) => {
+  const phases = [
+    { id: 'phase1', label: 'Phase 1', minerTelemetry: true, consumption: { source: 'remainder' }, pool: { accounts: [{ poolType: 'ocean', username: 'bc1qsite' }] } },
+    { id: 'phase1_5', label: 'Phase 1.5', minerTelemetry: false, groups: { minerType: 'HBM' }, pool: { accounts: [{ poolType: 'ocean', username: 'bc1qacme' }] } }
+  ]
+  const mockCtx = {
+    globalDataLib: { getGlobalData: async () => ({}) },
+    conf: { featureConfig: { phases } }
+  }
+
+  const result = await getFeatureConfig(mockCtx)
+  t.alike(result.phases.map(p => p.id), ['phase1', 'phase1_5'])
+  t.ok(result.phases.every(p => p.pool === undefined), 'pool accounts stay server-side')
+  t.is(result.phases[1].groups.minerType, 'HBM', 'the rest of the phase is intact')
+  t.ok(phases[0].pool, 'config object is not mutated')
+  t.pass()
+})
+
 test('getFeatureConfig - passes through a configured lockedTimezone', async (t) => {
   const mockCtx = {
     globalDataLib: { getGlobalData: async () => ({}) },

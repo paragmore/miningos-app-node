@@ -70,7 +70,6 @@ function aggregateContainerCapacity (tailLogResults) {
   return capacity
 }
 
-// Each ork entry is { ts, stats: [...] }, one object per pool, hashrate in H/s
 // Live pool hashrate (MH/s) of the phases that exist only at the pool, summed
 // from the already-fetched minerpool stats. Zero when phases are not configured.
 function sumPoolOnlyPhasesHashrateMhs (ctx, poolDataResults) {
@@ -100,6 +99,7 @@ function sumPoolOnlyPhasesHashrateMhs (ctx, poolDataResults) {
   return hsToMhs(totalHs)
 }
 
+// Each ork entry is { ts, stats: [...] }, one object per pool, hashrate in H/s
 function aggregatePoolStats (poolDataResults) {
   const stats = {
     totalHashrateHs: 0,

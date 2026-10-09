@@ -153,6 +153,11 @@ async function getFeatureConfig (ctx) {
   const featureConfig = ctx.conf.featureConfig || {}
   return {
     ...featureConfig,
+    // The pool account usernames are backend wiring; clients only need the
+    // ids, labels, groups and consumption source.
+    ...(Array.isArray(featureConfig.phases) && {
+      phases: featureConfig.phases.map(({ pool, ...rest }) => rest)
+    }),
     ...await getFeatures(ctx),
     lockedTimezone: featureConfig.lockedTimezone || LOCKED_TIMEZONE_DEFAULT
   }
