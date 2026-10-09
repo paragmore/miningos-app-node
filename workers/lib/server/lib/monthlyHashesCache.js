@@ -22,8 +22,8 @@ function createMonthlyHashesCache ({ ttlMs = DEFAULT_TTL_MS, maxEntries = DEFAUL
     // covers, and on whether the caller asked for the nominal and pool series at all.
     // Everything that changes the numbers has to be in here: a scoped request that
     // shared a key with the site-wide one would serve its numbers for the whole TTL.
-    key (monthKey, timezone, { nominal, pool, container } = {}) {
-      return `${monthKey}|${timezone}|${container || ''}|${nominal ? 'n' : ''}${pool ? 'p' : ''}`
+    key (monthKey, timezone, { nominal, pool, container, phase } = {}) {
+      return `${monthKey}|${timezone}|${container || ''}|${phase || ''}|${nominal ? 'n' : ''}${pool ? 'p' : ''}`
     },
 
     get (key, now = Date.now()) {

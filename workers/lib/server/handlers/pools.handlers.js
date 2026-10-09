@@ -234,7 +234,7 @@ function flattenPoolHashrateHistory (results) {
  * bucket `ts` with the pool hashrate in MH/s, or null for windows without
  * samples.
  */
-async function resolvePoolHashrateForBuckets (ctx, { start, end, buckets }) {
+async function resolvePoolHashrateForBuckets (ctx, { start, end, buckets, accounts }) {
   const byBucket = new Map()
   if (!Array.isArray(buckets) || !buckets.length) return byBucket
 
@@ -267,12 +267,14 @@ async function resolvePoolHashrateForBuckets (ctx, { start, end, buckets }) {
   }
 
   for (const sample of flattenPoolHashrateHistory(results)) {
+    const account = `${sample.poolType}:${sample.username}`
+    if (accounts && !accounts.has(account)) continue
+
     const idx = findBucketIdx(sample.ts)
     if (idx === -1) continue
 
     const hashrate = Number(sample.hashrate)
     if (!Number.isFinite(hashrate)) continue
-    const account = `${sample.poolType}:${sample.username}`
     const acc = accountsPerBucket[idx].get(account) || { total: 0, count: 0 }
     acc.total += hashrate
     acc.count++

@@ -53,6 +53,7 @@ const {
 const { parseRacks } = require('../lib/queryUtils')
 const { assertTimezone } = require('../lib/export/mappers')
 const { createMonthlyHashesCache } = require('../lib/monthlyHashesCache')
+const lPhases = require('../../phases.utils')
 const { resolvePoolHashrateForBuckets } = require('./pools.handlers')
 const { extractGlobalConfig } = require('./site.utils')
 const { normalizeAvailability } = require('../lib/export/types/forecast.export')
@@ -125,11 +126,13 @@ function wantsMonthlyRollup (req) {
 }
 
 async function getHashrate (ctx, req) {
+  const phase = lPhases.resolvePhase(ctx, req)
+
   // '1M' means a calendar-month rollup, as it already does for consumption - not the
   // store's rolling-30-day bucket that getIntervalConfig would hand back for it.
-  if (wantsMonthlyRollup(req)) return getMonthlyHashrate(ctx, req)
+  if (wantsMonthlyRollup(req)) return getMonthlyHashrate(ctx, req, phase)
 
-  return pageHashrate(req, await resolveHashrate(ctx, req))
+  return pageHashrate(req, await resolveHashrate(ctx, req, phase))
 }
 
 /**
@@ -145,7 +148,7 @@ async function getHashrate (ctx, req) {
  * only recomputes the running month. Months the site reported nothing for are absent
  * rather than zero-filled; the caller knows the window it asked for and can say so.
  */
-async function getMonthlyHashrate (ctx, req) {
+async function getMonthlyHashrate (ctx, req, phase = null) {
   const { start, end } = validateStartEnd(req)
   // A zone the runtime does not know throws a raw RangeError out of Intl; the exports
   // already turn that into a named 400, so the endpoint answers the same way. Without
@@ -155,7 +158,8 @@ async function getMonthlyHashrate (ctx, req) {
   const flags = {
     nominal: req.query.nominal === true || req.query.nominal === 'true',
     pool: req.query.pool === true || req.query.pool === 'true',
-    container: req.query.container || null
+    container: req.query.container || null,
+    phase: phase?.id || null
   }
 
   const months = localMonthsInRange(start, end, timezone)
@@ -188,7 +192,7 @@ async function getMonthlyHashrate (ctx, req) {
     const { log } = await resolveHashrate(ctx, {
       ...req,
       query: { ...req.query, ...span, interval: '1h' }
-    })
+    }, phase)
 
     for (const row of rollupLocalMonths(log, timezone)) {
       rows.set(localMonthKey(row.ts, timezone), row)
@@ -212,15 +216,19 @@ async function getMonthlyHashrate (ctx, req) {
   // view of the same series, not a different endpoint.
   if (flags.pool) summary.avgPoolHashrateMhs = calculateAvgPoolHashrate(log)
 
-  if (req.query.current) {
+  if (req.query.current && lPhases.hasMinerTelemetry(phase)) {
     summary.currentHashrateMhs = await getCurrentHashrate(ctx, hashrateAggrField(flags.container), flags.container)
   }
 
   return { log, totalCount: log.length, summary }
 }
 
-async function resolveHashrate (ctx, req) {
+async function resolveHashrate (ctx, req, phase = null) {
   const { start, end } = validateStartEnd(req)
+
+  // A phase without MOS miners has no telemetry series: its hashrate IS the
+  // pool-reported one, bucketed from its own accounts' samples.
+  if (!lPhases.hasMinerTelemetry(phase)) return resolvePoolOnlyHashrate(ctx, req, phase)
 
   if (req.query.groupBy) return getGoupedHashrate(ctx, req)
 
@@ -275,7 +283,10 @@ async function resolveHashrate (ctx, req) {
     }
   })
 
-  if (withPool) await mergePoolHashrate(ctx, log, { start, end, groupRange })
+  if (withPool) {
+    const accounts = phase ? lPhases.getPhaseAccountKeys(phase) : null
+    await mergePoolHashrate(ctx, log, { start, end, groupRange, accounts })
+  }
 
   const summary = calculateHashrateSummary(log, withNominal)
 
@@ -290,7 +301,7 @@ async function resolveHashrate (ctx, req) {
 
 // Attaches the pool-reported hashrate to each miner-telemetry bucket, using the
 // bucket's own time window so both series cover exactly the same period.
-async function mergePoolHashrate (ctx, log, { start, end, groupRange }) {
+async function mergePoolHashrate (ctx, log, { start, end, groupRange, accounts = null }) {
   if (!log.length) return
 
   const bucketMs = RANGE_BUCKETS[groupRange] || (60 * 60 * 1_000) // '1H'
@@ -300,7 +311,7 @@ async function mergePoolHashrate (ctx, log, { start, end, groupRange }) {
     endTs: entry.timeRange?.endTs ?? entry.ts + bucketMs - 1
   }))
 
-  const poolByBucket = await resolvePoolHashrateForBuckets(ctx, { start, end, buckets })
+  const poolByBucket = await resolvePoolHashrateForBuckets(ctx, { start, end, buckets, accounts })
 
   for (const entry of log) {
     entry.poolHashrateMhs = poolByBucket.get(entry.ts) ?? null
@@ -313,6 +324,105 @@ function calculateAvgPoolHashrate (log) {
   const values = log.map((entry) => entry.poolHashrateMhs).filter(Number.isFinite)
   if (!values.length) return null
   return safeDiv(values.reduce((sum, val) => sum + val, 0), values.length)
+}
+
+/**
+ * Hashrate series for a phase that has no MOS miners (`minerTelemetry: false`):
+ * buckets are generated over the requested range and filled from the phase's
+ * own pool accounts. Buckets the pool reported nothing for are absent rather
+ * than zero-filled, matching the monthly rollup's behavior.
+ */
+async function resolvePoolOnlyHashrate (ctx, req, phase) {
+  if (req.query.groupBy || hasRackFilter(req) || req.query.container) {
+    throw lPhases.phaseError('ERR_PHASE_INVALID')
+  }
+
+  const { start, end } = validateStartEnd(req)
+  const { groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
+  const hourMs = 60 * 60 * 1_000
+  const bucketMs = RANGE_BUCKETS[groupRange] || hourMs // '1H'
+  const accounts = lPhases.getPhaseAccountKeys(phase)
+
+  const buckets = []
+  for (let ts = Math.floor(start / bucketMs) * bucketMs; ts <= end; ts += bucketMs) {
+    buckets.push({ ts, startTs: ts, endTs: ts + bucketMs - 1 })
+  }
+
+  const poolByBucket = await resolvePoolHashrateForBuckets(ctx, { start, end, buckets, accounts })
+
+  const withNominal = req.query.nominal === true || req.query.nominal === 'true'
+  const withPool = req.query.pool === true || req.query.pool === 'true'
+  const nominalHashrateMhs = withNominal ? await resolvePhaseNominalHashrate(ctx, phase) : null
+
+  const log = []
+  for (const bucket of buckets) {
+    const hashrateMhs = poolByBucket.get(bucket.ts)
+    if (!Number.isFinite(hashrateMhs)) continue
+
+    const entry = {
+      ts: bucket.ts,
+      ...(bucketMs > hourMs && { timeRange: { startTs: bucket.startTs, endTs: bucket.endTs } }),
+      hashrateMhs
+    }
+
+    if (withNominal && Number.isFinite(nominalHashrateMhs)) {
+      entry.nominalHashrateMhs = nominalHashrateMhs
+      entry.pctOfNominal = nominalHashrateMhs ? (hashrateMhs / nominalHashrateMhs) * 100 : null
+    }
+
+    if (withPool) entry.poolHashrateMhs = hashrateMhs
+
+    log.push(entry)
+  }
+
+  const summary = calculateHashrateSummary(log, withNominal && Number.isFinite(nominalHashrateMhs))
+  if (withPool) summary.avgPoolHashrateMhs = calculateAvgPoolHashrate(log)
+
+  return { log, summary }
+}
+
+async function resolvePhaseNominalHashrate (ctx, phase) {
+  const results = await ctx.dataProxy.requestDataMap(RPC_METHODS.GLOBAL_CONFIG, {
+    fields: { phaseNominals: 1 }
+  })
+
+  return lPhases.getPhaseNominals(results, phase.id)?.hashrateMhs ?? null
+}
+
+/**
+ * Adds the configured synthetic group (e.g. the container's miner type) to the
+ * grouped series for every pool-only phase, so the Miner Type / Mining Unit
+ * views list the phase next to the telemetry-backed groups. Telemetry can
+ * never produce these keys - the phase has no MOS miners - so there is
+ * nothing to collide with.
+ */
+async function injectSyntheticHashrateGroups (ctx, req, log) {
+  if (req.query.phase || !log.length) return
+
+  const groupBy = req.query.groupBy
+  if (groupBy !== 'miner' && groupBy !== 'container') return
+
+  const phases = lPhases.getPoolOnlyPhases(ctx)
+  if (!phases.length) return
+
+  const { start, end } = req.query
+  const dayMs = 24 * 60 * 60 * 1_000
+  const buckets = log.map((entry) => ({ ts: entry.ts, startTs: entry.ts, endTs: entry.ts + dayMs - 1 }))
+
+  for (const phase of phases) {
+    const key = groupBy === 'miner' ? phase.groups?.minerType : phase.groups?.container
+    const accounts = lPhases.getPhaseAccountKeys(phase)
+    if (!key || !accounts) continue
+
+    const poolByBucket = await resolvePoolHashrateForBuckets(ctx, { start, end, buckets, accounts })
+
+    for (const entry of log) {
+      const hashrateMhs = poolByBucket.get(entry.ts)
+      if (!Number.isFinite(hashrateMhs)) continue
+      if (!entry.hashrateMhs || typeof entry.hashrateMhs !== 'object') entry.hashrateMhs = {}
+      entry.hashrateMhs[key] = hashrateMhs
+    }
+  }
 }
 
 const HASHRATE_GROUP_FIELDS = {
@@ -346,6 +456,8 @@ async function getGoupedHashrate (ctx, req) {
     aggr.push({ ts: parseEntryTs(val.ts), hashrateMhs })
     return aggr
   }, [])
+
+  await injectSyntheticHashrateGroups(ctx, req, log)
 
   const summary = calculateGroupedHashrateSummary(log, groupBy)
 
@@ -852,10 +964,17 @@ function calculateGroupedConsumptionSummary (log, groupBy) {
 }
 
 async function getEfficiency (ctx, req) {
+  const phase = lPhases.resolvePhase(ctx, req)
   const { start, end } = resolveStartEnd(ctx, req)
   // Downstream grouped/rack paths read start/end straight off req.query, so the
   // converted UTC values have to replace the raw ones here for those to see them.
   req = { ...req, query: { ...req.query, start, end } }
+
+  if (!lPhases.hasMinerTelemetry(phase)) {
+    if (req.query.groupBy || hasRackFilter(req)) throw lPhases.phaseError('ERR_PHASE_INVALID')
+    const { key, groupRange } = getIntervalConfig(resolveInterval(start, end, req.query.interval))
+    return getPoolOnlyEfficiency(ctx, { req, phase, key, groupRange, start, end })
+  }
 
   if (req.query.groupBy) return getGroupedEfficiency(ctx, req)
 
@@ -947,6 +1066,61 @@ async function getDCSEfficiency (ctx, { key, groupRange, start, end }) {
   const summary = calculateEfficiencySummary(log)
 
   return { log, summary }
+}
+
+/**
+ * Efficiency for a phase without MOS miners: its consumption (today still the
+ * site series, via the getPhaseConsumption seam) over its own pool hashrate.
+ * Once the manual consumption store is wired into the seam this becomes the
+ * container's true efficiency without touching this function.
+ */
+async function getPoolOnlyEfficiency (ctx, { req, phase, key, groupRange, start, end }) {
+  const accounts = lPhases.getPhaseAccountKeys(phase)
+
+  const fetchSitePower = (c) => c.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
+    ...(isCentralDCSEnabled(c)
+      ? { type: WORKER_TYPES.DCS, tag: getDCSTag(c) }
+      : { type: WORKER_TYPES.POWERMETER, tag: WORKER_TAGS.POWERMETER }),
+    key,
+    groupRange,
+    shouldCalculateAvg: true,
+    start,
+    end,
+    fields: { [LOG_FIELDS.SITE_POWER]: 1 },
+    aggrFields: { [AGGR_FIELDS.SITE_POWER]: 1 }
+  })
+
+  const powerRes = await lPhases.getPhaseConsumption(ctx, req, phase, fetchSitePower)
+  const entries = firstOrkEntries(powerRes)
+  if (!entries.length) return { log: [], summary: calculateEfficiencySummary([]) }
+
+  const hourMs = 60 * 60 * 1_000
+  const bucketMs = RANGE_BUCKETS[groupRange] || hourMs // '1H'
+  const buckets = entries.map((val) => {
+    const ts = parseEntryTs(val.ts)
+    const timeRange = parseEntryTimeRange(val.ts)
+    return {
+      ts,
+      startTs: timeRange?.startTs ?? ts,
+      endTs: timeRange?.endTs ?? ts + bucketMs - 1
+    }
+  })
+
+  const poolByBucket = await resolvePoolHashrateForBuckets(ctx, { start, end, buckets, accounts })
+
+  const log = entries.map((val, idx) => {
+    const ts = buckets[idx].ts
+    const timeRange = parseEntryTimeRange(val.ts)
+    const powerW = Number(val[AGGR_FIELDS.SITE_POWER]) || 0
+    const hashrateThs = mhsToThs(poolByBucket.get(ts) || 0)
+    return {
+      ts,
+      ...(timeRange && { timeRange }),
+      efficiencyWThs: hashrateThs > 0 ? powerW / hashrateThs : 0
+    }
+  })
+
+  return { log, summary: calculateEfficiencySummary(log) }
 }
 
 function calculateEfficiencySummary (log) {
@@ -2362,7 +2536,7 @@ async function getDowntime (ctx, req) {
 // average, not the pool total; balance-history-style avg-per-account-then-sum
 // would change the plotted numbers and is left as a deliberate follow-up.
 // Values stay in H/s; the UI converts.
-function bucketPoolHashrate (results, intervalMs) {
+function bucketPoolHashrate (results, intervalMs, accounts = null) {
   const buckets = new Map()
 
   for (const windowRes of results) {
@@ -2381,6 +2555,7 @@ function bucketPoolHashrate (results, intervalMs) {
 
         for (const stat of row.stats) {
           if (!stat?.poolType) continue
+          if (accounts && !accounts.has(`${stat.poolType}:${stat.username}`)) continue
           const acc = pools.get(stat.poolType) || { sum: 0, count: 0 }
           acc.sum += stat.hashrate || 0
           acc.count++
@@ -2402,6 +2577,8 @@ function bucketPoolHashrate (results, intervalMs) {
 }
 
 async function getPoolHashrate (ctx, req) {
+  const phase = lPhases.resolvePhase(ctx, req)
+  const accounts = phase ? lPhases.getPhaseAccountKeys(phase) : null
   const intervalMs = POOL_HASHRATE_INTERVALS_MS[req.query.interval]
   const end = Date.now()
   const start = end - req.query.lookbackDays * METRICS_TIME.ONE_DAY_MS
@@ -2425,12 +2602,12 @@ async function getPoolHashrate (ctx, req) {
         key: MINERPOOL_EXT_DATA_KEYS.STATS_HISTORY,
         start: window.start,
         end: window.end,
-        fields: { ts: 1, 'stats.poolType': 1, 'stats.hashrate': 1 }
+        fields: { ts: 1, 'stats.poolType': 1, 'stats.hashrate': 1, 'stats.username': 1 }
       }
     })
   ))
 
-  return { log: bucketPoolHashrate(results, intervalMs) }
+  return { log: bucketPoolHashrate(results, intervalMs, accounts) }
 }
 
 module.exports = {
