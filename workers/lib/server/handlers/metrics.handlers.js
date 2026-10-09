@@ -305,9 +305,13 @@ async function resolveHashrate (ctx, req, phase = null) {
 
 async function getSiteNominalHashrate (ctx) {
   const res = await ctx.dataProxy.requestDataMap(RPC_METHODS.GLOBAL_CONFIG, {
-    fields: { nominalSiteHashrate_MHS: 1 }
+    fields: { invoiceNominalHashrate_MHS: 1, nominalSiteHashrate_MHS: 1 }
   })
-  return res.map((config) => Number(config?.nominalSiteHashrate_MHS)).find((mhs) => mhs > 0) ?? null
+  const pick = (key) => res.map((config) => Number(config?.[key])).find((mhs) => mhs > 0) ?? null
+  // Invoices bill against the contracted nominal where one is configured; it
+  // deliberately does not touch nominalSiteHashrate_MHS, which the dashboards
+  // read for their nominal lines.
+  return pick('invoiceNominalHashrate_MHS') ?? pick('nominalSiteHashrate_MHS')
 }
 
 // Attaches the pool-reported hashrate to each miner-telemetry bucket, using the

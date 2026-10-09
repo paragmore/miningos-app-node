@@ -4278,6 +4278,45 @@ test('getHashrate - siteNominal replaces the installed nominal with the configur
   t.pass()
 })
 
+test('getHashrate - siteNominal prefers the invoice nominal over the site nominal', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method) => {
+        if (method === 'getGlobalConfig') {
+          return { invoiceNominalHashrate_MHS: 7.5e11, nominalSiteHashrate_MHS: 7.09032e11 }
+        }
+        return [{ ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 3e11, nominal_hashrate_mhs_sum_aggr: 2.6112e11 }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, nominal: true, siteNominal: true }
+  })
+  t.is(result.log[0].nominalHashrateMhs, 7.5e11, 'the contracted invoice nominal wins')
+  t.is(result.log[0].pctOfNominal, 40)
+  t.pass()
+})
+
+test('getHashrate - siteNominal uses the site nominal when no invoice nominal is configured', async (t) => {
+  const mockCtx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }] },
+    net_r0: {
+      jRequest: async (key, method) => {
+        if (method === 'getGlobalConfig') return { nominalSiteHashrate_MHS: 7.09032e11 }
+        return [{ ts: 1700006400000, hashrate_mhs_5m_sum_aggr: 3e11, nominal_hashrate_mhs_sum_aggr: 2.6112e11 }]
+      }
+    }
+  })
+
+  const result = await getHashrate(mockCtx, {
+    query: { start: 1700000000000, end: 1700100000000, nominal: true, siteNominal: true }
+  })
+  t.is(result.log[0].nominalHashrateMhs, 7.09032e11, 'existing sites keep the site nominal')
+  t.pass()
+})
+
 test('getHashrate - siteNominal falls back to the installed nominal when the site nominal is unset', async (t) => {
   const mockCtx = withDataProxy({
     conf: { orks: [{ rpcPublicKey: 'key1' }] },
