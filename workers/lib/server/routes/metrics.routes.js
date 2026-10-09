@@ -91,6 +91,7 @@ module.exports = (ctx) => {
         ctx,
         (req) => [
           'metrics/consumption',
+          req.query.phase,
           req.query.start,
           req.query.end,
           req.query.interval,
@@ -326,6 +327,7 @@ module.exports = (ctx) => {
         ctx,
         (req) => [
           'metrics/downtime',
+          req.query.phase,
           req.query.start,
           req.query.end,
           req.query.interval,

@@ -5693,3 +5693,40 @@ test('getEfficiency - pool-only phase divides site power by the phase pool hashr
   t.is(res.log.length, 1)
   t.is(res.log[0].efficiencyWThs, 870000 / expectedThs)
 })
+
+test('getConsumption/getDowntime - non-total phase is rejected until supported', async (t) => {
+  const ctx = phaseCtx(async () => [])
+  const query = { start: PHASE_START, end: PHASE_START + PHASE_HOUR_MS, phase: 'phase1_5' }
+
+  await t.exception(() => getConsumption(ctx, { query }), /ERR_PHASE_NOT_SUPPORTED/)
+  await t.exception(() => getDowntime(ctx, { query: { ...query, interval: '1h' } }), /ERR_PHASE_NOT_SUPPORTED/)
+
+  const total = await getConsumption(ctx, { query: { ...query, phase: 'total' } })
+  t.ok(total.log, 'phase=total passes through as the site view')
+})
+
+test('getHashrate - synthetic group never overwrites a colliding telemetry key', async (t) => {
+  const colliding = {
+    phases: [
+      {
+        id: 'phase1_5',
+        pool: { accounts: [{ poolType: 'ocean', username: 'addr2' }] },
+        minerTelemetry: false,
+        groups: { minerType: 'miner-wm-m63' }
+      }
+    ]
+  }
+  const ctx = phaseCtx(async (key, method) => {
+    if (method === 'tailLog') {
+      return [{ ts: PHASE_START, hashrate_mhs_5m_type_group_sum_aggr: { 'miner-wm-m63': 2e11 } }]
+    }
+    if (method === 'getWrkExtData') return [{ hashrateHistory: phaseHistorySamples() }]
+    return []
+  }, colliding)
+
+  const res = await getHashrate(ctx, {
+    query: { start: PHASE_START, end: PHASE_START + PHASE_HOUR_MS, interval: '1d', groupBy: 'miner' }
+  })
+
+  t.is(res.log[0].hashrateMhs['miner-wm-m63'], 2e11, 'telemetry value wins on a key collision')
+})

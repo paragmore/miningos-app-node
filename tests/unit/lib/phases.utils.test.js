@@ -55,7 +55,8 @@ test('account helpers and pool-only selection', (t) => {
 
   t.alike([...getPhaseAccountKeys(phase)], ['ocean:addr2'])
   t.alike([...getPhaseUsernames(phase)], ['addr2'])
-  t.is(getPhaseAccountKeys(PHASES[0]), null, 'total has no accounts')
+  t.is(getPhaseAccountKeys(PHASES[0]).size, 0, 'a phase without accounts is scoped to nothing')
+  t.is(getPhaseUsernames(PHASES[0]).size, 0)
 
   t.is(hasMinerTelemetry(null), true, 'no phase means the site series')
   t.is(hasMinerTelemetry(PHASES[1]), true)

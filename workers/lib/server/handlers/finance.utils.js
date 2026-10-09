@@ -70,7 +70,7 @@ function processTransactions (results, opts, timezone) {
   const end = Number.isFinite(opts?.end) ? opts.end : Infinity
   // Pool-account scoping (phases): the workers tag every transaction with the
   // account's username, so an unscoped call keeps summing everything.
-  const usernames = opts?.usernames instanceof Set && opts.usernames.size ? opts.usernames : null
+  const usernames = opts?.usernames instanceof Set ? opts.usernames : null
   const daily = {}
   const txEntries = []
   for (const res of results) {

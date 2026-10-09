@@ -189,9 +189,13 @@ async function computeSiteEfficiencyWPerTh (ctx) {
       ? ctx.dataProxy.requestDataMap(RPC_METHODS.GET_WRK_EXT_DATA, {
         type: WORKER_TYPES.MINERPOOL,
         query: { key: MINERPOOL_EXT_DATA_KEYS.STATS }
-      }).catch(() => [])
+      }).catch(() => null)
       : Promise.resolve([])
   ])
+
+  // Without the pool hashrate the divisor is wrong in the alarming direction;
+  // skipping this tick beats firing a false high-efficiency alert.
+  if (hasPoolOnlyPhases && !poolDataResults) return null
 
   const { hashrate } = aggregateMinerStats(tailLogResults)
   const poolOnlyHashrateMhs = sumPoolOnlyPhasesHashrateMhs(ctx, poolDataResults)

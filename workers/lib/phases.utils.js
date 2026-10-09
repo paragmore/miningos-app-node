@@ -47,28 +47,31 @@ function phaseError (code) {
  * minerpool workers tag every stats/transactions/hashrate-history row with.
  */
 function getPhaseAccountKeys (phase) {
-  const accounts = phase?.pool?.accounts
-  if (!Array.isArray(accounts) || !accounts.length) return null
-
   const keys = new Set()
-  for (const acc of accounts) {
-    if (acc?.poolType && acc?.username) keys.add(`${acc.poolType}:${acc.username}`)
+  const accounts = phase?.pool?.accounts
+  if (Array.isArray(accounts)) {
+    for (const acc of accounts) {
+      if (acc?.poolType && acc?.username) keys.add(`${acc.poolType}:${acc.username}`)
+    }
   }
-  return keys.size ? keys : null
+  // Always a Set for a phase - possibly empty. A phase without valid accounts
+  // is scoped to nothing; returning null here would read as "unscoped" and
+  // leak every account's data into the phase view.
+  return keys
 }
 
 /**
  * Usernames of a phase's pool accounts, for row-level transaction filtering.
  */
 function getPhaseUsernames (phase) {
-  const accounts = phase?.pool?.accounts
-  if (!Array.isArray(accounts) || !accounts.length) return null
-
   const names = new Set()
-  for (const acc of accounts) {
-    if (acc?.username) names.add(acc.username)
+  const accounts = phase?.pool?.accounts
+  if (Array.isArray(accounts)) {
+    for (const acc of accounts) {
+      if (acc?.username) names.add(acc.username)
+    }
   }
-  return names.size ? names : null
+  return names
 }
 
 function hasMinerTelemetry (phase) {

@@ -420,6 +420,10 @@ async function injectSyntheticHashrateGroups (ctx, req, log) {
       const hashrateMhs = poolByBucket.get(entry.ts)
       if (!Number.isFinite(hashrateMhs)) continue
       if (!entry.hashrateMhs || typeof entry.hashrateMhs !== 'object') entry.hashrateMhs = {}
+      // A synthetic key colliding with a real device-type key is a config
+      // error; losing telemetry to the overwrite would be worse than the
+      // phase group going missing.
+      if (entry.hashrateMhs[key] !== undefined) continue
       entry.hashrateMhs[key] = hashrateMhs
     }
   }
@@ -680,6 +684,11 @@ function buildRollupConsumption (entries, interval, byMeter) {
 }
 
 async function getConsumption (ctx, req) {
+  // Accepted once the manual consumption store feeds the phase seam; until
+  // then rejecting beats silently serving site-wide numbers under a phase tab.
+  // total stays a no-op so the Total Site tab can pass it like everywhere else.
+  if (req.query.phase && req.query.phase !== lPhases.PHASE_TOTAL) throw lPhases.phaseError('ERR_PHASE_NOT_SUPPORTED')
+
   const { start, end } = resolveStartEnd(ctx, req)
   // Downstream grouped/by-meter/rack paths read start/end straight off req.query,
   // so the converted UTC values have to replace the raw ones here for those to see them.
@@ -2476,6 +2485,8 @@ function downtimeUsesTimezone (req) {
 }
 
 async function getDowntime (ctx, req) {
+  if (req.query.phase && req.query.phase !== lPhases.PHASE_TOTAL) throw lPhases.phaseError('ERR_PHASE_NOT_SUPPORTED')
+
   const { start, end, timezone } = resolveStartEnd(ctx, req)
   const interval = resolveDowntimeInterval(start, end, req.query.interval)
 
