@@ -5452,6 +5452,42 @@ test('bucketPoolHashrate - tolerates malformed rows and null hashrates', (t) => 
   t.pass()
 })
 
+test('bucketPoolHashrate - sums per-account averages within a pool', (t) => {
+  const t0 = 1700000000000 - (1700000000000 % FIVE_MIN_MS)
+  const row = (ts, aHs, bHs) => ({
+    ts: String(ts),
+    stats: [
+      { poolType: 'ocean', username: 'acct-a', hashrate: aHs },
+      { poolType: 'ocean', username: 'acct-b', hashrate: bHs }
+    ]
+  })
+
+  // acct-a avg = 100e12, acct-b avg = 50e12 -> the site hashes 150e12, not the
+  // 75e12 a cross-account average would report.
+  const log = bucketPoolHashrate(
+    [[[row(t0, 100e12, 50e12), row(t0 + 1000, 100e12, 50e12)]]],
+    FIVE_MIN_MS
+  )
+
+  t.is(log.length, 1)
+  t.alike(log[0].stats, [{ poolType: 'ocean', hashrate: 150e12 }])
+  t.pass()
+})
+
+test('bucketPoolHashrate - uneven sample counts still sum account averages', (t) => {
+  const t0 = 1700000000000 - (1700000000000 % FIVE_MIN_MS)
+  const log = bucketPoolHashrate(
+    [[[
+      { ts: t0, stats: [{ poolType: 'ocean', username: 'a', hashrate: 90 }, { poolType: 'ocean', username: 'b', hashrate: 40 }] },
+      { ts: t0 + 1000, stats: [{ poolType: 'ocean', username: 'a', hashrate: 110 }] }
+    ]]],
+    FIVE_MIN_MS
+  )
+
+  t.is(log[0].stats[0].hashrate, 140, 'avg(90,110) + avg(40)')
+  t.pass()
+})
+
 test('getPoolHashrate - queries week-sized stats-history windows with a trimmed projection', async (t) => {
   const captured = []
   const mockCtx = withDataProxy({
@@ -5636,6 +5672,43 @@ test('getHashrate - groupBy injects the synthetic pool-only group', async (t) =>
   t.is(extCalls.length, 1, 'one history read per pool-only phase')
 })
 
+test('getHashrate - groupBy with phase=total injects like a phase-less request', async (t) => {
+  const ctx = phaseCtx(async (key, method) => {
+    if (method === 'tailLog') {
+      return [{ ts: PHASE_START, hashrate_mhs_5m_type_group_sum_aggr: { 'miner-wm-m63': 2e11 } }]
+    }
+    if (method === 'getWrkExtData') {
+      return [{ hashrateHistory: phaseHistorySamples() }]
+    }
+    return []
+  })
+
+  const res = await getHashrate(ctx, {
+    query: { start: PHASE_START, end: PHASE_START + PHASE_HOUR_MS, interval: '1d', groupBy: 'miner', phase: 'total' }
+  })
+
+  t.is(res.log[0].hashrateMhs['miner-wm-m63'], 2e11)
+  t.is(res.log[0].hashrateMhs.HBM, 5e13 / 1e6, 'Total tab lists the phase group too')
+})
+
+test('getHashrate - groupBy with a concrete phase keeps the synthetic group out', async (t) => {
+  const ctx = phaseCtx(async (key, method) => {
+    if (method === 'tailLog') {
+      return [{ ts: PHASE_START, hashrate_mhs_5m_type_group_sum_aggr: { 'miner-wm-m63': 2e11 } }]
+    }
+    if (method === 'getWrkExtData') {
+      return [{ hashrateHistory: phaseHistorySamples() }]
+    }
+    return []
+  })
+
+  const res = await getHashrate(ctx, {
+    query: { start: PHASE_START, end: PHASE_START + PHASE_HOUR_MS, interval: '1d', groupBy: 'miner', phase: 'phase1' }
+  })
+
+  t.alike(Object.keys(res.log[0].hashrateMhs), ['miner-wm-m63'], 'phase-scoped grouped view holds only telemetry keys')
+})
+
 test('getHashrate - groupBy stays untouched without a phases config', async (t) => {
   let extCalls = 0
   const ctx = phaseCtx(async (key, method) => {
@@ -5673,7 +5746,7 @@ test('getPoolHashrate - phase filters stats to the phase accounts', async (t) =>
   t.alike(scoped.log[0].stats, [{ poolType: 'ocean', hashrate: 5e13 }], 'only the phase account is averaged')
 
   const site = await getPoolHashrate(ctx, { query: { interval: '3h', lookbackDays: 1 } })
-  t.is(site.log[0].stats[0].hashrate, (6e14 + 5e13) / 2, 'site view keeps the per-poolType average')
+  t.is(site.log[0].stats[0].hashrate, 6e14 + 5e13, 'site view sums the per-account averages')
 })
 
 test('getEfficiency - pool-only phase divides site power by the phase pool hashrate', async (t) => {

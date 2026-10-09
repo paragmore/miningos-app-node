@@ -397,7 +397,10 @@ async function resolvePhaseNominalHashrate (ctx, phase) {
  * nothing to collide with.
  */
 async function injectSyntheticHashrateGroups (ctx, req, log) {
-  if (req.query.phase || !log.length) return
+  if (!log.length) return
+  // `total` must list the phase groups exactly like a phase-less request -
+  // the Total tab sends it. Only a concrete phase scopes them out.
+  if (lPhases.resolvePhase(ctx, req)) return
 
   const groupBy = req.query.groupBy
   if (groupBy !== 'miner' && groupBy !== 'container') return
@@ -2567,10 +2570,14 @@ function bucketPoolHashrate (results, intervalMs, accounts = null) {
         for (const stat of row.stats) {
           if (!stat?.poolType) continue
           if (accounts && !accounts.has(`${stat.poolType}:${stat.username}`)) continue
-          const acc = pools.get(stat.poolType) || { sum: 0, count: 0 }
+          // Average per account before summing across accounts: pooling the
+          // samples would average a 100 TH/s and a 50 TH/s account into 75
+          // instead of the 150 the site actually hashes.
+          const key = `${stat.poolType}:${stat.username}`
+          const acc = pools.get(key) || { poolType: stat.poolType, sum: 0, count: 0 }
           acc.sum += stat.hashrate || 0
           acc.count++
-          pools.set(stat.poolType, acc)
+          pools.set(key, acc)
         }
       }
     }
@@ -2578,13 +2585,16 @@ function bucketPoolHashrate (results, intervalMs, accounts = null) {
 
   return [...buckets.entries()]
     .sort(([tsA], [tsB]) => tsA - tsB)
-    .map(([ts, pools]) => ({
-      ts,
-      stats: [...pools.entries()].map(([poolType, { sum, count }]) => ({
-        poolType,
-        hashrate: sum / count
-      }))
-    }))
+    .map(([ts, pools]) => {
+      const byPool = new Map()
+      for (const { poolType, sum, count } of pools.values()) {
+        byPool.set(poolType, (byPool.get(poolType) || 0) + sum / count)
+      }
+      return {
+        ts,
+        stats: [...byPool.entries()].map(([poolType, hashrate]) => ({ poolType, hashrate }))
+      }
+    })
 }
 
 async function getPoolHashrate (ctx, req) {
