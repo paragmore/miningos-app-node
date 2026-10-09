@@ -709,3 +709,19 @@ test('processTransactions - usernames filter keeps only the phase accounts', (t)
   t.is(Object.values(scoped.daily)[0].revenueBTC, 0.5, 'only the phase account is counted')
   t.is(scoped.txEntries.length, 1, 'untagged rows are excluded when a filter is set')
 })
+
+test('processTransactions - excludeUsernames drops the pool-only accounts, keeps the rest', (t) => {
+  const results = [[{
+    transactions: [
+      { ts: Date.UTC(2026, 9, 1, 10), satoshis_net_earned: 100000000, username: 'addr1' },
+      { ts: Date.UTC(2026, 9, 1, 11), satoshis_net_earned: 50000000, username: 'addr2' },
+      { ts: Date.UTC(2026, 9, 1, 12), satoshis_net_earned: 25000000 }
+    ]
+  }]]
+
+  const scoped = processTransactions(results, { excludeUsernames: new Set(['addr2']) }, 'UTC')
+  t.is(Object.values(scoped.daily)[0].revenueBTC, 1.25, 'excluded account is out, untagged rows stay')
+
+  const empty = processTransactions(results, { excludeUsernames: new Set() }, 'UTC')
+  t.is(Object.values(empty.daily)[0].revenueBTC, 1.75, 'an empty exclusion set excludes nothing')
+})

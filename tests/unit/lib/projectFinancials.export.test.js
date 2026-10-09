@@ -57,3 +57,15 @@ test('project financials and production sections export the page tiles', async (
   t.is(production.btcProductionCostUsd, 40000 / 1.5)
   t.is(production.avgHashratePhs, null, 'no pool hashrate is unknown, not zero')
 })
+
+test('project financials exports reject a concrete phase until consumption splits', async (t) => {
+  const { projectFinancialsProduction, projectFinancialsDetail, projectFinancialsFinancials } = require('../../../workers/lib/server/lib/export/types/projectFinancials.export')
+  const range = { start: 1700000000000, end: 1700100000000 }
+
+  for (const entry of [projectFinancialsProduction, projectFinancialsDetail, projectFinancialsFinancials]) {
+    t.exception(() => entry.assertParams({ ...range, phase: 'phase1_5' }), /ERR_PHASE_NOT_SUPPORTED/, `${entry.type} rejects a phase`)
+    entry.assertParams({ ...range, phase: 'total' })
+    entry.assertParams(range)
+  }
+  t.pass()
+})

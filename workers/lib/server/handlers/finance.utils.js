@@ -71,6 +71,9 @@ function processTransactions (results, opts, timezone) {
   // Pool-account scoping (phases): the workers tag every transaction with the
   // account's username, so an unscoped call keeps summing everything.
   const usernames = opts?.usernames instanceof Set ? opts.usernames : null
+  const excludeUsernames = opts?.excludeUsernames instanceof Set && opts.excludeUsernames.size
+    ? opts.excludeUsernames
+    : null
   const daily = {}
   const txEntries = []
   for (const res of results) {
@@ -84,6 +87,7 @@ function processTransactions (results, opts, timezone) {
       for (const t of txList) {
         if (!t) continue
         if (usernames && !usernames.has(t.username)) continue
+        if (excludeUsernames && excludeUsernames.has(t.username)) continue
         const rawTs = t.mining_extra?.mining_date || t.ts || t.created_at || t.timestamp || t.time
         const rawMs = normalizeTimestampMs(rawTs)
         if (!rawMs || rawMs < start || rawMs > end) continue

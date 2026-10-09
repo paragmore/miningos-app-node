@@ -1082,7 +1082,10 @@ async function getRevenueSummary (ctx, req) {
     const miningNetUSD = revenueUSD - revenueUSD * (taxFees.percent || 0) / 100 - (taxFees.fixed || 0) * consumptionMWh
 
     const actualPowerMW = powerW / 1000000
-    const powerUtilization = nominalPowerMW > 0
+    // Consumption stays site-wide on phase rows until the manual store lands,
+    // so crossing it with the phase's own nominal would read as nonsense
+    // (site MW over a container's nominal). Null beats a 1,100% uptime tile.
+    const powerUtilization = !phase && nominalPowerMW > 0
       ? safeDiv(actualPowerMW, nominalPowerMW)
       : null
 
@@ -1120,7 +1123,7 @@ async function getRevenueSummary (ctx, req) {
       powerUtilization,
       availableEnergyMWh: 0,
       nominalConsumptionMWh,
-      downtimeMWh: nominalPowerMW > 0 ? nominalConsumptionMWh - consumptionMWh : null,
+      downtimeMWh: !phase && nominalPowerMW > 0 ? nominalConsumptionMWh - consumptionMWh : null,
       lcoeUsdPerMwh,
       energySalesGrossUSD: fc.energySalesGrossUSD || 0,
       energySalesTaxesAndFeesUSD: fc.energySalesTaxesAndFeesUSD || 0,
@@ -1332,7 +1335,15 @@ async function getHashRevenue (ctx, req) {
     }).then(r => cb(null, r)).catch(cb)
   ])
 
-  const { txEntries } = processTransactions(transactionResults, { trackFees: true, start, end }, timezone)
+  // Hash Balance is the hosted fleet's metric: the divisor is the miner
+  // telemetry hashrate, so revenue from accounts whose hashrate exists only at
+  // the pool (phase 1.5) would inflate every per-PH figure.
+  const poolOnlyUsernames = new Set()
+  for (const poolOnlyPhase of lPhases.getPoolOnlyPhases(ctx)) {
+    for (const username of lPhases.getPhaseUsernames(poolOnlyPhase)) poolOnlyUsernames.add(username)
+  }
+
+  const { txEntries } = processTransactions(transactionResults, { trackFees: true, start, end, excludeUsernames: poolOnlyUsernames }, timezone)
   const dailyPrices = processEbitdaPrices(priceResults, timezone)
   const currentBtcPrice = extractCurrentPrice(currentPriceResults)
   const { daily: dailyTransactions, missingPriceBuckets } = await priceDailyRevenue(ctx, {

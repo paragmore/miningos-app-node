@@ -551,6 +551,71 @@ test('getRevenueSummary flags the range when a payout had no recorded price', as
   t.is(result.summary.missingPriceBuckets, 1)
 })
 
+test('getRevenueSummary - phase rows withhold the site-power ratios until consumption splits', async (t) => {
+  // Unique month so the daily-series month cache cannot leak across tests.
+  const dayTs = Date.UTC(2031, 5, 15)
+  const ctx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: {
+        phases: [{
+          id: 'phase1_5',
+          label: 'Phase 1.5',
+          minerTelemetry: false,
+          consumption: { source: 'manual' },
+          pool: { accounts: [{ poolType: 'ocean', username: 'acme-addr' }] }
+        }]
+      }
+    },
+    net_r0: {
+      jRequest: async (_key, method, payload) => {
+        if (method === 'tailLog') {
+          return [{ ts: dayTs, site_power_w: 10_000_000, hashrate_mhs_5m_sum_aggr: 1e9 }]
+        }
+        if (method === 'getWrkExtData') {
+          const key = payload.query && payload.query.key
+          if (key === 'transactions') {
+            return [{
+              ts: dayTs,
+              transactions: [
+                { ts: dayTs, satoshis_net_earned: 100000000, username: 'site-addr' },
+                { ts: dayTs, satoshis_net_earned: 50000000, username: 'acme-addr' }
+              ]
+            }]
+          }
+          if (key === 'HISTORICAL_PRICES') return [{ ts: dayTs, priceUSD: 100000 }]
+          if (key === 'current_price') return [{ currentPrice: 100000 }]
+          if (key === 'hashrate-history') {
+            return [{ hashrateHistory: [{ ts: dayTs + 3600000, poolType: 'ocean', username: 'acme-addr', hashrate: 5e13 }] }]
+          }
+          return []
+        }
+        if (method === 'getGlobalConfig') {
+          return {
+            nominalPowerAvailability_MW: 10,
+            phaseNominals: { phase1_5: { nominalPower_MW: 1.2 } }
+          }
+        }
+        return {}
+      }
+    },
+    globalDataLib: { getGlobalData: async () => [] }
+  })
+
+  const query = { start: dayTs - 1000, end: dayTs + 86400000, overwriteCache: true }
+
+  const phased = await getRevenueSummary(ctx, { query: { ...query, phase: 'phase1_5' } }, {})
+  const phaseRow = phased.log.find(e => e.revenueBTC > 0)
+  t.is(phaseRow.revenueBTC, 0.5, 'phase row carries only its account')
+  t.is(phaseRow.powerUtilization, null, 'site MW over the phase nominal is withheld')
+  t.is(phaseRow.downtimeMWh, null, 'so is the downtime energy derived from it')
+
+  const total = await getRevenueSummary(ctx, { query }, {})
+  const totalRow = total.log.find(e => e.revenueBTC > 0)
+  t.ok(totalRow.powerUtilization > 0, 'site rows keep the ratio')
+  t.ok(Number.isFinite(totalRow.downtimeMWh), 'and the downtime energy')
+})
+
 test('getRevenueSummary monthly - rates use MEAN, totals use SUM', async (t) => {
   const day1 = Date.UTC(2024, 0, 15)
   const day2 = Date.UTC(2024, 0, 16)
@@ -1357,6 +1422,53 @@ test('getHashRevenue - happy path', async (t) => {
     t.ok(entry.networkHashrateMhs !== undefined, 'entry should have networkHashrateMhs')
   }
   t.pass()
+})
+
+test('getHashRevenue - pool-only phase revenue stays out of the fleet metric', async (t) => {
+  // Unique month so the daily-series month cache cannot leak across tests.
+  const dayTs = Date.UTC(2033, 2, 15)
+  const makeCtx = (featureConfig) => withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      ...(featureConfig && { featureConfig })
+    },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (method === 'tailLog') {
+          return [{ ts: dayTs, hashrate_mhs_5m_sum_aggr: 1e9 }]
+        }
+        if (method === 'getWrkExtData') {
+          if (payload.query && payload.query.key === 'transactions') {
+            return [{
+              transactions: [
+                { ts: dayTs, satoshis_net_earned: 100000000, username: 'site-addr' },
+                { ts: dayTs, satoshis_net_earned: 50000000, username: 'acme-addr' }
+              ]
+            }]
+          }
+          if (payload.query && payload.query.key === 'current_price') {
+            return [{ currentPrice: 100000 }]
+          }
+        }
+        return {}
+      }
+    }
+  })
+
+  const query = { start: dayTs - 1000, end: dayTs + 86400000, period: 'daily', overwriteCache: true }
+
+  const phased = await getHashRevenue(makeCtx({
+    phases: [
+      { id: 'phase1', minerTelemetry: true, pool: { accounts: [{ poolType: 'ocean', username: 'site-addr' }] } },
+      { id: 'phase1_5', minerTelemetry: false, pool: { accounts: [{ poolType: 'ocean', username: 'acme-addr' }] } }
+    ]
+  }), { query }, {})
+  const phasedDay = phased.log.find(e => e.revenueBTC > 0)
+  t.is(phasedDay.revenueBTC, 1, 'the pool-only account is excluded from the numerator')
+
+  const plain = await getHashRevenue(makeCtx(null), { query }, {})
+  const plainDay = plain.log.find(e => e.revenueBTC > 0)
+  t.is(plainDay.revenueBTC, 1.5, 'without a phases config everything still counts')
 })
 
 test('getHashRevenue - missing start throws', async (t) => {

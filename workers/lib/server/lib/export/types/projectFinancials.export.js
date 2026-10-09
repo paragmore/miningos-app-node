@@ -192,7 +192,15 @@ function buildEntry ({ type, jsonRootKey, columns, withHashrate, buildRows }) {
     filenamePrefix () {
       return `${type.replace(/-/g, '_')}_`
     },
-    assertParams: assertRange,
+    assertParams (params) {
+      assertRange(params)
+      // Phase-scoped exports wait for the consumption workstream: the revenue
+      // columns would be phase-scoped while every energy column stays
+      // site-wide. Reject instead of silently exporting the whole site.
+      if (params.phase && params.phase !== 'total') {
+        throw new Error('ERR_PHASE_NOT_SUPPORTED')
+      }
+    },
     async fetchExport (ctx, { params, now, timezone }) {
       const data = await fetchProjectFinancials(ctx, params, now, withHashrate)
       const rows = data.log.length ? buildRows(data, params) : []
