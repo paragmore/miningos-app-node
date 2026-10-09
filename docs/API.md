@@ -1138,3 +1138,15 @@ curl -H "Authorization:Bearer TOKEN" \
 ```
 
 ---
+
+### Site Phases (per-phase metrics)
+
+A deployment can split its reporting into phases via `featureConfig.phases` in `config/common.json` — a list of `{ id, label, pool.accounts[], consumption.{source,logType,meterKey}, minerTelemetry, groups.{minerType,container} }`. The `total` id is reserved and means "no filtering". Without the key, nothing changes anywhere.
+
+With phases configured:
+
+- `phase=<id>` is accepted by `GET /auth/metrics/hashrate`, `GET /auth/metrics/pool-hashrate`, `GET /auth/metrics/efficiency` and `GET /auth/finance/revenue-summary`. `phase=total` equals omitting it; an unknown id (or any value on an unconfigured site) is `400 ERR_PHASE_INVALID`.
+- A phase with `minerTelemetry: false` has no MOS miners: its hashrate is bucketed from its own pool accounts' `hashrate-history` samples, `nominal=true` reads the ork global config's `phaseNominals.<id>.nominalHashrate_MHS` (fields are omitted when unset), and `groupBy`/`racks`/`container` are rejected for it. Its efficiency divides the consumption series by its pool hashrate, and revenue-summary divides uptime by `phaseNominals.<id>.nominalPower_MW` (`400 ERR_PHASE_NOMINAL_MISSING` when absent).
+- Grouped hashrate (`groupBy=miner|container`) additionally carries each pool-only phase's synthetic group key from `groups` (e.g. `HBM` / `acme-container`), filled from that phase's pool hashrate.
+- The site summary's efficiency and the high-site-efficiency alert divide by miner hashrate plus the pool-only phases' live pool hashrate, since those phases consume inside the site meter without reporting telemetry.
+- `GET /auth/finance/revenue-summary?phase=` scopes earnings (transaction rows are filtered by the accounts' `username` tags) and hashrate; rebates stay on the unscoped view, and a manual-source phase carries no Cost-Input opex. Consumption series stay site-wide until the manual consumption store is wired into the phase seam.

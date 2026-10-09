@@ -134,6 +134,7 @@ module.exports = (ctx) => {
         ctx,
         (req) => [
           'finance/revenue-summary',
+          req.query.phase,
           req.query.start,
           req.query.end,
           req.query.period,

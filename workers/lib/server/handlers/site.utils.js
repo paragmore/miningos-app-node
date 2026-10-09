@@ -2,6 +2,7 @@
 
 const { extractKeyEntry, mhsToThs } = require('../../metrics.utils')
 const { WORKER_TAGS } = require('../../constants')
+const lPhases = require('../../phases.utils')
 
 function hsToMhs (hs) {
   return hs / 1000000
@@ -70,6 +71,35 @@ function aggregateContainerCapacity (tailLogResults) {
 }
 
 // Each ork entry is { ts, stats: [...] }, one object per pool, hashrate in H/s
+// Live pool hashrate (MH/s) of the phases that exist only at the pool, summed
+// from the already-fetched minerpool stats. Zero when phases are not configured.
+function sumPoolOnlyPhasesHashrateMhs (ctx, poolDataResults) {
+  const phases = lPhases.getPoolOnlyPhases(ctx)
+  if (!phases.length) return 0
+
+  const accounts = new Set()
+  for (const phase of phases) {
+    const keys = lPhases.getPhaseAccountKeys(phase)
+    if (keys) for (const key of keys) accounts.add(key)
+  }
+  if (!accounts.size) return 0
+
+  let totalHs = 0
+  for (const orkResult of poolDataResults) {
+    if (!Array.isArray(orkResult)) continue
+    for (const entry of orkResult) {
+      if (!entry || !entry.stats) continue
+      const pools = Array.isArray(entry.stats) ? entry.stats : [entry.stats]
+      for (const pool of pools) {
+        if (!pool || !accounts.has(`${pool.poolType}:${pool.username}`)) continue
+        totalHs += pool.hashrate || 0
+      }
+    }
+  }
+
+  return hsToMhs(totalHs)
+}
+
 function aggregatePoolStats (poolDataResults) {
   const stats = {
     totalHashrateHs: 0,
@@ -178,7 +208,8 @@ function composeSiteStatus (
   globalConfigResults,
   consumption,
   minerCoolingStatus = null,
-  dcsMinerCapacity = null
+  dcsMinerCapacity = null,
+  poolOnlyHashrateMhs = 0
 ) {
   const minerStats = aggregateMinerStats(tailLogResults)
   const alertStats = aggregateAlertStats(tailLogResults)
@@ -192,7 +223,10 @@ function composeSiteStatus (
 
   const hashrateValue = minerStats.hashrate
   const consumptionW = consumption.powerW
-  const efficiencyWPerTh = calculateSiteEfficiency(hashrateValue, consumptionW)
+  // A pool-only phase's consumption sits inside the site meter while its
+  // hashrate never reaches miner telemetry, so efficiency divides by the
+  // combined hashrate or the site reads worse the moment that phase goes live.
+  const efficiencyWPerTh = calculateSiteEfficiency(hashrateValue + poolOnlyHashrateMhs, consumptionW)
 
   const alertTotal =
     alertStats.critical +
@@ -252,6 +286,7 @@ module.exports = {
   aggregateAlertStats,
   aggregateContainerCapacity,
   aggregatePoolStats,
+  sumPoolOnlyPhasesHashrateMhs,
   extractGlobalConfig,
   computeUtilization,
   getFirstOrkThings,

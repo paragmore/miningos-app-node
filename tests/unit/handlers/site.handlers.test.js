@@ -1362,3 +1362,38 @@ test('getSiteOverviewUnits - empty site', async (t) => {
   t.alike(result.units, [], 'should return empty units')
   t.pass()
 })
+
+test('composeSiteStatus - pool-only phase hashrate joins the efficiency divisor', (t) => {
+  const { composeSiteStatus, sumPoolOnlyPhasesHashrateMhs } = require('../../../workers/lib/server/handlers/site.utils')
+
+  const poolData = [[{
+    ts: 1,
+    stats: [
+      { poolType: 'ocean', username: 'addr1', hashrate: 6e14, active_workers_count: 10, worker_count: 12 },
+      { poolType: 'ocean', username: 'addr2', hashrate: 5e13, active_workers_count: 2, worker_count: 2 }
+    ]
+  }]]
+
+  const ctx = {
+    conf: {
+      featureConfig: {
+        phases: [
+          { id: 'phase1', minerTelemetry: true, pool: { accounts: [{ poolType: 'ocean', username: 'addr1' }] } },
+          { id: 'phase1_5', minerTelemetry: false, pool: { accounts: [{ poolType: 'ocean', username: 'addr2' }] } }
+        ]
+      }
+    }
+  }
+
+  const poolOnlyMhs = sumPoolOnlyPhasesHashrateMhs(ctx, poolData)
+  t.is(poolOnlyMhs, 5e13 / 1e6, 'only pool-only phase accounts are summed')
+  t.is(sumPoolOnlyPhasesHashrateMhs({ conf: {} }, poolData), 0, 'zero without a phases config')
+
+  const minerLogs = [[[{ hashrate_mhs_1m_sum_aggr: 1e8, nominal_hashrate_mhs_sum_aggr: 2e8 }]]]
+  const base = composeSiteStatus(minerLogs, poolData, [], { powerW: 8.7e6, alert: '' })
+  const combined = composeSiteStatus(minerLogs, poolData, [], { powerW: 8.7e6, alert: '' }, null, null, poolOnlyMhs)
+
+  t.ok(combined.efficiency.value < base.efficiency.value, 'combined hashrate lowers W/THs')
+  t.is(combined.hashrate.value, base.hashrate.value, 'the MOS hashrate tile stays miner-only')
+  t.pass()
+})

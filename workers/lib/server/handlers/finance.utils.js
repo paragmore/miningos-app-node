@@ -68,6 +68,9 @@ function processTransactions (results, opts, timezone) {
   const trackFees = opts && opts.trackFees
   const start = Number.isFinite(opts?.start) ? opts.start : -Infinity
   const end = Number.isFinite(opts?.end) ? opts.end : Infinity
+  // Pool-account scoping (phases): the workers tag every transaction with the
+  // account's username, so an unscoped call keeps summing everything.
+  const usernames = opts?.usernames instanceof Set && opts.usernames.size ? opts.usernames : null
   const daily = {}
   const txEntries = []
   for (const res of results) {
@@ -80,6 +83,7 @@ function processTransactions (results, opts, timezone) {
       if (!Array.isArray(txList)) continue
       for (const t of txList) {
         if (!t) continue
+        if (usernames && !usernames.has(t.username)) continue
         const rawTs = t.mining_extra?.mining_date || t.ts || t.created_at || t.timestamp || t.time
         const rawMs = normalizeTimestampMs(rawTs)
         if (!rawMs || rawMs < start || rawMs > end) continue

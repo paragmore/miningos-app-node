@@ -28,6 +28,7 @@ const {
 } = require('./finance.utils')
 const { getCombinedPoolRebates } = require('./rebates.utils')
 const { isCentralDCSEnabled, fetchDcsThing } = require('../../dcs.utils')
+const lPhases = require('../../phases.utils')
 
 // First instant of the local calendar month (in `timezone`) containing `ts`.
 function localMonthStart (ts, timezone) {
@@ -80,7 +81,7 @@ function rollupLocalDaysMean (log, timezone, field) {
   return days
 }
 
-async function getDailySeries (ctx, start, end, handler, field, timezone) {
+async function getDailySeries (ctx, start, end, handler, field, timezone, refresh = false, cacheTag = '') {
   const cache = getDailySeriesCache(ctx)
   const now = Date.now()
   const months = localMonthsInRange(start, end, timezone)
@@ -94,8 +95,10 @@ async function getDailySeries (ctx, start, end, handler, field, timezone) {
   const missing = []
 
   for (const month of months) {
-    const cached = ended(month)
-      ? cache.get(dailySeriesCacheKey(month.key, timezone, field), now)
+    // refresh skips the read so a backfilled month is recomputed, but the fresh
+    // rollup is still stored below and serves every later request.
+    const cached = ended(month) && !refresh
+      ? cache.get(dailySeriesCacheKey(month.key, timezone, field + cacheTag), now)
       : undefined
     if (cached) Object.assign(byDay, cached)
     else missing.push(month)
@@ -127,7 +130,7 @@ async function getDailySeries (ctx, start, end, handler, field, timezone) {
       const monthDays = rollupLocalDaysMean(byMonthLog.get(month.key) ?? [], timezone, field)
       Object.assign(byDay, monthDays)
       if (cacheable(month)) {
-        cache.set(dailySeriesCacheKey(month.key, timezone, field), monthDays, now)
+        cache.set(dailySeriesCacheKey(month.key, timezone, field + cacheTag), monthDays, now)
       }
     }
   }
@@ -381,6 +384,15 @@ function extractForecastSettings (results) {
     }
   }
   return {}
+}
+
+// A phase divides by its own nominal, not the site's; a phase that has no
+// entry in the ork global config's phaseNominals map fails loudly instead of
+// silently reporting uptime against the whole site.
+function resolvePhaseNominalPowerMW (results, phase) {
+  const powerMw = lPhases.getPhaseNominals(results, phase.id)?.powerMw
+  if (!Number.isFinite(powerMw) || powerMw <= 0) throw lPhases.phaseError('ERR_PHASE_NOMINAL_MISSING')
+  return powerMw
 }
 
 function extractNominalPower (results) {
@@ -915,8 +927,19 @@ function calculateHourlyRevenueSummary (log) {
 // ==================== Revenue Summary ====================
 
 async function getRevenueSummary (ctx, req) {
+  const phase = lPhases.resolvePhase(ctx, req)
   const { start, end, timezone } = resolveStartEnd(ctx, req)
   const period = req.query.period || PERIOD_TYPES.DAILY
+
+  // A phase scopes earnings and hashrate to its own pool accounts. Consumption
+  // still reads the site series through the getPhaseConsumption seam until the
+  // manual store is wired in, so phase rows split revenue/hashes correctly and
+  // their power-derived figures stay site-wide for now.
+  const phaseUsernames = phase ? lPhases.getPhaseUsernames(phase) : null
+  const phaseHashrate = phase
+    ? (c, r) => getHashrate(c, { ...r, query: { ...r.query, phase: phase.id } })
+    : getHashrate
+  const phaseCacheTag = phase ? `|${phase.id}` : ''
 
   const [
     transactionResults,
@@ -954,7 +977,7 @@ async function getRevenueSummary (ctx, req) {
     (cb) => getDailySeries(ctx, start, end, getMiningConsumption, 'miningPowerW', timezone)
       .then(r => cb(null, r)).catch(cb),
 
-    (cb) => getDailySeries(ctx, start, end, getHashrate, 'hashrateMhs', timezone)
+    (cb) => getDailySeries(ctx, start, end, phaseHashrate, 'hashrateMhs', timezone, false, phaseCacheTag)
       .then(r => cb(null, r)).catch(cb),
 
     (cb) => getProductionCosts(ctx, start, end)
@@ -989,20 +1012,27 @@ async function getRevenueSummary (ctx, req) {
     }).then(r => cb(null, r)).catch(cb)
   ])
 
-  const { txEntries } = processTransactions(transactionResults, { trackFees: true, start, end }, timezone)
+  const { txEntries } = processTransactions(transactionResults, { trackFees: true, start, end, usernames: phaseUsernames }, timezone)
   const dailyPrices = processEbitdaPrices(priceResults, timezone)
   const currentBtcPrice = extractCurrentPrice(currentPriceResults)
   const { daily: dailyRevenue, missingPriceBuckets } = await priceDailyRevenue(ctx, {
     txEntries,
-    rebates: poolRebates,
+    rebates: phase ? [] : poolRebates,
     dailyPrices,
     currentBtcPrice,
     timezone,
     trackFees: true
   })
   const costsByMonth = processCostsData(productionCosts)
+  if (phase && phase.consumption?.source === lPhases.CONSUMPTION_SOURCES.MANUAL) {
+    // Site opex from Cost Input belongs to the site build-out; a manual-source
+    // phase (the container) carries only its energy costs.
+    for (const month of Object.values(costsByMonth)) month.operationalCostPerDay = 0
+  }
   const dailyBlocks = processBlockData(blockResults, timezone)
-  const nominalPowerMW = extractNominalPower(globalConfigResults)
+  const nominalPowerMW = phase
+    ? resolvePhaseNominalPowerMW(globalConfigResults, phase)
+    : extractNominalPower(globalConfigResults)
   const dailyForecast = processForecastHistory(forecastResults, timezone)
   const taxFees = extractForecastSettings(forecastSettingsResults).miningRevenueTaxFees || {}
 

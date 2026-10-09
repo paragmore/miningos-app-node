@@ -33,7 +33,8 @@ const {
   sumTransformerPowerW,
   extractSiteMeterThing,
   formatDeviceAlerts,
-  composeSiteStatus
+  composeSiteStatus,
+  sumPoolOnlyPhasesHashrateMhs
 } = require('./site.utils')
 const { flattenRpcResults } = require('../../utils')
 
@@ -126,7 +127,8 @@ async function getSiteLiveStatus (ctx, req) {
       ? { powerW: extractSiteMainMeterPowerW(dcsThing), alert: '' }
       : consumption,
     dcsEnabled ? extractMinerCoolingStatus(dcsThing) : null,
-    dcsEnabled ? extractMinerSocketCapacity(dcsThing) : null
+    dcsEnabled ? extractMinerSocketCapacity(dcsThing) : null,
+    sumPoolOnlyPhasesHashrateMhs(ctx, poolDataResults)
   )
 }
 
