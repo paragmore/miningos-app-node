@@ -283,6 +283,9 @@ test('handlers: createWorkOrder Type 2 (move) miner entering miner.room applies 
   const move = regPush.params[0].info.partsMoves[0]
   t.is(move.toContainer, 'group-5')
   t.is(move.toPos, '2_7')
+  t.is(regPush.params[0].info.pos, undefined, 'destination socket stays off the WO info (it would tag the WO onto the socket)')
+  t.is(regPush.params[0].info.container, undefined, 'destination group stays off the WO info')
+  t.is(regPush.params[0].info.subnet, undefined, 'destination subnet stays off the WO info')
 })
 
 test('handlers: createWorkOrder Type 2 (move) applies deviceStatus to the device and records it in partsMoves', async (t) => {

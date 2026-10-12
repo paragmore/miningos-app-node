@@ -276,6 +276,14 @@ async function createWorkOrder (ctx, req) {
 
   await assertActionsExecuted(ctx, req, 'ERR_WO_DEVICE_UPDATE_FAILED')
 
+  // The destination socket is recorded in partsMoves (toContainer/toPos) and
+  // applied to the miner above. Keeping pos/container on the WO's own info
+  // would make the thing base tag the WO onto the destination socket, where
+  // container views would list it as a second device.
+  delete info.pos
+  delete info.container
+  delete info.subnet
+
   return submitWorkOrderAction(ctx, req, 'registerThing', { id: woId, info })
 }
 
