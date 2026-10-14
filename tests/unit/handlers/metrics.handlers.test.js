@@ -5825,6 +5825,75 @@ test('getHashrate - groupBy injects the synthetic pool-only group', async (t) =>
   t.is(extCalls.length, 1, 'one history read per pool-only phase')
 })
 
+// A site day off UTC: the FE's 1D asks for one local day, which resolves to '1h'.
+const SITE_DAY_START = PHASE_START + 4 * PHASE_HOUR_MS
+const SITE_DAY_END = SITE_DAY_START + 24 * PHASE_HOUR_MS - 1
+const hourTs = (i) => `${SITE_DAY_START + i * PHASE_HOUR_MS}-${SITE_DAY_START + (i + 1) * PHASE_HOUR_MS - 1}`
+
+test('getHashrate - a one-day groupBy reads the hourly buckets of the requested day', async (t) => {
+  let tailPayload = null
+  const ctx = phaseCtx(async (key, method, payload) => {
+    if (method === 'tailLog') {
+      tailPayload = payload
+      return [
+        { ts: hourTs(0), hashrate_mhs_5m_type_group_sum_aggr: { 'miner-wm-m63': 2e11 } },
+        { ts: hourTs(1), hashrate_mhs_5m_type_group_sum_aggr: { 'miner-wm-m63': 4e11 } }
+      ]
+    }
+    return []
+  }, null)
+
+  const res = await getHashrate(ctx, { query: { start: SITE_DAY_START, end: SITE_DAY_END, groupBy: 'miner' } })
+
+  t.is(tailPayload.key, 'stat-30m', 'hourly source, not the UTC daily row')
+  t.is(tailPayload.groupRange, '1H')
+  t.ok(tailPayload.shouldCalculateAvg)
+  t.alike(res.log.map(({ ts }) => ts), [SITE_DAY_START, SITE_DAY_START + PHASE_HOUR_MS])
+  t.alike(res.log[1].timeRange, { startTs: SITE_DAY_START + PHASE_HOUR_MS, endTs: SITE_DAY_START + 2 * PHASE_HOUR_MS - 1 })
+  t.is(res.summary.groupedBy['miner-wm-m63'].avgHashrateMhs, 3e11, 'average over the day\'s hours')
+})
+
+test('getHashrate - a one-day groupBy clamps an hour straddling start into the range', async (t) => {
+  const half = PHASE_HOUR_MS / 2
+  const ctx = phaseCtx(async (key, method) => method === 'tailLog'
+    ? [{ ts: `${SITE_DAY_START - half}-${SITE_DAY_START + half - 1}`, hashrate_mhs_5m_type_group_sum_aggr: { 'miner-wm-m63': 2e11 } }]
+    : [], null)
+
+  const res = await getHashrate(ctx, { query: { start: SITE_DAY_START, end: SITE_DAY_END, groupBy: 'miner' } })
+
+  t.is(res.log[0].ts, SITE_DAY_START)
+  t.alike(res.log[0].timeRange, { startTs: SITE_DAY_START, endTs: SITE_DAY_START + half - 1 })
+})
+
+test('getHashrate - a one-day groupBy adds the pool-only group hour by hour', async (t) => {
+  const samples = [
+    { ts: SITE_DAY_START + 10 * 60 * 1000, poolType: 'ocean', username: 'addr2', hashrate: 4e13 },
+    { ts: SITE_DAY_START + PHASE_HOUR_MS + 10 * 60 * 1000, poolType: 'ocean', username: 'addr2', hashrate: 6e13 },
+    { ts: SITE_DAY_START + 10 * 60 * 1000, poolType: 'ocean', username: 'addr1', hashrate: 6e14 }
+  ]
+  for (const [groupBy, aggr, key] of [
+    ['miner', 'hashrate_mhs_5m_type_group_sum_aggr', 'HBM'],
+    ['container', 'hashrate_mhs_5m_container_group_sum_aggr', 'acme-container']
+  ]) {
+    const ctx = phaseCtx(async (k, method, payload) => {
+      if (method === 'tailLog') {
+        // The store as it answers: stat-1D is the UTC day's row, the hourly key the site's hours
+        if (payload.key === 'stat-1D') return [{ ts: PHASE_START + 24 * PHASE_HOUR_MS, [aggr]: { 'group-1': 2e11 } }]
+        return [0, 1, 2].map((i) => ({ ts: hourTs(i), [aggr]: { 'group-1': 2e11 } }))
+      }
+      if (method === 'getWrkExtData') return [{ hashrateHistory: samples }]
+      return []
+    })
+
+    const res = await getHashrate(ctx, { query: { start: SITE_DAY_START, end: SITE_DAY_END, groupBy } })
+
+    t.is(res.log[0].hashrateMhs[key], 4e13 / 1e6, `${key} in the first hour`)
+    t.is(res.log[1].hashrateMhs[key], 6e13 / 1e6, `${key} in the second hour`)
+    t.absent(key in res.log[2].hashrateMhs, `no ${key} for an hour the pool did not report`)
+    t.is(res.summary.groupedBy[key].avgHashrateMhs, 5e13 / 1e6, `${key} averaged over its reported hours`)
+  }
+})
+
 test('getHashrate - groupBy with phase=total injects like a phase-less request', async (t) => {
   const ctx = phaseCtx(async (key, method) => {
     if (method === 'tailLog') {

@@ -514,14 +514,18 @@ async function getGoupedHashrate (ctx, req) {
 
   // Days, weeks and months are cut in the site's zone from hourly buckets, as the
   // ungrouped series is: stat-1d sits on UTC midnights, so for a site off UTC its first
-  // day fell before `start` and was dropped, and every row was a UTC day.
+  // day fell before `start` and was dropped, and every row was a UTC day. A short range
+  // ('1h') reads the hourly buckets themselves, again as the ungrouped series does:
+  // stat-1d answered a one-day request with the UTC day's row, stamped after `start`
+  // and without a timeRange, so no pool sample paired with it.
   const interval = resolveInterval(start, end, req.query.interval)
   const local = isLocalInterval(interval)
 
   const res = await ctx.dataProxy.requestData(RPC_METHODS.TAIL_LOG, {
     type: WORKER_TYPES.MINER,
     tag: WORKER_TAGS.MINER,
-    ...(local ? { ...getIntervalConfig('1h'), shouldCalculateAvg: true } : { key: LOG_KEYS.STAT_1D }),
+    ...getIntervalConfig(local ? '1h' : interval),
+    shouldCalculateAvg: true,
     start,
     end,
     fields: { [field]: 1 },
@@ -536,7 +540,11 @@ async function getGoupedHashrate (ctx, req) {
       hashrateMhs = Object.fromEntries(Object.entries(hashrateMhs).filter(([rack]) => rackFilter(rack)))
     }
     // An hour straddling `start` (zones off the whole hour) belongs to the range's first day.
-    return { ts: local ? Math.max(start, parseEntryTs(val.ts)) : parseEntryTs(val.ts), hashrateMhs }
+    const ts = Math.max(start, parseEntryTs(val.ts))
+    if (local) return { ts, hashrateMhs }
+    const rawRange = parseEntryTimeRange(val.ts)
+    const timeRange = rawRange && { startTs: Math.max(start, rawRange.startTs), endTs: Math.min(end, rawRange.endTs) }
+    return { ts, ...(timeRange && { timeRange }), hashrateMhs }
   })
 
   const log = local
