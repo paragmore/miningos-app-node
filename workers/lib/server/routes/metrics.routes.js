@@ -78,7 +78,8 @@ module.exports = (ctx) => {
         (req) => ['metrics/pool-hashrate', req.query.interval, req.query.lookbackDays, req.query.phase],
         ENDPOINTS.METRICS_POOL_HASHRATE,
         getPoolHashrate,
-        [AUTH_PERMISSIONS.MINERPOOL]
+        // pool_manager holds pool_config but not minerpool, and needs this chart.
+        [AUTH_PERMISSIONS.MINERPOOL, AUTH_PERMISSIONS.POOL_CONFIG]
       )
     },
     {

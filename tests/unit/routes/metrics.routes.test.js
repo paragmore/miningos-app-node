@@ -132,3 +132,23 @@ test('metrics routes - onRequest functions', (t) => {
   testOnRequestFunctions(t, routes, 'metrics')
   t.pass()
 })
+
+test('metrics routes - pool-hashrate accepts minerpool or pool_config', async (t) => {
+  const checks = []
+  const ctx = {
+    conf: { ttl: 3600 },
+    authLib: {
+      resolveToken: async () => ({ userId: 'u1' }),
+      tokenHasPerms: async (token, write, perms) => {
+        checks.push({ write, perms })
+        return true
+      }
+    }
+  }
+  const route = require(ROUTES_PATH)(ctx).find(r => r.url === '/auth/metrics/pool-hashrate')
+  const req = { method: 'GET', headers: { authorization: 'Bearer token' }, ip: '127.0.0.1', query: {} }
+  const rep = { status: () => { t.fail('should not be denied'); return rep }, send: () => rep }
+  await route.onRequest(req, rep)
+
+  t.alike(checks, [{ write: false, perms: ['minerpool', 'pool_config'] }])
+})
