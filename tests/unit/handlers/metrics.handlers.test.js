@@ -6141,6 +6141,109 @@ test('getConsumption - phase rejects groupBy, byMeter and racks, and needs a usa
   await t.exception(() => getConsumption(unconfigured, { query }), /ERR_PHASE_CONSUMPTION_REQUIRES_CENTRAL_DCS/)
 })
 
+const PHASE_DAY_MS = 24 * PHASE_HOUR_MS
+
+// Two stat-1d rows of miner telemetry for the grouped consumption tests.
+function groupedConsumptionRows (aggrField, groups) {
+  return [
+    { ts: PHASE_START, [aggrField]: groups },
+    { ts: PHASE_START + PHASE_DAY_MS, [aggrField]: groups }
+  ]
+}
+
+test('getConsumption - groupBy miner injects the manual phase group from its logged hours', async (t) => {
+  const reads = []
+  const ctx = phaseConsumptionCtx({
+    hashrate: groupedConsumptionRows('power_w_type_group_sum_aggr', { 'miner-wm-m63': 4000000 }),
+    // Day 1 has two logged hours; day 2 has none
+    manual: [
+      { ts: PHASE_START + 3 * PHASE_HOUR_MS, totalConsumptionMWh: 0.9 },
+      { ts: PHASE_START + 4 * PHASE_HOUR_MS, totalConsumptionMWh: 0.7 }
+    ],
+    onCall: (method, payload) => { if (method === 'getHistoricalLogs') reads.push(payload) }
+  })
+
+  const res = await getConsumption(ctx, {
+    query: { start: PHASE_START + 6 * PHASE_HOUR_MS, end: PHASE_START + 2 * PHASE_DAY_MS - 1, groupBy: 'miner' }
+  })
+
+  t.is(res.log[0].powerW['miner-wm-m63'], 4000000, 'telemetry groups untouched')
+  t.is(res.log[0].powerW.HBM, 800000, 'mean of the logged hours, as average W')
+  t.ok(Math.abs(res.log[0].consumptionMWh.HBM - 1.6) < 1e-9, 'the MWh actually logged, not 0.8 MW over 24 h')
+  t.is(res.log[0].consumptionMWh['miner-wm-m63'], (4000000 * 24) / 1000000, 'telemetry MWh untouched')
+  t.absent(res.log[1].powerW.HBM, 'a day without logged hours gets no key, not a zero')
+  t.is(res.summary.groupedBy.HBM.avgPowerW, 800000, 'the summary lists the phase group')
+  t.ok(Math.abs(res.summary.groupedBy.HBM.totalConsumptionMWh - 1.6) < 1e-9, 'its total is the logged MWh')
+  t.is(res.summary.groupedBy['miner-wm-m63'].totalConsumptionMWh, (2 * 4000000 * 24) / 1000000)
+  t.ok(Math.abs(res.summary.totalConsumptionMWh - (192 + 1.6)) < 1e-9, 'the site total adds the logged MWh')
+  t.is(reads.length, 1, 'one manual read for the whole range')
+  t.is(reads[0].start, PHASE_START, 'the first row is read from its UTC midnight, before start')
+  t.is(reads[0].end, PHASE_START + 2 * PHASE_DAY_MS - 1)
+})
+
+test('getConsumption - groupBy container injects the container group, phase=total too', async (t) => {
+  const ctx = phaseConsumptionCtx({
+    hashrate: groupedConsumptionRows('power_w_container_group_sum_aggr', { 'group-1': 500000 }),
+    manual: [{ ts: PHASE_START, totalConsumptionMWh: 1.2 }]
+  })
+  const query = { start: PHASE_START, end: PHASE_START + 2 * PHASE_DAY_MS - 1, groupBy: 'container' }
+
+  const res = await getConsumption(ctx, { query })
+  t.is(res.log[0].powerW['acme-container'], 1200000)
+  t.absent(res.log[0].powerW.HBM, 'only the key for this groupBy')
+
+  const total = await getConsumption(ctx, { query: { ...query, phase: 'total' } })
+  t.is(total.log[0].powerW['acme-container'], 1200000, 'Total tab lists the phase group too')
+})
+
+test('getConsumption - groupBy never overwrites a telemetry key with the phase group', async (t) => {
+  const ctx = phaseConsumptionCtx({
+    hashrate: groupedConsumptionRows('power_w_type_group_sum_aggr', { HBM: 3000000 }),
+    manual: [{ ts: PHASE_START, totalConsumptionMWh: 1 }]
+  })
+
+  const res = await getConsumption(ctx, {
+    query: { start: PHASE_START, end: PHASE_START + 2 * PHASE_DAY_MS - 1, groupBy: 'miner' }
+  })
+
+  t.is(res.log[0].powerW.HBM, 3000000)
+})
+
+test('getConsumption - groupBy is untouched without central DCS, phases, a manual phase or for racks', async (t) => {
+  const rows = groupedConsumptionRows('power_w_type_group_sum_aggr', { 'miner-wm-m63': 4000000 })
+  const query = { start: PHASE_START, end: PHASE_START + 2 * PHASE_DAY_MS - 1, groupBy: 'miner' }
+  let manualReads = 0
+  const jRequest = async (key, method) => {
+    if (method === 'getHistoricalLogs') {
+      manualReads++
+      return [{ ts: PHASE_START, totalConsumptionMWh: 1 }]
+    }
+    return method === 'tailLog' ? rows : []
+  }
+  const keysOf = (res) => Object.keys(res.log[0].powerW)
+
+  const noDcs = await getConsumption(phaseCtx(jRequest), { query })
+  t.alike(keysOf(noDcs), ['miner-wm-m63'], 'the manual store lives on the DCS worker')
+
+  const noPhases = await getConsumption(phaseCtx(jRequest, { centralDCSSetup: { enabled: true } }), { query })
+  t.alike(keysOf(noPhases), ['miner-wm-m63'])
+
+  const remainderOnly = {
+    ...PHASE_DCS_FEATURE,
+    phases: PHASE_DCS_FEATURE.phases.filter(p => p.id !== 'phase1_5')
+  }
+  const noManual = await getConsumption(phaseCtx(jRequest, remainderOnly), { query })
+  t.alike(keysOf(noManual), ['miner-wm-m63'], 'a remainder phase is inside the telemetry already')
+
+  const rackRows = groupedConsumptionRows('power_w_pdu_rack_group_sum_aggr', { r1: 1000000 })
+  const racks = await getConsumption(
+    phaseCtx(async (key, method) => (method === 'tailLog' ? rackRows : []), PHASE_DCS_FEATURE),
+    { query: { ...query, groupBy: 'rack' } }
+  )
+  t.alike(keysOf(racks), ['r1'])
+  t.is(manualReads, 0, 'the manual store is not read when nothing is injected')
+})
+
 test('getConsumption/getDowntime - total stays the site view, downtime still rejects a phase', async (t) => {
   const ctx = phaseCtx(async () => [])
   const query = { start: PHASE_START, end: PHASE_START + PHASE_HOUR_MS, phase: 'phase1_5' }

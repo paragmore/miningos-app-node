@@ -1028,6 +1028,63 @@ const CONSUMPTION_GROUP_FIELDS = {
   rack: { field: LOG_FIELDS.POWER_W_RACK_GROUP_SUM, aggrField: AGGR_FIELDS.POWER_W_RACK_GROUP_SUM }
 }
 
+/**
+ * Adds the configured synthetic group (e.g. the container's miner type) of every
+ * manually measured phase to the grouped consumption, so the Miner Type / Mining
+ * Unit views list the phase next to the telemetry-backed groups, as the grouped
+ * hashrate does. Its power is the mean of the hours logged in each day; a day
+ * without any logged hour gets no key rather than a zero. The grouped series is
+ * miner telemetry only, so the phase's load is not counted twice.
+ */
+async function injectSyntheticConsumptionGroups (ctx, req, log) {
+  if (!log.length) return
+  // `total` must list the phase groups exactly like a phase-less request.
+  if (lPhases.resolvePhase(ctx, req)) return
+
+  const groupBy = req.query.groupBy
+  if (groupBy !== 'miner' && groupBy !== 'container') return
+  if (!isCentralDCSEnabled(ctx)) return
+
+  const keys = (lPhases.getPhases(ctx) || [])
+    .filter((p) => p?.consumption?.source === lPhases.CONSUMPTION_SOURCES.MANUAL)
+    .map((p) => (groupBy === 'miner' ? p.groups?.minerType : p.groups?.container))
+    .filter(Boolean)
+  if (!keys.length) return
+
+  const dayMs = METRICS_TIME.ONE_DAY_MS
+  const firstDay = Math.min(...log.map((entry) => entry.ts))
+  const lastDay = Math.max(...log.map((entry) => entry.ts))
+  // Daily rows sit on UTC midnights that can precede `start`: read their whole days.
+  const manualByHour = await fetchManualConsumptionByHour(ctx, firstDay, lastDay + dayMs - 1)
+
+  for (const entry of log) {
+    let totalMWh = 0
+    let hours = 0
+    for (const [ts, mwh] of manualByHour) {
+      if (ts < entry.ts || ts >= entry.ts + dayMs) continue
+      totalMWh += mwh
+      hours++
+    }
+    if (!hours) continue
+
+    const powerW = (totalMWh / hours) * 1000000
+    // Copies: the maps can be shared with the worker response (or between rows)
+    entry.powerW = entry.powerW && typeof entry.powerW === 'object' ? { ...entry.powerW } : {}
+    entry.consumptionMWh = entry.consumptionMWh && typeof entry.consumptionMWh === 'object'
+      ? { ...entry.consumptionMWh }
+      : {}
+    for (const key of keys) {
+      // A synthetic key colliding with a real device-type key is a config error;
+      // losing telemetry to the overwrite would be worse than the group going missing.
+      if (entry.powerW[key] !== undefined) continue
+      entry.powerW[key] = powerW
+      // The energy actually logged, not the mean stretched over 24 h: a day with only
+      // some hours entered would otherwise report hours that were never logged.
+      entry.consumptionMWh[key] = totalMWh
+    }
+  }
+}
+
 async function getGroupedConsumption (ctx, req) {
   const { groupBy, start, end } = req.query
 
@@ -1062,6 +1119,8 @@ async function getGroupedConsumption (ctx, req) {
     return aggr
   }, [])
 
+  await injectSyntheticConsumptionGroups(ctx, req, log)
+
   const summary = calculateGroupedConsumptionSummary(log, groupBy)
 
   return { log, summary }
@@ -1077,6 +1136,9 @@ function calculateGroupedConsumptionSummary (log, groupBy) {
 
   const groupTotals = {}
   const groupCounts = {}
+  // MWh a row carries itself where it differs from its power over 24 h (a manual
+  // phase group with only some hours logged): the gap is added to the 24 h total.
+  const groupMWhAdjust = {}
 
   for (const entry of log) {
     const powerW = entry.powerW
@@ -1085,24 +1147,32 @@ function calculateGroupedConsumptionSummary (log, groupBy) {
         const v = Number(val) || 0
         groupTotals[name] = (groupTotals[name] || 0) + v
         groupCounts[name] = (groupCounts[name] || 0) + 1
+        const mwh = entry.consumptionMWh?.[name]
+        const fullDayMWh = (v * 24) / 1000000
+        if (Number.isFinite(mwh) && mwh !== fullDayMWh) {
+          groupMWhAdjust[name] = (groupMWhAdjust[name] || 0) + mwh - fullDayMWh
+        }
       }
     }
   }
 
   const byGroup = {}
   let siteTotal = 0
+  let siteMWhAdjust = 0
   for (const [name, total] of Object.entries(groupTotals)) {
     const avgPowerW = safeDiv(total, groupCounts[name])
+    const adjust = groupMWhAdjust[name] || 0
     byGroup[name] = {
       avgPowerW,
-      totalConsumptionMWh: (total * 24) / 1000000
+      totalConsumptionMWh: (total * 24) / 1000000 + adjust
     }
     siteTotal += total
+    siteMWhAdjust += adjust
   }
 
   return {
     avgPowerW: safeDiv(siteTotal, log.length),
-    totalConsumptionMWh: (siteTotal * 24) / 1000000,
+    totalConsumptionMWh: (siteTotal * 24) / 1000000 + siteMWhAdjust,
     groupedBy: byGroup
   }
 }
