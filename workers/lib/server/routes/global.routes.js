@@ -13,10 +13,13 @@ const {
   getFeatureConfig,
   setFeatures,
   getGlobalConfig,
+  redactGlobalConfig,
   setGlobalConfig
 } = require('../handlers/global.handlers')
 const { getSiteName } = require('../handlers/auth.handlers')
-const { createAuthRoute, createCachedAuthRoute, AUTH_ONLY } = require('../lib/routeHelpers')
+const { createAuthRoute, createAuthOnRequest, createCachedAuthRoute, AUTH_ONLY } = require('../lib/routeHelpers')
+const { cachedRoute } = require('../lib/cachedRoute')
+const { send200 } = require('../lib/send200')
 
 const GLOBAL_DATA_READ_PERMS = {
   [GLOBAL_DATA_TYPES.ALERT_PARAMETERS]: [AUTH_PERMISSIONS.ALERT_CONFIG],
@@ -93,13 +96,18 @@ module.exports = (ctx) => {
       schema: {
         querystring: schemas.query.globalConfig
       },
-      ...createCachedAuthRoute(
-        ctx,
-        ['global-config'],
-        ENDPOINTS.GLOBAL_CONFIG,
-        getGlobalConfig,
-        AUTH_ONLY
-      )
+      onRequest: createAuthOnRequest(ctx, AUTH_ONLY),
+      // The cache holds the full config; revenue-only keys are dropped per caller after it.
+      handler: async (req, rep) => {
+        const results = await cachedRoute(
+          ctx,
+          ['global-config'],
+          ENDPOINTS.GLOBAL_CONFIG,
+          () => getGlobalConfig(ctx, req, rep),
+          !!req.query.overwriteCache
+        )
+        return send200(rep, await redactGlobalConfig(ctx, req, results))
+      }
     },
     {
       method: HTTP_METHODS.POST,

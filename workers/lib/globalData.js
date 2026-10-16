@@ -10,20 +10,19 @@ function isValidAmount (val) {
   return val === undefined || val === null || (Number.isFinite(val) && val >= 0)
 }
 
-// Per-phase figures keyed by phase id. Top-level capexUsd stays the site
-// build-out's (Phase 1); a phase with its own build-out (Phase 1.5) stores its
-// capex here.
-function validatePhaseCostFields (phases) {
-  if (phases === undefined || phases === null) return
-  if (!isValidJsonObject(phases)) throw new Error('ERR_INVALID_PHASES')
-  for (const entry of Object.values(phases)) {
-    if (!isValidJsonObject(entry)) throw new Error('ERR_INVALID_PHASES')
-    if (!isValidAmount(entry.capexUsd)) throw new Error('ERR_INVALID_AMORTIZATION')
-  }
+// Capex is read from the ork global config (capexUsd / phaseCapexUsd), not
+// edited through Cost Input. These keys are dropped from saves and from the
+// stored doc so a stale copy cannot linger beside the configured one.
+const CAPEX_FIELDS = ['capexUsd', 'phases']
+
+function omitCapexFields (data) {
+  const rest = { ...data }
+  for (const field of CAPEX_FIELDS) delete rest[field]
+  return rest
 }
 
 function validateCostParameterFields (data) {
-  const amounts = ['minerAmortizationUsd', 'infraAmortizationUsd', 'capexUsd']
+  const amounts = ['minerAmortizationUsd', 'infraAmortizationUsd']
   for (const field of amounts) {
     if (!isValidAmount(data[field])) throw new Error('ERR_INVALID_AMORTIZATION')
   }
@@ -170,20 +169,19 @@ class GlobalDataLib {
   async setCostParametersData (data) {
     if (!isValidJsonObject(data)) throw new Error('ERR_INVALID_JSON')
 
-    const { year, month, ...fields } = data
-    const current = await this.getGloabalDbDataForType(GLOBAL_DATA_TYPES.COST_PARAMETERS)
+    const { year, month, ...rest } = data
+    const fields = omitCapexFields(rest)
+    const current = omitCapexFields(await this.getGloabalDbDataForType(GLOBAL_DATA_TYPES.COST_PARAMETERS))
 
-    // No year/month: save the site defaults, keeping whatever monthly overrides and
-    // per-phase figures are already stored when the payload leaves them out.
+    // No year/month: save the site defaults, keeping whatever monthly overrides are
+    // already stored when the payload leaves them out.
     if (year === undefined && month === undefined) {
       validateCostParameterFields(fields)
-      validatePhaseCostFields(fields.phases)
       return this.saveGlobalDataForType(
         {
           ...fields,
           site: this.site,
-          overrides: fields.overrides ?? current.overrides,
-          phases: fields.phases ?? current.phases
+          overrides: fields.overrides ?? current.overrides
         },
         GLOBAL_DATA_TYPES.COST_PARAMETERS
       )
@@ -191,8 +189,6 @@ class GlobalDataLib {
 
     if (!Number.isInteger(year) || year < 0) throw new Error('ERR_INVALID_YEAR')
     if (!Number.isInteger(month) || month < 1 || month > 12) throw new Error('ERR_INVALID_MONTH')
-    // Capex is a one-off build-out figure, not a monthly one.
-    if (fields.phases !== undefined) throw new Error('ERR_INVALID_PHASES')
     validateCostParameterFields(fields)
 
     const monthKey = `${year}-${String(month).padStart(2, '0')}`

@@ -597,11 +597,6 @@ test('GlobalDataLib - setCostParametersData rejects invalid values', async funct
     [{ infraAmortizationUsd: 'free' }, 'ERR_INVALID_AMORTIZATION'],
     [{ marginPct: 101 }, 'ERR_INVALID_MARGIN'],
     [{ marginPct: -1 }, 'ERR_INVALID_MARGIN'],
-    [{ capexUsd: -5 }, 'ERR_INVALID_AMORTIZATION'],
-    [{ phases: [] }, 'ERR_INVALID_PHASES'],
-    [{ phases: { phase1_5: 400 } }, 'ERR_INVALID_PHASES'],
-    [{ phases: { phase1_5: { capexUsd: -1 } } }, 'ERR_INVALID_AMORTIZATION'],
-    [{ year: 2026, month: 1, phases: { phase1_5: { capexUsd: 400 } } }, 'ERR_INVALID_PHASES'],
     [{ commissionedAt: 1.5 }, 'ERR_INVALID_COMMISSIONED_AT'],
     [{ lcoe: 'cheap' }, 'ERR_INVALID_LCOE'],
     [{ lcoe: { source: 'guess' } }, 'ERR_INVALID_LCOE_SOURCE'],
@@ -681,10 +676,15 @@ test('GlobalDataLib - cost parameters round-trip through a real hyperbee', async
   const overwritten = await globalDataLib.getGlobalData({ type: GLOBAL_DATA_TYPES.COST_PARAMETERS })
   t.alike(overwritten, { marginPct: 12, site: 'test-site' }, 'a later save replaces the singleton')
 
-  await globalDataLib.setGlobalData({ marginPct: 12, phases: { phase1_5: { capexUsd: 400 } } }, GLOBAL_DATA_TYPES.COST_PARAMETERS)
-  await globalDataLib.setGlobalData({ marginPct: 10, capexUsd: 1000 }, GLOBAL_DATA_TYPES.COST_PARAMETERS)
-  const keptPhases = await globalDataLib.getGlobalData({ type: GLOBAL_DATA_TYPES.COST_PARAMETERS })
-  t.alike(keptPhases.phases, { phase1_5: { capexUsd: 400 } }, 'a save without phases keeps the stored per-phase capex')
+  await globalDataLib.setGlobalData({ marginPct: 10, capexUsd: 1000, phases: { phase1_5: { capexUsd: 400 } } }, GLOBAL_DATA_TYPES.COST_PARAMETERS)
+  const noCapex = await globalDataLib.getGlobalData({ type: GLOBAL_DATA_TYPES.COST_PARAMETERS })
+  t.alike(noCapex, { marginPct: 10, site: 'test-site' }, 'capex sent by the UI is dropped: it lives in the ork global config')
+
+  // A doc saved before capex moved still carries it; the next monthly save drops it.
+  await bee.sub(GLOBAL_DATA_TYPES.COST_PARAMETERS).put(GLOBAL_DATA_TYPES.COST_PARAMETERS, JSON.stringify({ marginPct: 10, capexUsd: 1000, phases: { phase1_5: { capexUsd: 400 } }, site: 'test-site' }))
+  await globalDataLib.setGlobalData({ year: 2026, month: 1, marginPct: 9 }, GLOBAL_DATA_TYPES.COST_PARAMETERS)
+  const legacy = await globalDataLib.getGlobalData({ type: GLOBAL_DATA_TYPES.COST_PARAMETERS })
+  t.alike(legacy, { marginPct: 10, site: 'test-site', overrides: { '2026-01': { marginPct: 9 } } }, 'a stored legacy capex is dropped on the next save')
 
   const missing = await new GlobalDataLib(bee, 'test-site').getGlobalData({ type: GLOBAL_DATA_TYPES.FEATURES })
   t.alike(missing, {}, 'an unwritten singleton type still reads as empty')

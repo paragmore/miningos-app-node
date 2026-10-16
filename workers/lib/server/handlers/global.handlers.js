@@ -1,6 +1,6 @@
 'use strict'
 const gLibUtilBase = require('@bitfinex/lib-js-util-base')
-const { GLOBAL_DATA_TYPES, LOCKED_TIMEZONE_DEFAULT, POOL_REBATE_SOURCES } = require('../../constants')
+const { GLOBAL_DATA_TYPES, LOCKED_TIMEZONE_DEFAULT, POOL_REBATE_SOURCES, AUTH_PERMISSIONS, REVENUE_ONLY_CONFIG_KEYS } = require('../../constants')
 const { parseJsonQueryParam, sanitizeIncludeFields } = require('../../utils')
 const {
   getAutoPoolRebates,
@@ -180,6 +180,25 @@ async function getGlobalConfig (ctx, req, rep) {
   return await ctx.dataProxy.requestDataMap('getGlobalConfig', req.query)
 }
 
+// Capex is revenue data, gated like Cost Input was. The config route is open to any
+// logged-in user and its response is cached for all of them, so the keys are
+// dropped per caller on a copy, never on the cached entries themselves.
+
+function omitRevenueOnlyKeys (entry) {
+  if (Array.isArray(entry)) return entry.map(omitRevenueOnlyKeys)
+  if (!entry || typeof entry !== 'object') return entry
+  const rest = { ...entry }
+  for (const key of REVENUE_ONLY_CONFIG_KEYS) delete rest[key]
+  return rest
+}
+
+async function redactGlobalConfig (ctx, req, results) {
+  if (ctx.noAuth) return results
+  const canSeeRevenue = await ctx.authLib.tokenHasPerms(req._info.authToken, false, [AUTH_PERMISSIONS.REVENUE])
+  if (canSeeRevenue || !Array.isArray(results)) return results
+  return results.map(omitRevenueOnlyKeys)
+}
+
 async function setGlobalConfig (ctx, req, rep) {
   return await ctx.dataProxy.requestDataMap('setGlobalConfig', req.body.data)
 }
@@ -191,5 +210,6 @@ module.exports = {
   getFeatures,
   setFeatures,
   getGlobalConfig,
+  redactGlobalConfig,
   setGlobalConfig
 }

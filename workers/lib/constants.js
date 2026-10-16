@@ -56,6 +56,9 @@ const AUTH_PERMISSIONS = {
   ALERT_CONFIG_SENSITIVE: 'alert_config_sensitive'
 }
 
+// Ork global config keys served only to callers with the revenue permission.
+const REVENUE_ONLY_CONFIG_KEYS = ['capexUsd', 'phaseCapexUsd']
+
 const WORK_ORDER_THING_TYPE = 'inventory-work_order'
 
 const WORK_ORDER_TYPES = { REGISTER: 1, MOVE: 2, MICROBT_MINER: 3, MICROBT_NON_MINER: 4 }
@@ -1461,6 +1464,7 @@ module.exports = {
   MIGRATED_USER_ROLES,
   COMMENT_ACTION,
   AUTH_PERMISSIONS,
+  REVENUE_ONLY_CONFIG_KEYS,
   AUTH_LEVELS,
   AUTH_CAPS,
   ENDPOINTS,

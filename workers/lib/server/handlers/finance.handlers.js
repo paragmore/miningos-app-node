@@ -1179,22 +1179,35 @@ async function getRevenueSummary (ctx, req) {
 
   return {
     log: aggregated,
-    summary: { ...summary, ...pricingStatus(missingPriceBuckets), ...resolveCapex(ctx, phase, costParameters) }
+    summary: { ...summary, ...pricingStatus(missingPriceBuckets), ...resolveCapex(ctx, phase, globalConfigResults) }
   }
 }
 
+// Capex is fixed build-out data, so it lives in the ork global config rather
+// than the UI-edited Cost Input: the first ork entry carrying it wins.
+function extractCapexConfig (globalConfigResults) {
+  for (const res of globalConfigResults || []) {
+    if (!res || res.error) continue
+    for (const entry of (Array.isArray(res) ? res : [res])) {
+      if (entry && (entry.capexUsd !== undefined || entry.phaseCapexUsd !== undefined)) return entry
+    }
+  }
+  return {}
+}
+
 /**
- * Capex follows the opex split: top-level capexUsd is the site build-out and
- * belongs to every phase but a manual-source one, which carries its own
- * build-out under costParameters.phases[id].capexUsd. The site view sums the
- * build-out and every such phase. A phase whose figure is not entered yet is
- * listed in capexMissingPhases instead of counting as zero, so a partial site
- * total is never mistaken for a complete one.
+ * Capex follows the opex split: the global config's capexUsd is the site
+ * build-out and belongs to every phase but a manual-source one, which carries
+ * its own build-out under phaseCapexUsd[id]. The site view sums the build-out
+ * and every such phase. A phase whose figure is not configured yet is listed in
+ * capexMissingPhases instead of counting as zero, so a partial site total is
+ * never mistaken for a complete one.
  */
-function resolveCapex (ctx, phase, costParameters) {
+function resolveCapex (ctx, phase, globalConfigResults) {
   const amount = (v) => (Number.isFinite(v) ? v : null)
   const hasOwnCapex = (p) => p?.consumption?.source === lPhases.CONSUMPTION_SOURCES.MANUAL
-  const siteCapexUsd = amount(costParameters?.capexUsd)
+  const capexConfig = extractCapexConfig(globalConfigResults)
+  const siteCapexUsd = amount(capexConfig.capexUsd)
 
   const ownPhases = phase
     ? (hasOwnCapex(phase) ? [phase] : [])
@@ -1204,7 +1217,7 @@ function resolveCapex (ctx, phase, costParameters) {
   const parts = includesSite ? [siteCapexUsd] : []
   const capexMissingPhases = []
   for (const p of ownPhases) {
-    const value = amount(costParameters?.phases?.[p.id]?.capexUsd)
+    const value = amount(capexConfig.phaseCapexUsd?.[p.id])
     if (value === null) capexMissingPhases.push(p.id)
     parts.push(value)
   }

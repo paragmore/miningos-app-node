@@ -1,7 +1,7 @@
 'use strict'
 
 const test = require('brittle')
-const { getGlobalConfig, setGlobalConfig, getFeatureConfig, getFeatures, setFeatures, getGlobalData, setGlobalData } = require('../../../workers/lib/server/handlers/global.handlers')
+const { getGlobalConfig, redactGlobalConfig, setGlobalConfig, getFeatureConfig, getFeatures, setFeatures, getGlobalData, setGlobalData } = require('../../../workers/lib/server/handlers/global.handlers')
 const { GLOBAL_DATA_TYPES, LOCKED_TIMEZONE_DEFAULT } = require('../../../workers/lib/constants')
 const { withDataProxy } = require('../helpers/mockHelpers')
 
@@ -49,6 +49,28 @@ test('getGlobalConfig - without fields query param', async (t) => {
   const result = await getGlobalConfig(mockCtx, mockReq, {})
   t.ok(Array.isArray(result), 'should return array')
   t.pass()
+})
+
+test('redactGlobalConfig - capex is shown only to revenue users', async (t) => {
+  const results = [{ nominalAvailablePowerMWh: 22.5, capexUsd: 1000, phaseCapexUsd: { phase1_5: 400 } }, [{ capexUsd: 5 }], { error: 'ERR_TIMEOUT' }]
+  const snapshot = JSON.parse(JSON.stringify(results))
+  const req = { _info: { authToken: 'tok' } }
+  let asked
+  const ctxFor = (allowed) => ({
+    authLib: { tokenHasPerms: async (token, write, perms) => { asked = { token, write, perms }; return allowed } }
+  })
+
+  t.alike(await redactGlobalConfig(ctxFor(true), req, results), results, 'a revenue user sees capex')
+  t.alike(asked, { token: 'tok', write: false, perms: ['revenue'] }, 'checks read-level revenue')
+
+  t.alike(
+    await redactGlobalConfig(ctxFor(false), req, results),
+    [{ nominalAvailablePowerMWh: 22.5 }, [{}], { error: 'ERR_TIMEOUT' }],
+    'other users get the config without capex'
+  )
+  t.alike(results, snapshot, 'the cached results are not mutated')
+
+  t.alike(await redactGlobalConfig({ noAuth: true }, {}, results), results, 'noAuth skips the check like capCheck does')
 })
 
 test('setGlobalConfig - basic functionality', async (t) => {

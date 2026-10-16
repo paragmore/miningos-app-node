@@ -1837,10 +1837,11 @@ test('getRevenueSummary - phase costs and capex follow the phase build-out', asy
       pool: { accounts: [{ poolType: 'ocean', username: 'acme-addr' }] }
     }
   ]
+  // A stale Cost Input capex must not leak: capex comes from the global config only.
   const costParameters = {
-    capexUsd: 1000,
+    capexUsd: 99,
     lcoe: { effectiveUsdPerMwh: 50 },
-    phases: { phase1_5: { capexUsd: 400 } }
+    phases: { phase1_5: { capexUsd: 99 } }
   }
   const ctx = withDataProxy({
     conf: { orks: [{ rpcPublicKey: 'key1' }], featureConfig: { centralDCSSetup: { enabled: true }, phases } },
@@ -1861,7 +1862,14 @@ test('getRevenueSummary - phase costs and capex follow the phase build-out', asy
           if (key === 'current_price') return [{ currentPrice: 100000 }]
           return []
         }
-        if (method === 'getGlobalConfig') return { nominalPowerAvailability_MW: 10, phaseNominals: { phase1: { nominalPower_MW: 8 }, phase1_5: { nominalPower_MW: 1.2 } } }
+        if (method === 'getGlobalConfig') {
+          return {
+            nominalPowerAvailability_MW: 10,
+            phaseNominals: { phase1: { nominalPower_MW: 8 }, phase1_5: { nominalPower_MW: 1.2 } },
+            capexUsd: 1000,
+            phaseCapexUsd: { phase1_5: 400 }
+          }
+        }
         return {}
       }
     },
@@ -1900,18 +1908,26 @@ test('resolveCapex - splits capex along the phase build-outs', (t) => {
     { id: 'phase1_5', consumption: { source: 'manual' } }
   ]
   const ctx = { conf: { featureConfig: { phases } } }
-  const params = { capexUsd: 1000, phases: { phase1_5: { capexUsd: 400 } } }
+  const params = [{ capexUsd: 1000, phaseCapexUsd: { phase1_5: 400 } }]
 
   t.alike(resolveCapex(ctx, null, params), { capexUsd: 1400, capexMissingPhases: [] }, 'site sums both')
   t.alike(resolveCapex(ctx, phases[0], params), { capexUsd: 1000, capexMissingPhases: [] }, 'phase 1 keeps the existing capex')
   t.alike(resolveCapex(ctx, phases[1], params), { capexUsd: 400, capexMissingPhases: [] }, 'phase 1.5 has its own')
 
-  const pending = { capexUsd: 1000 }
+  const pending = [{ capexUsd: 1000 }]
   t.alike(resolveCapex(ctx, null, pending), { capexUsd: 1000, capexMissingPhases: ['phase1_5'] }, 'a pending phase is flagged, not zeroed')
   t.alike(resolveCapex(ctx, phases[1], pending), { capexUsd: null, capexMissingPhases: ['phase1_5'] }, 'phase 1.5 has no capex yet')
-  t.alike(resolveCapex(ctx, phases[0], {}), { capexUsd: null, capexMissingPhases: [] })
+  t.alike(resolveCapex(ctx, phases[0], []), { capexUsd: null, capexMissingPhases: [] })
 
-  t.alike(resolveCapex({ conf: {} }, null, { capexUsd: 1000 }), { capexUsd: 1000, capexMissingPhases: [] }, 'sites without phases are unchanged')
+  t.alike(resolveCapex({ conf: {} }, null, [{ capexUsd: 1000 }]), { capexUsd: 1000, capexMissingPhases: [] }, 'sites without phases are unchanged')
+})
+
+test('resolveCapex - reads the first ork that carries capex', (t) => {
+  const ctx = { conf: {} }
+  const results = [{ error: 'ERR_TIMEOUT' }, [{ nominalAvailablePowerMWh: 22.5 }], [{ capexUsd: 1000 }], { capexUsd: 5 }]
+
+  t.alike(resolveCapex(ctx, null, results), { capexUsd: 1000, capexMissingPhases: [] }, 'skips errors and orks without capex')
+  t.alike(resolveCapex(ctx, null, undefined), { capexUsd: null, capexMissingPhases: [] }, 'no global config is null, not zero')
 })
 
 test('getCostParameters - returns an empty object without globalDataLib', async (t) => {
