@@ -12,6 +12,7 @@ const {
   ENDPOINTS
 } = require('../../constants')
 const { clearCachedRoute } = require('../lib/cachedRoute')
+const { clearPhaseHourlyCache } = require('../lib/phaseConsumptionCache')
 const { isCentralDCSEnabled, getDCSTag } = require('../../dcs.utils')
 const { getIntervalConfig, parseEntryTs, assertTimezone } = require('../../metrics.utils')
 const { isLocalHourStart } = require('../../period.utils')
@@ -248,6 +249,7 @@ const saveEnergyConsumption = async (ctx, req) => {
   if (!written) throw new Error('ERR_CONSUMPTION_SAVE_FAILED')
 
   clearCachedRoute(ctx, ENDPOINTS.METRICS_CONSUMPTION, 'metrics/consumption')
+  clearPhaseHourlyCache()
 
   return { success: true, upserted: entries.length }
 }

@@ -83,6 +83,7 @@ function rollupLocalDaysMean (log, timezone, field) {
 
 async function getDailySeries (ctx, start, end, handler, field, timezone, refresh = false, cacheTag = '') {
   const cache = getDailySeriesCache(ctx)
+  const inflight = (ctx._dailySeriesInflight ??= new Map())
   const now = Date.now()
   const months = localMonthsInRange(start, end, timezone)
   // A month that has ended can be answered from cache, but only a month the request
@@ -93,47 +94,97 @@ async function getDailySeries (ctx, start, end, handler, field, timezone, refres
 
   const byDay = {}
   const missing = []
+  const waits = []
 
   for (const month of months) {
+    const key = dailySeriesCacheKey(month.key, timezone, field + cacheTag)
     // refresh skips the read so a backfilled month is recomputed, but the fresh
-    // rollup is still stored below and serves every later request.
-    const cached = ended(month) && !refresh
-      ? cache.get(dailySeriesCacheKey(month.key, timezone, field + cacheTag), now)
-      : undefined
-    if (cached) Object.assign(byDay, cached)
-    else missing.push(month)
+    // rollup is still stored below and serves every later request. It also skips
+    // the in-flight reuse: a refresh caller is promised exactly one handler call
+    // over its whole span (getRevenueSummary's coverage tracking counts on it).
+    const cached = ended(month) && !refresh ? cache.get(key, now) : undefined
+    if (cached) {
+      Object.assign(byDay, cached)
+      continue
+    }
+
+    // A whole month another request is already rolling up is awaited rather than
+    // recomputed: one financials tab fires several overlapping windows at once,
+    // and each used to re-scan the same cold months.
+    const pending = !refresh && cacheable(month) ? inflight.get(key) : undefined
+    if (pending) {
+      waits.push(pending.then((monthDays) => Object.assign(byDay, monthDays)))
+      continue
+    }
+
+    missing.push(month)
   }
 
   if (missing.length) {
     // One query over the span the misses cover, clamped to what was actually asked for -
-    // the first and last month of a range are usually partial.
+    // the first and last month of a range are usually partial. Each cacheable month in
+    // it is published to concurrent callers before the fetch, settled from its slice of
+    // the result below.
+    const deferred = new Map()
+    for (const month of missing) {
+      if (!cacheable(month)) continue
+      const key = dailySeriesCacheKey(month.key, timezone, field + cacheTag)
+      const entry = { key }
+      entry.promise = new Promise((resolve, reject) => {
+        entry.resolve = resolve
+        entry.reject = reject
+      })
+      // A failure is rethrown to this caller either way; without a second caller
+      // listening, the rejected deferred must not surface as unhandled.
+      entry.promise.catch(() => {})
+      inflight.set(key, entry.promise)
+      deferred.set(month.key, entry)
+    }
+
     const span = {
       start: Math.max(start, missing[0].start),
       end: Math.min(end, missing[missing.length - 1].end)
     }
-    // A window ending exactly on a month boundary leaves a zero-width edge month; the
-    // handlers reject start >= end, and there is nothing in it to fetch anyway.
-    const { log } = span.end > span.start
-      ? await handler(ctx, { query: { start: span.start, end: span.end, interval: '1h' } })
-      : { log: [] }
+    // A window ending exactly on a month boundary leaves a zero-width edge month once
+    // the earlier months are answered from cache or a concurrent caller; the handlers
+    // reject start >= end, and stepping back one millisecond cannot add an hour bucket,
+    // so the boundary hour stays in the series exactly as a cold full-span fetch has it.
+    if (span.end === span.start) span.start -= 1
 
-    const byMonthLog = new Map()
-    for (const entry of log) {
-      if (!entry || typeof entry.ts !== 'number') continue
-      const monthKey = localMonthKey(entry.ts, timezone)
-      const monthLog = byMonthLog.get(monthKey) ?? []
-      monthLog.push(entry)
-      byMonthLog.set(monthKey, monthLog)
-    }
+    try {
+      const { log } = await handler(ctx, { query: { start: span.start, end: span.end, interval: '1h' } })
 
-    for (const month of missing) {
-      const monthDays = rollupLocalDaysMean(byMonthLog.get(month.key) ?? [], timezone, field)
-      Object.assign(byDay, monthDays)
-      if (cacheable(month)) {
-        cache.set(dailySeriesCacheKey(month.key, timezone, field + cacheTag), monthDays, now)
+      const byMonthLog = new Map()
+      for (const entry of log) {
+        if (!entry || typeof entry.ts !== 'number') continue
+        const monthKey = localMonthKey(entry.ts, timezone)
+        const monthLog = byMonthLog.get(monthKey) ?? []
+        monthLog.push(entry)
+        byMonthLog.set(monthKey, monthLog)
       }
+
+      for (const month of missing) {
+        const monthDays = rollupLocalDaysMean(byMonthLog.get(month.key) ?? [], timezone, field)
+        Object.assign(byDay, monthDays)
+        const entry = deferred.get(month.key)
+        if (entry) {
+          cache.set(entry.key, monthDays, now)
+          // A concurrent refresh may have replaced the published promise with its
+          // own; only this caller's own entry is retired.
+          if (inflight.get(entry.key) === entry.promise) inflight.delete(entry.key)
+          entry.resolve(monthDays)
+        }
+      }
+    } catch (err) {
+      for (const entry of deferred.values()) {
+        if (inflight.get(entry.key) === entry.promise) inflight.delete(entry.key)
+        entry.reject(err)
+      }
+      throw err
     }
   }
+
+  await Promise.all(waits)
 
   // A cached month is whole, so clamp to the local days [start, end] touches.
   const firstDay = localDayStart(start, timezone)
