@@ -2,7 +2,7 @@
 
 const test = require('brittle')
 const LRU = require('lru')
-const { cachedRoute, sweepExpired } = require('../../../workers/lib/server/lib/cachedRoute')
+const { cachedRoute, clearCachedRoute, sweepExpired } = require('../../../workers/lib/server/lib/cachedRoute')
 
 test('cachedRoute - returns cached value', async (t) => {
   const cachedValue = { data: 'cached' }
@@ -270,4 +270,28 @@ test('sweepExpired - evicts entries past maxAge and keeps live ones', async (t) 
 test('sweepExpired - tolerates a stopped facility', (t) => {
   t.is(sweepExpired({}), 0)
   t.is(sweepExpired(undefined), 0)
+})
+
+test('clearCachedRoute - removes every key of the route in its bucket and nothing else', (t) => {
+  const cache = new LRU({ max: 100 })
+  cache.set('metrics/consumption:phase-1:1:2:-:-:-:-', 1)
+  cache.set('metrics/consumption:-:3:4:1h:-:-:-', 2)
+  cache.set('metrics/consumption-other:x', 3)
+  cache.set('metrics/efficiency:phase-1', 4)
+  const ctx = { conf: { cacheTiming: {} }, lru_30s: { cache } }
+
+  const removed = clearCachedRoute(ctx, '/auth/metrics/consumption', 'metrics/consumption')
+
+  t.is(removed, 2)
+  t.alike(cache.keys.sort(), ['metrics/consumption-other:x', 'metrics/efficiency:phase-1'])
+})
+
+test('clearCachedRoute - uses the configured bucket and tolerates a missing one', (t) => {
+  const cache = new LRU({ max: 100 })
+  cache.set('route:a', 1)
+  const ctx = { conf: { cacheTiming: { '/route': '1m' } }, lru_1m: { cache } }
+
+  t.is(clearCachedRoute(ctx, '/route', 'route'), 1)
+  t.is(cache.keys.length, 0)
+  t.is(clearCachedRoute({ conf: { cacheTiming: {} } }, '/route', 'route'), 0, 'no bucket, no throw')
 })

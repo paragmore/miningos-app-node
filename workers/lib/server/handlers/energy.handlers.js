@@ -8,8 +8,10 @@ const {
   LOG_FIELDS,
   AGGR_FIELDS,
   HISTORICAL_LOG_TYPES,
-  LOCKED_TIMEZONE_DEFAULT
+  LOCKED_TIMEZONE_DEFAULT,
+  ENDPOINTS
 } = require('../../constants')
+const { clearCachedRoute } = require('../lib/cachedRoute')
 const { isCentralDCSEnabled, getDCSTag } = require('../../dcs.utils')
 const { getIntervalConfig, parseEntryTs, assertTimezone } = require('../../metrics.utils')
 const { isLocalHourStart } = require('../../period.utils')
@@ -216,7 +218,8 @@ const getEnergyConsumption = async (ctx, req) => {
 // it passes (zeros included) and null clears one (it reads back as null), so a partial entry never wipes
 // the rest of the hour. Validated here first: the ork drops rack errors (a rejected
 // write comes back as an empty result), so success is only reported when a rack
-// confirms the write.
+// confirms the write. The consumption metrics read the manual phase groups from this
+// log, so their cached responses are dropped once the write lands.
 const saveEnergyConsumption = async (ctx, req) => {
   const { entries } = req.body
   const timezone = getSiteTimezone(ctx)
@@ -243,6 +246,8 @@ const saveEnergyConsumption = async (ctx, req) => {
     if (Array.isArray(orkResult) && orkResult.some(r => r?.upserted === entries.length)) written = true
   }
   if (!written) throw new Error('ERR_CONSUMPTION_SAVE_FAILED')
+
+  clearCachedRoute(ctx, ENDPOINTS.METRICS_CONSUMPTION, 'metrics/consumption')
 
   return { success: true, upserted: entries.length }
 }

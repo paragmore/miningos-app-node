@@ -1827,7 +1827,7 @@ test('getRevenueSummary - phase costs and capex follow the phase build-out', asy
     {
       id: 'phase1',
       minerTelemetry: true,
-      consumption: { source: 'remainder', meterKey: 'ccm' },
+      consumption: { source: 'remainder', meterKey: 'site-pm' },
       pool: { accounts: [{ poolType: 'ocean', username: 'site-addr' }] }
     },
     {
@@ -1851,7 +1851,7 @@ test('getRevenueSummary - phase costs and capex follow the phase build-out', asy
           return Array.from({ length: 24 }, (_, h) => ({ ts: dayTs + h * 3600000, totalConsumptionMWh: 0.6 }))
         }
         if (method === 'tailLog') {
-          return [{ ts: dayTs, site_power_w: 10_000_000, by_meter_power_w: { ccm: 10_000_000 }, hashrate_mhs_5m_sum_aggr: 1e9 }]
+          return [{ ts: dayTs, site_power_w: 10_000_000, by_meter_power_w: { 'site-pm': 10_000_000 }, hashrate_mhs_5m_sum_aggr: 1e9 }]
         }
         if (method === 'getWrkExtData') {
           const key = payload.query && payload.query.key
@@ -1904,7 +1904,7 @@ test('getRevenueSummary - phase costs and capex follow the phase build-out', asy
 
 test('resolveCapex - splits capex along the phase build-outs', (t) => {
   const phases = [
-    { id: 'phase1', consumption: { source: 'remainder', meterKey: 'ccm' } },
+    { id: 'phase1', consumption: { source: 'remainder', meterKey: 'site-pm' } },
     { id: 'phase1_5', consumption: { source: 'manual' } }
   ]
   const ctx = { conf: { featureConfig: { phases } } }

@@ -5974,7 +5974,7 @@ test('getPoolHashrate - phase filters stats to the phase accounts', async (t) =>
 const PHASE_DCS_FEATURE = {
   ...PHASES_FEATURE,
   centralDCSSetup: { enabled: true },
-  phases: PHASES_FEATURE.phases.map(p => p.id === 'phase1' ? { ...p, consumption: { source: 'remainder', meterKey: 'CCM' } } : p)
+  phases: PHASES_FEATURE.phases.map(p => p.id === 'phase1' ? { ...p, consumption: { source: 'remainder', meterKey: 'Site-PM' } } : p)
 }
 
 // Serves the DCS meter rollup and the manual consumption log for the phase tests.
@@ -6001,13 +6001,13 @@ test('getEfficiency - pool-only phase divides its manual consumption by its pool
   t.is(res.summary.missingHours, 0)
 })
 
-test('getEfficiency - telemetry phase divides ccm minus manual by the fleet hashrate', async (t) => {
+test('getEfficiency - telemetry phase divides site PM minus manual by the fleet hashrate', async (t) => {
   const H = PHASE_HOUR_MS
   const ctx = phaseConsumptionCtx({
     meter: [
-      { ts: PHASE_START, by_meter_power_w: { ccm: 5000000, 'site-pm': 9000000 } },
-      { ts: PHASE_START + H, by_meter_power_w: { ccm: 4000000 } },
-      { ts: PHASE_START + 2 * H, by_meter_power_w: { ccm: 4000000 } }
+      { ts: PHASE_START, by_meter_power_w: { ccm: 9000000, 'site-pm': 5000000 } },
+      { ts: PHASE_START + H, by_meter_power_w: { 'site-pm': 4000000 } },
+      { ts: PHASE_START + 2 * H, by_meter_power_w: { 'site-pm': 4000000 } }
     ],
     manual: [
       { ts: PHASE_START, totalConsumptionMWh: 1 },
@@ -6023,7 +6023,7 @@ test('getEfficiency - telemetry phase divides ccm minus manual by the fleet hash
   const query = { start: PHASE_START, end: PHASE_START + 3 * H - 1, phase: 'phase1' }
 
   const hourly = await getEfficiency(ctx, { query: { ...query, interval: '1h' } })
-  t.alike(hourly.log.map(e => e.efficiencyWThs), [4000000 / 100, 3000000 / 200], '(ccm - manual) W over fleet TH/s')
+  t.alike(hourly.log.map(e => e.efficiencyWThs), [4000000 / 100, 3000000 / 200], '(site PM - manual) W over fleet TH/s')
   t.is(hourly.summary.missingHours, 1, 'the hour without hashrate is surfaced')
 
   const daily = await getEfficiency(ctx, { query: { ...query, interval: '1d' } })
@@ -6086,8 +6086,8 @@ test('getConsumption - manual phase reads the logged hours and rolls them up', a
 test('getConsumption - remainder phase is its meter minus the manual hours', async (t) => {
   const ctx = phaseConsumptionCtx({
     meter: [
-      { ts: PHASE_START, by_meter_power_w: { ccm: 5000000, 'site-pm': 9000000 } },
-      { ts: PHASE_START + PHASE_HOUR_MS, by_meter_power_w: { ccm: 4000000 } }
+      { ts: PHASE_START, by_meter_power_w: { ccm: 9000000, 'site-pm': 5000000 } },
+      { ts: PHASE_START + PHASE_HOUR_MS, by_meter_power_w: { 'site-pm': 4000000 } }
     ],
     manual: [
       { ts: PHASE_START, totalConsumptionMWh: 1.5 },
@@ -6099,15 +6099,15 @@ test('getConsumption - remainder phase is its meter minus the manual hours', asy
     query: { start: PHASE_START, end: PHASE_START + 2 * PHASE_HOUR_MS - 1, interval: '1h', phase: 'phase1' }
   })
 
-  t.alike(res.log.map(e => e.consumptionMWh), [3.5, 3], 'configured CCM matches the ccm meter key')
+  t.alike(res.log.map(e => e.consumptionMWh), [3.5, 3], 'configured Site-PM matches the site-pm meter key, not ccm')
   t.is(res.summary.totalConsumptionMWh, 6.5)
 })
 
 test('getConsumption - an hour without a manual entry is missing, not zero', async (t) => {
   const ctx = phaseConsumptionCtx({
     meter: [
-      { ts: PHASE_START, by_meter_power_w: { ccm: 5000000 } },
-      { ts: PHASE_START + PHASE_HOUR_MS, by_meter_power_w: { ccm: 5000000 } }
+      { ts: PHASE_START, by_meter_power_w: { 'site-pm': 5000000 } },
+      { ts: PHASE_START + PHASE_HOUR_MS, by_meter_power_w: { 'site-pm': 5000000 } }
     ],
     manual: [
       { ts: PHASE_START, totalConsumptionMWh: 1 },
