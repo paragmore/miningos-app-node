@@ -302,7 +302,7 @@ test('getDailySeries - caches a completed month on ctx and does not refetch it',
   })
 
   const start = Date.UTC(2024, 0, 1)
-  const end = Date.UTC(2024, 1, 1)
+  const end = Date.UTC(2024, 1, 1) - 1
   const first = await getDailySeries(mockCtx, start, end, getConsumption, 'powerW', 'UTC')
   const second = await getDailySeries(mockCtx, start, end, getConsumption, 'powerW', 'UTC')
 
@@ -329,7 +329,7 @@ test('getDailySeries - refresh skips the cached month and stores the fresh rollu
   })
 
   const start = Date.UTC(2024, 0, 1)
-  const end = Date.UTC(2024, 1, 1)
+  const end = Date.UTC(2024, 1, 1) - 1
   const dayTs = Date.UTC(2024, 0, 15)
   await getDailySeries(mockCtx, start, end, getConsumption, 'powerW', 'UTC')
   powerW = 3000000 // a backfill lands after the month was cached
@@ -388,6 +388,97 @@ test('getDailySeries - a different ctx gets its own cache (no cross-request leak
   const ctxB = await getDailySeries(buildCtx(9000000), start, end, getConsumption, 'powerW', 'UTC')
 
   t.not(Object.values(ctxA)[0], Object.values(ctxB)[0], 'a fresh ctx is not served the other ctx\'s cached data')
+  t.pass()
+})
+
+test('getDailySeries - a window ending exactly on a month boundary keeps its last hour, warm or cold', async (t) => {
+  const ctx = {}
+  const spans = []
+  const feb1 = Date.UTC(2024, 1, 1)
+  // hour buckets on the grid only, including the one stamped at the boundary itself
+  const handler = async (c, req) => {
+    spans.push([req.query.start, req.query.end])
+    const log = []
+    for (let ts = Math.ceil(req.query.start / 3600000) * 3600000; ts <= req.query.end; ts += 3600000) {
+      log.push({ ts, powerW: 7 })
+    }
+    return { log }
+  }
+  const jan1 = Date.UTC(2024, 0, 1)
+
+  const cold = await getDailySeries(ctx, jan1, feb1, handler, 'powerW', 'UTC')
+  const warm = await getDailySeries(ctx, jan1, feb1, handler, 'powerW', 'UTC')
+
+  t.is(cold[feb1], 7, 'the boundary hour is a (one-hour) Feb 1 day, as a single-pass fetch reports it')
+  t.alike(warm, cold, 'the warm request answers identically instead of dropping the edge or rejecting it')
+  t.alike(spans[1], [feb1 - 1, feb1], 'only the uncacheable boundary sliver is refetched')
+  t.pass()
+})
+
+test('getDailySeries - concurrent overlapping windows compute each cold month once', async (t) => {
+  const ctx = {}
+  const spans = []
+  const inner = hourlyJanuaryHandler()
+  const handler = async (c, req) => {
+    spans.push([req.query.start, req.query.end])
+    return inner(c, req)
+  }
+  const jan1 = Date.UTC(2024, 0, 1)
+  const feb1 = Date.UTC(2024, 1, 1)
+
+  // The financials tab fires several windows over the same months at once.
+  const [a, b] = await Promise.all([
+    getDailySeries(ctx, jan1, feb1 - 1, handler, 'powerW', 'UTC'),
+    getDailySeries(ctx, jan1, feb1 - 1, handler, 'powerW', 'UTC')
+  ])
+
+  t.is(spans.length, 1, 'the second caller awaits the in-flight month instead of refetching')
+  t.alike(b, a, 'and receives the same rollup')
+  t.pass()
+})
+
+test('getDailySeries - a concurrent refresh still makes its own handler call', async (t) => {
+  const ctx = {}
+  let calls = 0
+  const inner = hourlyJanuaryHandler()
+  const handler = async (c, req) => {
+    calls++
+    return inner(c, req)
+  }
+  const jan1 = Date.UTC(2024, 0, 1)
+  const feb1 = Date.UTC(2024, 1, 1)
+
+  // getRevenueSummary's phase coverage counts on refresh making exactly one
+  // handler call over the whole span, so it must never ride another request.
+  await Promise.all([
+    getDailySeries(ctx, jan1, feb1 - 1, handler, 'powerW', 'UTC', true),
+    getDailySeries(ctx, jan1, feb1 - 1, handler, 'powerW', 'UTC', true)
+  ])
+
+  t.is(calls, 2, 'each refresh caller scans for itself')
+  t.pass()
+})
+
+test('getDailySeries - a failed fetch rejects the waiters and is retried next request', async (t) => {
+  const ctx = {}
+  let calls = 0
+  const inner = hourlyJanuaryHandler()
+  const handler = async (c, req) => {
+    calls++
+    if (calls === 1) throw new Error('ERR_STORE_DOWN')
+    return inner(c, req)
+  }
+  const jan1 = Date.UTC(2024, 0, 1)
+  const feb1 = Date.UTC(2024, 1, 1)
+
+  const results = await Promise.allSettled([
+    getDailySeries(ctx, jan1, feb1 - 1, handler, 'powerW', 'UTC'),
+    getDailySeries(ctx, jan1, feb1 - 1, handler, 'powerW', 'UTC')
+  ])
+
+  t.alike(results.map(r => r.status), ['rejected', 'rejected'], 'the waiter fails with the fetcher, not silently empty')
+  const after = await getDailySeries(ctx, jan1, feb1 - 1, handler, 'powerW', 'UTC')
+  t.is(Object.keys(after).length, 31, 'the failed month is not poisoned: the next request fetches it')
   t.pass()
 })
 

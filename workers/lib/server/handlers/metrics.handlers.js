@@ -55,6 +55,7 @@ const {
 const { parseRacks } = require('../lib/queryUtils')
 const { assertTimezone } = require('../lib/export/mappers')
 const { createMonthlyHashesCache } = require('../lib/monthlyHashesCache')
+const { phaseHourlyCache, phaseHourlyCacheKey, phaseHourlyGeneration } = require('../lib/phaseConsumptionCache')
 const lPhases = require('../../phases.utils')
 const { resolvePoolHashrateForBuckets } = require('./pools.handlers')
 const { getEnergyConsumption } = require('./energy.handlers')
@@ -119,6 +120,7 @@ function pageHashrate (req, { log, summary }) {
 }
 
 const monthlyHashesCache = createMonthlyHashesCache()
+const dailyHashesCache = createMonthlyHashesCache()
 
 // A calendar month is rolled up from hourly buckets, so it is only offered for the
 // series that HAS hourly buckets: the site-wide one, optionally scoped to a container.
@@ -128,12 +130,20 @@ function wantsMonthlyRollup (req) {
   return req.query.interval === '1M' && !req.query.groupBy && !hasRackFilter(req)
 }
 
+// Local days are rolled up from hourly buckets exactly like calendar months, so whole
+// months of day rows are reusable the same way - and only for the same ungrouped series.
+function wantsDailyRollup (req) {
+  return req.query.interval === '1d' && !req.query.groupBy && !hasRackFilter(req)
+}
+
 async function getHashrate (ctx, req) {
   const phase = lPhases.resolvePhase(ctx, req)
 
   // '1M' means a calendar-month rollup, as it already does for consumption - not the
   // store's rolling-30-day bucket that getIntervalConfig would hand back for it.
   if (wantsMonthlyRollup(req)) return getMonthlyHashrate(ctx, req, phase)
+
+  if (wantsDailyRollup(req)) return pageHashrate(req, await getDailyHashrate(ctx, req, phase))
 
   return pageHashrate(req, await resolveHashrate(ctx, req, phase))
 }
@@ -193,6 +203,10 @@ async function getMonthlyHashrate (ctx, req, phase = null) {
       start: Math.max(start, missing[0].start),
       end: Math.min(end, missing[missing.length - 1].end)
     }
+    // A window ending exactly on a month boundary leaves a zero-width edge month
+    // once the earlier months are answered from cache; validateStartEnd rejects
+    // it, and stepping back one millisecond cannot add a bucket.
+    if (span.end === span.start) span.start -= 1
     const { log } = await resolveHashrate(ctx, {
       ...req,
       query: { ...req.query, ...span, interval: '1h' }
@@ -225,6 +239,100 @@ async function getMonthlyHashrate (ctx, req, phase = null) {
   }
 
   return { log, totalCount: log.length, summary }
+}
+
+/**
+ * The '1d' series, served month by month from cache: a year of local days is
+ * otherwise rebuilt from ~8,760 hourly buckets (plus a year of pool samples
+ * when `pool` is on) on every request. A month that has ended cannot gain
+ * days, so its rows are reused and only the partial edge months and the
+ * running month are recomputed; the TTL repays late-arriving samples the same
+ * way the calendar-month rollup's cache does.
+ */
+async function getDailyHashrate (ctx, req, phase = null) {
+  const { start, end } = validateStartEnd(req)
+  const timezone = resolveTimezone(ctx, req)
+  const now = Date.now()
+  const flags = {
+    nominal: req.query.nominal === true || req.query.nominal === 'true',
+    siteNominal: req.query.siteNominal === true || req.query.siteNominal === 'true',
+    pool: req.query.pool === true || req.query.pool === 'true',
+    container: req.query.container || null,
+    phase: phase?.id || null
+  }
+
+  const months = localMonthsInRange(start, end, timezone)
+  // Only a month the request covers end to end holds whole days: a partial edge
+  // month's first and last rows are clamped to the request, so it must neither be
+  // stored nor answered from cache. The running month still gains days either way.
+  const cacheable = (month) => month.end < now && month.start >= start && month.end <= end
+  const refresh = !!req.query.overwriteCache
+  const rows = new Map()
+  const missing = []
+
+  for (const month of months) {
+    const cached = cacheable(month) && !refresh
+      ? dailyHashesCache.get(dailyHashesCache.key(month.key, timezone, flags), now)
+      : undefined
+
+    if (cached !== undefined) rows.set(month.key, cached)
+    else missing.push(month)
+  }
+
+  if (missing.length) {
+    // One query over the span the misses cover, clamped to what was actually asked
+    // for: the first and last month of a range are usually partial. `current` stays
+    // out of the sub-request - it belongs to the response summary, computed below.
+    const span = {
+      start: Math.max(start, missing[0].start),
+      end: Math.min(end, missing[missing.length - 1].end)
+    }
+    // A window ending exactly on a month boundary leaves a zero-width edge month
+    // once the earlier months are answered from cache; validateStartEnd rejects
+    // it, and stepping back one millisecond cannot add a bucket.
+    if (span.end === span.start) span.start -= 1
+    const { log } = await resolveHashrate(ctx, {
+      ...req,
+      query: { ...req.query, ...span, current: undefined }
+    }, phase)
+
+    // Grouped apart and then set wholesale: the span can cross a month that WAS
+    // answered from cache (misses are not always contiguous), and appending into
+    // that cached array would both duplicate its rows and corrupt the cache entry.
+    const fresh = new Map()
+    for (const entry of log) {
+      const monthKey = localMonthKey(entry.ts, timezone)
+      const monthRows = fresh.get(monthKey) ?? []
+      monthRows.push(entry)
+      fresh.set(monthKey, monthRows)
+    }
+    for (const [monthKey, monthRows] of fresh) rows.set(monthKey, monthRows)
+
+    // A completed month with no reported days is cached as an empty list, not
+    // skipped: leaving it out would keep it permanently missing and the query
+    // span would stretch back over it on every request.
+    for (const month of missing) {
+      if (!cacheable(month)) continue
+
+      const key = dailyHashesCache.key(month.key, timezone, flags)
+      dailyHashesCache.set(key, rows.get(month.key) ?? [], now)
+    }
+  }
+
+  const log = months.flatMap((month) => rows.get(month.key) ?? [])
+  // A pool-only phase without a configured nominal omits the nominal fields
+  // rather than reporting them as zero, exactly as resolvePoolOnlyHashrate does.
+  const withNominal = flags.nominal && (lPhases.hasMinerTelemetry(phase) ||
+    Number.isFinite(await resolvePhaseNominalHashrate(ctx, phase)))
+  const summary = calculateHashrateSummary(log, withNominal)
+
+  if (flags.pool) summary.avgPoolHashrateMhs = calculateAvgPoolHashrate(log)
+
+  if (req.query.current && lPhases.hasMinerTelemetry(phase)) {
+    summary.currentHashrateMhs = await getCurrentHashrate(ctx, hashrateAggrField(flags.container), flags.container)
+  }
+
+  return { log, summary }
 }
 
 async function resolveHashrate (ctx, req, phase = null) {
@@ -865,37 +973,150 @@ async function fetchMeterPowerByHour (ctx, req, meterKey) {
  * manually logged load is fed through that meter. An elapsed hour missing any
  * input is left out of the series and counted in summary.missingHours rather
  * than read as zero.
+ *
+ * The hourly rows are served month by month from a cache: revenue-summary and
+ * the efficiency views rebuild this series over their whole window on every
+ * request, which would price each call at a full meter scan plus the manual
+ * log. A month that has ended holds only elapsed hours, so its rows are
+ * complete; manual entries arriving later drop the cache from the write path
+ * (energy.handlers), and store-side backfills are repaid by the TTL.
  */
 async function getPhaseConsumption (ctx, req, phase, bucketing) {
   const { source, meterKey } = lPhases.getPhaseConsumptionSource(phase)
   const { start, end } = bucketing
   if (!isCentralDCSEnabled(ctx)) throw new Error('ERR_PHASE_CONSUMPTION_REQUIRES_CENTRAL_DCS')
 
-  const [manualByHour, meterByHour] = await Promise.all([
-    fetchManualConsumptionByHour(ctx, start, end),
-    source === lPhases.CONSUMPTION_SOURCES.REMAINDER ? fetchMeterPowerByHour(ctx, req, meterKey) : null
-  ])
+  const byHour = await resolvePhaseHourlyRows(ctx, req, phase, { source, meterKey }, start, end)
 
   const hourly = []
   let missingHours = 0
   for (const ts of lPhases.elapsedHourStarts(start, end)) {
-    const manualMWh = manualByHour.get(ts)
-    const meterW = meterByHour ? meterByHour.get(ts) : 0
-    if (manualMWh === undefined || meterW === undefined) {
+    const row = byHour.get(ts)
+    if (!row) {
       missingHours++
       continue
     }
+    hourly.push(row)
+  }
+
+  const log = isLocalInterval(bucketing.interval) ? rollupLocalConsumption(hourly, bucketing) : hourly
+  return { log, summary: { ...calculateConsumptionSummary(log), missingHours } }
+}
+
+// One span of the phase's hourly rows, straight from the sources: the hours of
+// [start, end] that have elapsed and carry every input they need (see
+// getPhaseConsumption). Hours missing an input are simply absent.
+async function fetchPhaseHourlyRows (ctx, req, { source, meterKey }, start, end) {
+  const spanReq = { ...req, query: { ...req.query, start, end } }
+  const [manualByHour, meterByHour] = await Promise.all([
+    fetchManualConsumptionByHour(ctx, start, end),
+    source === lPhases.CONSUMPTION_SOURCES.REMAINDER ? fetchMeterPowerByHour(ctx, spanReq, meterKey) : null
+  ])
+
+  const rows = []
+  for (const ts of lPhases.elapsedHourStarts(start, end)) {
+    const manualMWh = manualByHour.get(ts)
+    const meterW = meterByHour ? meterByHour.get(ts) : 0
+    if (manualMWh === undefined || meterW === undefined) continue
     const consumptionMWh = meterByHour ? meterW / 1000000 - manualMWh : manualMWh
-    hourly.push({
+    rows.push({
       ts,
       timeRange: { startTs: ts, endTs: ts + HOUR_MS - 1 },
       powerW: consumptionMWh * 1000000,
       consumptionMWh
     })
   }
+  return rows
+}
 
-  const log = isLocalInterval(bucketing.interval) ? rollupLocalConsumption(hourly, bucketing) : hourly
-  return { log, summary: { ...calculateConsumptionSummary(log), missingHours } }
+// Months in list order split into runs of adjacent months, so a cold year is
+// fetched as one span instead of twelve.
+function contiguousMonthRuns (items) {
+  const runs = []
+  for (const item of items) {
+    const run = runs[runs.length - 1]
+    if (run && run[run.length - 1].month.end + 1 === item.month.start) run.push(item)
+    else runs.push([item])
+  }
+  return runs
+}
+
+/**
+ * The phase's hourly rows over [start, end], keyed by hour start - cached month
+ * by month. Months are cut on UTC purely to partition the cache: hourly rows
+ * slice cleanly at any whole hour, so the request's own zone never matters here
+ * and a partially covered cached month can still be answered (extra hours are
+ * ignored by the caller's elapsed-hours walk). Only a fully covered, ended
+ * month is fetched as a cacheable whole; the edges and the running month are
+ * fetched per request. Concurrent requests share one fetch per month: the
+ * Project Financials tab fires three revenue summaries at once, and each used
+ * to rebuild the same year three times over.
+ */
+async function resolvePhaseHourlyRows (ctx, req, phase, sourceCfg, start, end) {
+  const inflight = (ctx._phaseHourlyInflight ??= new Map())
+  const now = Date.now()
+  const refresh = !!req.query.overwriteCache
+  const byHour = new Map()
+  const addRows = (rows) => { for (const row of rows) byHour.set(row.ts, row) }
+  const waits = []
+  const toFetch = []
+
+  for (const month of localMonthsInRange(start, end, 'UTC')) {
+    const ended = month.end < now
+    const key = phaseHourlyCacheKey(month.key, phase.id, sourceCfg.source, sourceCfg.meterKey)
+
+    const cached = ended && !refresh ? phaseHourlyCache.get(key, now) : undefined
+    if (cached !== undefined) {
+      addRows(cached)
+      continue
+    }
+
+    if (ended && month.start >= start && month.end <= end) {
+      // An in-flight fetch from before a manual write may predate it; a request
+      // arriving after the write must read fresh instead of riding it.
+      const pending = inflight.get(key)
+      if (pending && pending.generation === phaseHourlyGeneration()) waits.push(pending.promise.then(addRows))
+      else toFetch.push({ month, key })
+      continue
+    }
+
+    // A partial edge month or the running month: its slice is this request's
+    // own, so it is neither shared nor stored. A window ending exactly on a
+    // month boundary leaves a zero-width edge month the sources would reject;
+    // stepping back one millisecond cannot add an hour bucket, so the rows are
+    // the ones the single-pass fetch always returned for that instant.
+    const span = { start: Math.max(start, month.start), end: Math.min(end, month.end) }
+    if (span.end === span.start) span.start -= 1
+    waits.push(fetchPhaseHourlyRows(ctx, req, sourceCfg, span.start, span.end).then(addRows))
+  }
+
+  // Each run of adjacent misses is one query over their whole span, but every
+  // month is published and stored on its own, so concurrent windows that only
+  // overlap part of the run still share it.
+  for (const run of contiguousMonthRuns(toFetch)) {
+    // A clear while this fetch is in flight means a write landed that these rows
+    // may predate: they still answer this request, but must not be re-stored
+    // over the invalidation.
+    const generation = phaseHourlyGeneration()
+    const fetched = fetchPhaseHourlyRows(ctx, req, sourceCfg, run[0].month.start, run[run.length - 1].month.end)
+
+    for (const { month, key } of run) {
+      const promise = fetched
+        .then((rows) => {
+          const monthRows = rows.filter((row) => row.ts >= month.start && row.ts <= month.end)
+          if (phaseHourlyGeneration() === generation) phaseHourlyCache.set(key, monthRows, now)
+          return monthRows
+        })
+      const entry = { generation, promise }
+      // A post-write fetch may have replaced a stale entry; only this one is retired.
+      promise.finally(() => { if (inflight.get(key) === entry) inflight.delete(key) }).catch(() => {})
+      inflight.set(key, entry)
+      waits.push(promise.then(addRows))
+    }
+  }
+
+  await Promise.all(waits)
+  return byHour
 }
 
 // by_meter_power_w is only produced by the DCS worker, so the per-meter breakdown
@@ -2892,6 +3113,7 @@ module.exports = {
   getHashrate,
   getMonthlyHashrate,
   monthlyHashesCache,
+  dailyHashesCache,
   calculateHashrateSummary,
   calculateGroupedHashrateSummary,
   getConsumption,

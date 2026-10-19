@@ -4,6 +4,7 @@ const test = require('brittle')
 const {
   getHashrate,
   monthlyHashesCache,
+  dailyHashesCache,
   calculateHashrateSummary,
   getConsumption,
   rollupLocalConsumption,
@@ -54,6 +55,7 @@ const {
   bucketPoolHashrate
 } = require('../../../workers/lib/server/handlers/metrics.handlers')
 const { withDataProxy } = require('../helpers/mockHelpers')
+const { clearPhaseHourlyCache, phaseHourlyCache } = require('../../../workers/lib/server/lib/phaseConsumptionCache')
 const { METRICS_TIME } = require('../../../workers/lib/constants')
 
 // ==================== Hashrate Tests ====================
@@ -6279,4 +6281,436 @@ test('getHashrate - synthetic group never overwrites a colliding telemetry key',
   })
 
   t.is(res.log[0].hashrateMhs['miner-wm-m63'], 2e11, 'telemetry value wins on a key collision')
+})
+
+// --- interval=1d: day rows are cached month by month --------------------------
+
+const OCT_1_LOCAL = Date.UTC(2026, 9, 1, 3)
+
+test('getHashrate 1d - day rows of a completed month are served from cache', async (t) => {
+  const spans = []
+  const ctx = monthlyCtx((payload) => { if (payload.start) spans.push([payload.start, payload.end]) })
+  ctx.conf.featureConfig.lockedTimezone = MONTHLY_TZ
+  const query = { start: AUG_1_LOCAL, end: SEP_1_LOCAL - 1, interval: '1d' }
+
+  dailyHashesCache.clear()
+  const first = await getHashrate(ctx, { query })
+  const firstSpans = spans.length
+  const second = await getHashrate(ctx, { query })
+
+  t.is(first.log.length, 31, 'one row per local day of August')
+  t.is(first.log[0].ts, AUG_1_LOCAL, 'stamped at the local day start')
+  t.is(first.log[0].hashrateMhs, 1000, 'mean over the day')
+  t.is(first.totalCount, 31)
+  t.ok(firstSpans > 0, 'the first request queries the store')
+  t.is(spans.length, firstSpans, 'the second asks the store for nothing at all')
+  t.alike(second.log, first.log, 'and returns the same rows')
+  t.alike(second.summary, first.summary)
+  t.pass()
+})
+
+test('getHashrate 1d - only the partial edge month is refetched on a repeat request', async (t) => {
+  const spans = []
+  const ctx = monthlyCtx((payload) => { if (payload.start) spans.push([payload.start, payload.end]) })
+  ctx.conf.featureConfig.lockedTimezone = MONTHLY_TZ
+  const AUG_15_LOCAL = Date.UTC(2026, 7, 15, 3)
+  const query = { start: AUG_15_LOCAL, end: OCT_1_LOCAL - 1, interval: '1d' }
+
+  dailyHashesCache.clear()
+  const first = await getHashrate(ctx, { query })
+  const second = await getHashrate(ctx, { query })
+
+  t.is(first.log.length, 17 + 30, 'Aug 15-31 plus all of September')
+  t.alike(spans[0], [AUG_15_LOCAL, OCT_1_LOCAL - 1], 'the first request scans the whole window')
+  t.alike(spans[1], [AUG_15_LOCAL, SEP_1_LOCAL - 1], 'the repeat scans only the August slice it may not cache')
+  t.is(spans.length, 2)
+  t.alike(second.log, first.log)
+  t.pass()
+})
+
+test('getHashrate 1d - overwriteCache skips the cached months and stores the fresh rows', async (t) => {
+  const spans = []
+  const ctx = monthlyCtx((payload) => { if (payload.start) spans.push([payload.start, payload.end]) })
+  ctx.conf.featureConfig.lockedTimezone = MONTHLY_TZ
+  const query = { start: AUG_1_LOCAL, end: SEP_1_LOCAL - 1, interval: '1d' }
+
+  dailyHashesCache.clear()
+  await getHashrate(ctx, { query })
+  const afterFirst = spans.length
+  await getHashrate(ctx, { query: { ...query, overwriteCache: true } })
+  const afterRefresh = spans.length
+  await getHashrate(ctx, { query })
+
+  t.ok(afterRefresh > afterFirst, 'overwriteCache queries the store again')
+  t.is(spans.length, afterRefresh, 'the request after it is served from the refreshed cache')
+  t.pass()
+})
+
+test('getHashrate 1d - the running month is never cached', async (t) => {
+  const spans = []
+  const now = Date.now()
+  const monthStart = new Date(now)
+  monthStart.setUTCDate(1)
+  monthStart.setUTCHours(0, 0, 0, 0)
+  const ctx = monthlyCtx((payload) => { if (payload.start) spans.push(payload.start) })
+  const query = { start: monthStart.getTime(), end: now, interval: '1d' }
+
+  dailyHashesCache.clear()
+  await getHashrate(ctx, { query })
+  const afterFirst = spans.length
+  await getHashrate(ctx, { query })
+
+  t.ok(spans.length > afterFirst, 'the month still gaining days is recomputed every time')
+  t.is(dailyHashesCache.size, 0, 'and nothing about it is retained')
+  t.pass()
+})
+
+test('getHashrate 1d - a silent completed month stops widening the query span', async (t) => {
+  const spans = []
+  // Data exists only from August; July is silent but completed.
+  const ctx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }], featureConfig: { lockedTimezone: MONTHLY_TZ } },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (method === 'getWrkExtData') return [{ hashrateHistory: [] }]
+        spans.push([payload.start, payload.end])
+        const out = []
+        for (let ts = Math.max(payload.start, AUG_1_LOCAL); ts < payload.end; ts += HOUR) {
+          out.push({ ts, hashrate_mhs_5m_sum_aggr: 1000 })
+        }
+        return out
+      }
+    }
+  })
+  const query = { start: Date.UTC(2026, 6, 1, 3), end: SEP_1_LOCAL - 1, interval: '1d' }
+
+  dailyHashesCache.clear()
+  const first = await getHashrate(ctx, { query })
+  await getHashrate(ctx, { query })
+
+  t.is(first.log.length, 31, 'July produces no zero-filled day rows')
+  t.is(spans.length, 1, 'the second request queries nothing: both months are settled')
+  t.is(dailyHashesCache.size, 2, 'the silent month is remembered as empty, alongside the one with data')
+  t.pass()
+})
+
+test('getHashrate 1d - pool day rows are cached with their month', async (t) => {
+  let extCalls = 0
+  const ctx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }], featureConfig: { lockedTimezone: MONTHLY_TZ } },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (method === 'getWrkExtData') {
+          extCalls++
+          const samples = []
+          for (let ts = AUG_1_LOCAL; ts < SEP_1_LOCAL; ts += HOUR) {
+            samples.push({ poolType: 'f2pool', username: 'account-a', ts: ts + 60000, hashrate: 500e6 })
+          }
+          return [{ hashrateHistory: samples }]
+        }
+        const out = []
+        for (let ts = payload.start; ts < payload.end; ts += HOUR) {
+          out.push({ ts, hashrate_mhs_5m_sum_aggr: 1000, nominal_hashrate_mhs_sum_aggr: 2000 })
+        }
+        return out
+      }
+    }
+  })
+  const query = { start: AUG_1_LOCAL, end: SEP_1_LOCAL - 1, interval: '1d', pool: true, nominal: true }
+
+  dailyHashesCache.clear()
+  const first = await getHashrate(ctx, { query })
+  const callsAfterFirst = extCalls
+  const second = await getHashrate(ctx, { query })
+
+  t.is(first.log[0].poolHashrateMhs, 500, 'each day carries its pool pairing')
+  t.is(first.log[0].nominalHashrateMhs, 2000, 'and the nominal it was measured against')
+  t.is(first.summary.avgPoolHashrateMhs, 500)
+  t.ok(callsAfterFirst > 0, 'the first request reads the pool history')
+  t.is(extCalls, callsAfterFirst, 'the cached month re-serves the pool series too')
+  t.alike(second.summary, first.summary)
+  t.pass()
+})
+
+test('getHashrate 1d - a scoped month is not answered with another scope', async (t) => {
+  const ctx = withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }], featureConfig: { lockedTimezone: MONTHLY_TZ } },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        if (method === 'getWrkExtData') return [{ hashrateHistory: [] }]
+        const out = []
+        for (let ts = payload.start; ts < payload.end; ts += HOUR) {
+          out.push({
+            ts,
+            hashrate_mhs_5m_sum_aggr: 1000,
+            hashrate_mhs_5m_container_group_sum_aggr: { 'container-A': 100, 'container-B': 200 }
+          })
+        }
+        return out
+      }
+    }
+  })
+  const query = { start: AUG_1_LOCAL, end: SEP_1_LOCAL - 1, interval: '1d' }
+
+  dailyHashesCache.clear()
+  const siteWide = await getHashrate(ctx, { query })
+  const containerA = await getHashrate(ctx, { query: { ...query, container: 'container-A' } })
+  const containerB = await getHashrate(ctx, { query: { ...query, container: 'container-B' } })
+
+  t.is(siteWide.log[0].hashrateMhs, 1000, 'the site-wide day')
+  t.is(containerA.log[0].hashrateMhs, 100, 'a container gets its own numbers, not the cached site-wide ones')
+  t.is(containerB.log[0].hashrateMhs, 200, 'and so does the next one')
+  t.pass()
+})
+
+test('getHashrate 1d - a pool-only phase month is cached under its own key', async (t) => {
+  let extCalls = 0
+  const SEP_1_UTC = Date.UTC(2026, 8, 1)
+  const OCT_1_UTC = Date.UTC(2026, 9, 1)
+  const ctx = phaseCtx(async (key, method, payload) => {
+    if (method === 'getWrkExtData') {
+      extCalls++
+      const samples = []
+      for (let ts = SEP_1_UTC; ts < OCT_1_UTC; ts += HOUR) {
+        samples.push({ poolType: 'ocean', username: 'addr2', ts: ts + 60000, hashrate: 5e13 })
+      }
+      return [{ hashrateHistory: samples }]
+    }
+    const out = []
+    for (let ts = payload.start; ts < payload.end; ts += HOUR) {
+      out.push({ ts, hashrate_mhs_5m_sum_aggr: 1000 })
+    }
+    return out
+  })
+  const query = { start: SEP_1_UTC, end: OCT_1_UTC - 1, interval: '1d' }
+
+  dailyHashesCache.clear()
+  const phase = await getHashrate(ctx, { query: { ...query, phase: 'phase1_5' } })
+  const callsAfterPhase = extCalls
+  const phaseAgain = await getHashrate(ctx, { query: { ...query, phase: 'phase1_5' } })
+  const site = await getHashrate(ctx, { query })
+
+  t.is(phase.log.length, 30, 'a September of pool-only days')
+  t.is(phase.log[0].hashrateMhs, 5e13 / 1e6, 'built from the phase account samples')
+  t.is(extCalls, callsAfterPhase, 'the repeat phase request reads no pool history')
+  t.alike(phaseAgain.log, phase.log)
+  t.is(site.log[0].hashrateMhs, 1000, 'the site view is telemetry, never the cached phase rows')
+  t.pass()
+})
+
+// --- phase consumption: hourly rows cached month by month ---------------------
+
+const CONS_SEP_1 = Date.UTC(2026, 8, 1)
+const CONS_OCT_1 = Date.UTC(2026, 9, 1)
+
+// A full September of meter and manual hours, with per-method call counting.
+function septemberPhaseConsumptionCtx (onCall) {
+  const meter = []
+  const manual = []
+  for (let ts = CONS_SEP_1; ts < CONS_OCT_1; ts += PHASE_HOUR_MS) {
+    meter.push({ ts, by_meter_power_w: { 'site-pm': 5000000 } })
+    manual.push({ ts, totalConsumptionMWh: 1 })
+  }
+  return phaseConsumptionCtx({ meter, manual, onCall })
+}
+
+test('getConsumption - a completed month of phase hours is served from cache', async (t) => {
+  const calls = []
+  const ctx = septemberPhaseConsumptionCtx((method) => calls.push(method))
+  const query = { start: CONS_SEP_1, end: CONS_OCT_1 - 1, interval: '1d', phase: 'phase1' }
+
+  clearPhaseHourlyCache()
+  const first = await getConsumption(ctx, { query })
+  const callsAfterFirst = calls.length
+  const second = await getConsumption(ctx, { query })
+
+  t.is(first.log.length, 30, 'one row per September day')
+  t.is(first.log[0].consumptionMWh, 96, '24 hours of meter 5 MW minus manual 1 MWh')
+  t.is(first.summary.missingHours, 0)
+  t.ok(callsAfterFirst > 0, 'the first request reads the meter and the manual log')
+  t.is(calls.length, callsAfterFirst, 'the second reads no store at all')
+  t.alike(second, first)
+  t.pass()
+})
+
+test('getConsumption - a slice of a cached phase month reads no store', async (t) => {
+  const calls = []
+  const ctx = septemberPhaseConsumptionCtx((method) => calls.push(method))
+  const DAY = 24 * PHASE_HOUR_MS
+
+  clearPhaseHourlyCache()
+  await getConsumption(ctx, { query: { start: CONS_SEP_1, end: CONS_OCT_1 - 1, interval: '1d', phase: 'phase1' } })
+  const callsAfterFull = calls.length
+  const slice = await getConsumption(ctx, {
+    query: { start: CONS_SEP_1 + 10 * DAY, end: CONS_SEP_1 + 12 * DAY - 1, interval: '1h', phase: 'phase1' }
+  })
+
+  t.is(calls.length, callsAfterFull, 'hourly rows slice cleanly out of the cached month')
+  t.is(slice.log.length, 48, 'exactly the two requested days of hours')
+  t.is(slice.summary.missingHours, 0, 'missing hours are counted over the slice, not the month')
+  t.pass()
+})
+
+test('getConsumption - each phase source is cached under its own key', async (t) => {
+  const ctx = septemberPhaseConsumptionCtx()
+  const query = { start: CONS_SEP_1, end: CONS_OCT_1 - 1, interval: '1d' }
+
+  clearPhaseHourlyCache()
+  const remainder = await getConsumption(ctx, { query: { ...query, phase: 'phase1' } })
+  const manual = await getConsumption(ctx, { query: { ...query, phase: 'phase1_5' } })
+
+  t.is(remainder.log[0].consumptionMWh, 96, 'the remainder phase is meter minus manual')
+  t.is(manual.log[0].consumptionMWh, 24, 'the manual phase is never answered with the remainder rows')
+  t.pass()
+})
+
+test('getConsumption - concurrent phase requests share one month fetch', async (t) => {
+  const calls = []
+  const ctx = septemberPhaseConsumptionCtx((method) => calls.push(method))
+  const query = { start: CONS_SEP_1, end: CONS_OCT_1 - 1, interval: '1d', phase: 'phase1' }
+
+  clearPhaseHourlyCache()
+  const [a, b] = await Promise.all([
+    getConsumption(ctx, { query }),
+    getConsumption(ctx, { query })
+  ])
+
+  t.is(calls.filter((m) => m === 'getHistoricalLogs').length, 1, 'one manual-log read for the burst')
+  t.is(calls.filter((m) => m === 'tailLog').length, 1, 'one meter read for the burst')
+  t.alike(b, a)
+  t.pass()
+})
+
+test('getConsumption - clearing the phase cache forces a fresh read', async (t) => {
+  const calls = []
+  const ctx = septemberPhaseConsumptionCtx((method) => calls.push(method))
+  const query = { start: CONS_SEP_1, end: CONS_OCT_1 - 1, interval: '1d', phase: 'phase1' }
+
+  clearPhaseHourlyCache()
+  await getConsumption(ctx, { query })
+  const callsAfterFirst = calls.length
+  // What saveEnergyConsumption does once a manual entry lands.
+  clearPhaseHourlyCache()
+  await getConsumption(ctx, { query })
+
+  t.ok(calls.length > callsAfterFirst, 'the edited month is recomputed, not served stale')
+  t.pass()
+})
+
+// --- boundary-aligned windows and cache races ---------------------------------
+
+// Hour-grid buckets only, like the real store: a span starting off-grid must not
+// invent a bucket at its raw start.
+function alignedMonthlyCtx (onRequest = () => {}) {
+  return withDataProxy({
+    conf: { orks: [{ rpcPublicKey: 'key1' }], featureConfig: { lockedTimezone: MONTHLY_TZ } },
+    net_r0: {
+      jRequest: async (key, method, payload) => {
+        onRequest(payload)
+        if (method === 'getWrkExtData') return [{ hashrateHistory: [] }]
+        const out = []
+        for (let ts = Math.ceil(payload.start / HOUR) * HOUR; ts < payload.end; ts += HOUR) {
+          out.push({ ts, hashrate_mhs_5m_sum_aggr: 1000 })
+        }
+        return out
+      }
+    }
+  })
+}
+
+test('getHashrate 1d - a window ending exactly on a month boundary never throws', async (t) => {
+  const ctx = alignedMonthlyCtx()
+  const query = { start: AUG_1_LOCAL, end: SEP_1_LOCAL, interval: '1d' }
+
+  dailyHashesCache.clear()
+  const cold = await getHashrate(ctx, { query })
+  const warm = await getHashrate(ctx, { query })
+
+  t.is(cold.log.length, 31, 'the zero-width edge month contributes no phantom day')
+  t.alike(warm.log, cold.log, 'the cached repeat answers identically instead of rejecting the edge span')
+  t.pass()
+})
+
+test('getHashrate 1M - a window ending exactly on a month boundary never throws', async (t) => {
+  const ctx = alignedMonthlyCtx()
+  const query = { start: AUG_1_LOCAL, end: SEP_1_LOCAL, interval: '1M', timezone: MONTHLY_TZ }
+
+  monthlyHashesCache.clear()
+  const cold = await getHashrate(ctx, { query })
+  const warm = await getHashrate(ctx, { query })
+
+  t.is(cold.log.length, 1, 'one August row; the zero-width September is empty')
+  t.alike(warm.log, cold.log)
+  t.pass()
+})
+
+test('getConsumption - a phase window ending exactly on a month boundary never throws', async (t) => {
+  const ctx = septemberPhaseConsumptionCtx()
+  const query = { start: CONS_SEP_1, end: CONS_OCT_1, interval: '1d', phase: 'phase1' }
+
+  clearPhaseHourlyCache()
+  const cold = await getConsumption(ctx, { query })
+  const warm = await getConsumption(ctx, { query })
+
+  t.is(cold.log.length, 30, 'no phantom October day')
+  t.is(cold.summary.missingHours, 1, 'the single boundary hour has no data and counts as missing')
+  t.alike(warm, cold)
+  t.pass()
+})
+
+test('getConsumption - a cold multi-month phase window reads each source once', async (t) => {
+  const calls = []
+  const JUL_1 = Date.UTC(2026, 6, 1)
+  const meter = []
+  const manual = []
+  for (let ts = JUL_1; ts < CONS_OCT_1; ts += PHASE_HOUR_MS) {
+    meter.push({ ts, by_meter_power_w: { 'site-pm': 5000000 } })
+    manual.push({ ts, totalConsumptionMWh: 1 })
+  }
+  const ctx = phaseConsumptionCtx({ meter, manual, onCall: (method) => calls.push(method) })
+
+  clearPhaseHourlyCache()
+  const res = await getConsumption(ctx, { query: { start: JUL_1, end: CONS_OCT_1 - 1, interval: '1d', phase: 'phase1' } })
+
+  t.is(res.log.length, 92, 'July through September')
+  t.is(calls.filter((m) => m === 'tailLog').length, 1, 'adjacent cold months are one meter scan, not three')
+  t.is(calls.filter((m) => m === 'getHistoricalLogs').length, 1, 'and one manual-log read')
+  t.is(phaseHourlyCache.size, 3, 'while every month is still stored on its own')
+  t.pass()
+})
+
+test('getConsumption - a write landing mid-fetch is not masked by the fetch re-storing', async (t) => {
+  let gate
+  const gatePromise = new Promise((resolve) => { gate = resolve })
+  let manualReads = 0
+  const manual = []
+  const meter = []
+  for (let ts = CONS_SEP_1; ts < CONS_OCT_1; ts += PHASE_HOUR_MS) {
+    meter.push({ ts, by_meter_power_w: { 'site-pm': 5000000 } })
+    manual.push({ ts, totalConsumptionMWh: 1 })
+  }
+  const ctx = phaseConsumptionCtx({
+    meter,
+    historicalLogs: async () => {
+      manualReads++
+      await gatePromise
+      return manual
+    }
+  })
+  const query = { start: CONS_SEP_1, end: CONS_OCT_1 - 1, interval: '1d', phase: 'phase1' }
+
+  clearPhaseHourlyCache()
+  const pending = getConsumption(ctx, { query })
+  // A manual entry lands while the month is still being fetched; a second
+  // request arrives after the write.
+  clearPhaseHourlyCache()
+  const postWrite = getConsumption(ctx, { query })
+  gate()
+  const res = await pending
+  await postWrite
+
+  t.is(res.log.length, 30, 'the in-flight request is still answered from what it read')
+  t.is(manualReads, 2, 'the post-write request reads fresh instead of riding the pre-write fetch')
+  t.is(phaseHourlyCache.size, 1, 'only the post-write rows are stored over the invalidation')
+  t.pass()
 })
