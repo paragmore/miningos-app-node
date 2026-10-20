@@ -3,7 +3,7 @@
 const async = require('async')
 const mingo = require('mingo')
 const { RPC_TIMEOUT } = require('./constants')
-const { getStartOfDay, localDayStart, localWeekStart } = require('./period.utils')
+const { getStartOfDay, localDayStart, nextLocalDayStart, localWeekStart } = require('./period.utils')
 
 const dateNowSec = () => Math.floor(Date.now() / 1000)
 
@@ -254,6 +254,7 @@ module.exports = {
   sanitizeIncludeFields,
   getStartOfDay,
   localDayStart,
+  nextLocalDayStart,
   localWeekStart,
   flattenRpcResults,
   safeDiv,

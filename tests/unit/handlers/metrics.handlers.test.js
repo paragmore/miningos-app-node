@@ -6033,6 +6033,39 @@ test('getEfficiency - telemetry phase divides site PM minus manual by the fleet 
   t.is(daily.log[0].efficiencyWThs, 3500000 / 150, 'mean power over mean hashrate, like the site series')
 })
 
+test('getEfficiency - telemetry phase counts the full-meter hours it keeps in manualMissingHours', async (t) => {
+  const H = PHASE_HOUR_MS
+  const ctx = phaseConsumptionCtx({
+    meter: [
+      { ts: PHASE_START, by_meter_power_w: { 'site-pm': 5000000 } },
+      { ts: PHASE_START + H, by_meter_power_w: { 'site-pm': 5000000 } },
+      { ts: PHASE_START + 2 * H, by_meter_power_w: { 'site-pm': 5000000 } }
+    ],
+    // no manual entry for the second and third hours
+    manual: [{ ts: PHASE_START, totalConsumptionMWh: 1 }],
+    // the third hour has no hashrate sample, so it is missing rather than full-meter
+    hashrate: [
+      { ts: `${PHASE_START}-${PHASE_START + H - 1}`, hashrate_mhs_5m_sum_aggr: 1e8 },
+      { ts: `${PHASE_START + H}-${PHASE_START + 2 * H - 1}`, hashrate_mhs_5m_sum_aggr: 1e8 }
+    ]
+  })
+  const query = { start: PHASE_START, end: PHASE_START + 3 * H - 1, phase: 'phase1' }
+
+  const hourly = await getEfficiency(ctx, { query: { ...query, interval: '1h' } })
+  t.alike(hourly.log.map(e => e.efficiencyWThs), [4000000 / 100, 5000000 / 100])
+  t.is(hourly.summary.missingHours, 1)
+  t.is(hourly.summary.manualMissingHours, 1, 'only the kept hour is counted')
+
+  const daily = await getEfficiency(ctx, { query: { ...query, interval: '1d' } })
+  t.is(daily.summary.manualMissingHours, 1)
+
+  const consumption = await getConsumption(ctx, { query: { ...query, interval: '1h' } })
+  t.is(consumption.summary.manualMissingHours, 2, 'consumption keeps the hour efficiency drops')
+
+  const poolOnly = await getEfficiency(ctx, { query: { ...query, interval: '1h', phase: 'phase1_5' } })
+  t.is(poolOnly.summary.manualMissingHours, undefined, 'a manual phase carries no count')
+})
+
 test('getEfficiency - total divides site power by miner plus pool-only phase hashrate', async (t) => {
   const H = PHASE_HOUR_MS
   const ctx = phaseCtx(async (key, method, payload) => {
@@ -6105,7 +6138,7 @@ test('getConsumption - remainder phase is its meter minus the manual hours', asy
   t.is(res.summary.totalConsumptionMWh, 6.5)
 })
 
-test('getConsumption - an hour without a manual entry is missing, not zero', async (t) => {
+test('getConsumption - an hour without a manual entry subtracts zero from the remainder, and is missing for the manual phase', async (t) => {
   const ctx = phaseConsumptionCtx({
     meter: [
       { ts: PHASE_START, by_meter_power_w: { 'site-pm': 5000000 } },
@@ -6119,13 +6152,38 @@ test('getConsumption - an hour without a manual entry is missing, not zero', asy
   const query = { start: PHASE_START, end: PHASE_START + 2 * PHASE_HOUR_MS - 1, interval: '1d' }
 
   const remainder = await getConsumption(ctx, { query: { ...query, phase: 'phase1' } })
-  t.is(remainder.log[0].consumptionMWh, 4, 'the unlogged hour is not counted as the full meter')
-  t.is(remainder.log[0].powerW, 4000000, 'nor averaged in as zero')
-  t.is(remainder.summary.missingHours, 1)
+  t.is(remainder.log[0].consumptionMWh, 9, 'the unlogged hour is the full meter')
+  t.is(remainder.log[0].powerW, 4500000)
+  t.is(remainder.summary.missingHours, 0)
+  t.is(remainder.summary.manualMissingHours, 1, 'the zero-filled hour is surfaced')
+
+  const hourly = await getConsumption(ctx, { query: { ...query, interval: '1h', phase: 'phase1' } })
+  t.alike(hourly.log.map(e => e.consumptionMWh), [4, 5])
+  t.ok(hourly.log.every(e => !('manualMissing' in e)), 'the row flag is not served')
 
   const manual = await getConsumption(ctx, { query: { ...query, phase: 'phase1_5' } })
   t.is(manual.summary.totalConsumptionMWh, 1)
   t.is(manual.summary.missingHours, 1)
+  t.is(manual.summary.manualMissingHours, undefined, 'only a remainder phase carries the count')
+})
+
+test('getConsumption - a remainder hour without a meter value is still missing', async (t) => {
+  const ctx = phaseConsumptionCtx({
+    meter: [
+      { ts: PHASE_START, by_meter_power_w: { 'site-pm': 5000000 } }
+    ],
+    manual: [
+      { ts: PHASE_START, totalConsumptionMWh: 1 },
+      { ts: PHASE_START + PHASE_HOUR_MS, totalConsumptionMWh: 1 }
+    ]
+  })
+
+  const res = await getConsumption(ctx, {
+    query: { start: PHASE_START, end: PHASE_START + 2 * PHASE_HOUR_MS - 1, interval: '1h', phase: 'phase1' }
+  })
+  t.alike(res.log.map(e => e.consumptionMWh), [4])
+  t.is(res.summary.missingHours, 1)
+  t.is(res.summary.manualMissingHours, 0)
 })
 
 test('getConsumption - phase rejects groupBy, byMeter and racks, and needs a usable source', async (t) => {
@@ -6181,6 +6239,62 @@ test('getConsumption - groupBy miner injects the manual phase group from its log
   t.is(reads.length, 1, 'one manual read for the whole range')
   t.is(reads[0].start, PHASE_START, 'the first row is read from its UTC midnight, before start')
   t.is(reads[0].end, PHASE_START + 2 * PHASE_DAY_MS - 1)
+})
+
+test('getConsumption - groupBy miner gives each UTC-midnight row the manual hours of its local day', async (t) => {
+  // America/Campo_Grande (UTC-4): local days start at 04:00Z. A 1-3 Aug local request
+  // starts after the 1 Aug 00:00Z row, so the ork returns the 2, 3 and 4 Aug 00:00Z
+  // snapshots - local 1, 2 and 3 Aug at 20:00.
+  const AUG_1_LOCAL = Date.UTC(2026, 7, 1, 4)
+  const rows = [1, 2, 3].map((d) => ({
+    ts: Date.UTC(2026, 7, 1 + d),
+    power_w_type_group_sum_aggr: { 'miner-wm-m63': 4000000 }
+  }))
+  const reads = []
+  const ctx = phaseConsumptionCtx({
+    hashrate: rows,
+    manual: [
+      { ts: AUG_1_LOCAL, totalConsumptionMWh: 0.5 }, // local 1 Aug 00:00
+      { ts: AUG_1_LOCAL + PHASE_DAY_MS + 23 * PHASE_HOUR_MS, totalConsumptionMWh: 0.3 } // local 2 Aug 23:00
+    ],
+    onCall: (method, payload) => { if (method === 'getHistoricalLogs') reads.push(payload) }
+  })
+  ctx.conf.featureConfig.lockedTimezone = 'America/Campo_Grande'
+
+  const res = await getConsumption(ctx, {
+    query: { start: AUG_1_LOCAL, end: AUG_1_LOCAL + 3 * PHASE_DAY_MS - 1, groupBy: 'miner' }
+  })
+
+  t.is(res.log[0].consumptionMWh.HBM, 0.5, 'local 1 Aug 00:00 lands on the row the UI shows as 1 Aug')
+  t.is(res.log[1].consumptionMWh.HBM, 0.3, 'local 2 Aug 23:00 (03:00Z on 3 Aug) stays on 2 Aug')
+  t.absent(res.log[2].powerW.HBM)
+  t.ok(Math.abs(res.summary.groupedBy.HBM.totalConsumptionMWh - 0.8) < 1e-9, 'every logged hour is counted once')
+  t.is(reads[0].start, AUG_1_LOCAL, 'manual hours are read from the first local day')
+  t.is(reads[0].end, AUG_1_LOCAL + 3 * PHASE_DAY_MS - 1, 'through the last local day')
+})
+
+test('getConsumption - groupBy container puts the local-day manual hours under acme-container', async (t) => {
+  // Same UTC-4 case as the miner view: rows at 2-4 Aug 00:00Z are local 1-3 Aug.
+  const AUG_1_LOCAL = Date.UTC(2026, 7, 1, 4)
+  const rows = [1, 2, 3].map((d) => ({
+    ts: Date.UTC(2026, 7, 1 + d),
+    power_w_container_group_sum_aggr: { 'group-1': 500000 }
+  }))
+  const ctx = phaseConsumptionCtx({
+    hashrate: rows,
+    manual: [{ ts: AUG_1_LOCAL, totalConsumptionMWh: 0.5 }]
+  })
+  ctx.conf.featureConfig.lockedTimezone = 'America/Campo_Grande'
+
+  const res = await getConsumption(ctx, {
+    query: { start: AUG_1_LOCAL, end: AUG_1_LOCAL + 3 * PHASE_DAY_MS - 1, groupBy: 'container' }
+  })
+
+  t.is(res.log[0].powerW['group-1'], 500000, 'telemetry containers untouched')
+  t.is(res.log[0].consumptionMWh['acme-container'], 0.5, 'local 1 Aug 00:00 lands on the 1 Aug row')
+  t.is(res.log[0].powerW['acme-container'], 500000)
+  t.absent(res.log[0].powerW.HBM, 'only the container key')
+  t.is(res.summary.groupedBy['acme-container'].totalConsumptionMWh, 0.5)
 })
 
 test('getConsumption - groupBy container injects the container group, phase=total too', async (t) => {
@@ -6239,6 +6353,105 @@ test('getConsumption - groupBy is untouched without central DCS, phases, a manua
 
   const rackRows = groupedConsumptionRows('power_w_pdu_rack_group_sum_aggr', { r1: 1000000 })
   const racks = await getConsumption(
+    phaseCtx(async (key, method) => (method === 'tailLog' ? rackRows : []), PHASE_DCS_FEATURE),
+    { query: { ...query, groupBy: 'rack' } }
+  )
+  t.alike(keysOf(racks), ['r1'])
+  t.is(manualReads, 0, 'the manual store is not read when nothing is injected')
+})
+
+test('getEfficiency - groupBy miner adds the pool-only phase group as its own daily efficiency', async (t) => {
+  const ctx = phaseConsumptionCtx({
+    hashrate: groupedConsumptionRows('efficiency_w_ths_type_group_avg_aggr', { 'miner-wm-m63': 20 }),
+    // Day 1 has a logged hour (and the 50 TH/s pool samples); day 2 has neither
+    manual: [{ ts: PHASE_START, totalConsumptionMWh: 0.87 }]
+  })
+  const query = { start: PHASE_START, end: PHASE_START + 2 * PHASE_DAY_MS - 1 }
+
+  const res = await getEfficiency(ctx, { query: { ...query, groupBy: 'miner' } })
+
+  t.is(res.log[0].efficiencyWThs['miner-wm-m63'], 20, 'miner-reported groups untouched')
+  t.is(res.log[0].efficiencyWThs.HBM, 870000 / 50, 'phase consumption over its pool hashrate')
+  t.absent(res.log[1].efficiencyWThs.HBM, 'a day without consumption gets no key, not a zero')
+  t.is(res.summary.groupedBy.HBM.avgEfficiencyWThs, 870000 / 50, 'the summary lists the phase group')
+  t.is(res.summary.groupedBy['miner-wm-m63'].avgEfficiencyWThs, 20)
+
+  const phase = await getEfficiency(ctx, { query: { ...query, interval: '1d', phase: 'phase1_5' } })
+  t.is(res.log[0].efficiencyWThs.HBM, phase.log[0].efficiencyWThs, 'matches the Phase 1.5 view of that day')
+})
+
+test('getEfficiency - groupBy container adds acme-container, phase=total too, never over telemetry', async (t) => {
+  const ctx = phaseConsumptionCtx({
+    hashrate: groupedConsumptionRows('efficiency_w_ths_container_group_avg_aggr', { 'group-1': 22 }),
+    manual: [{ ts: PHASE_START, totalConsumptionMWh: 1 }]
+  })
+  const query = { start: PHASE_START, end: PHASE_START + 2 * PHASE_DAY_MS - 1, groupBy: 'container' }
+
+  const res = await getEfficiency(ctx, { query })
+  t.is(res.log[0].efficiencyWThs['group-1'], 22, 'telemetry containers untouched')
+  t.is(res.log[0].efficiencyWThs['acme-container'], 1000000 / 50)
+  t.absent(res.log[0].efficiencyWThs.HBM, 'only the key for this groupBy')
+
+  const total = await getEfficiency(ctx, { query: { ...query, phase: 'total' } })
+  t.is(total.log[0].efficiencyWThs['acme-container'], 1000000 / 50, 'Total tab lists the phase group too')
+
+  const phase1 = await getEfficiency(ctx, { query: { ...query, phase: 'phase1' } })
+  t.absent(phase1.log[0].efficiencyWThs['acme-container'], 'a concrete phase is not given the group')
+
+  const collision = await getEfficiency(phaseConsumptionCtx({
+    hashrate: groupedConsumptionRows('efficiency_w_ths_type_group_avg_aggr', { HBM: 30 }),
+    manual: [{ ts: PHASE_START, totalConsumptionMWh: 1 }]
+  }), { query: { ...query, groupBy: 'miner' } })
+  t.is(collision.log[0].efficiencyWThs.HBM, 30, 'a telemetry key is never overwritten')
+})
+
+test('getEfficiency - groupBy gives each UTC-midnight row the efficiency of its local day', async (t) => {
+  // America/Campo_Grande (UTC-4): the 2-4 Aug 00:00Z rows are local 1-3 Aug.
+  const AUG_1_LOCAL = Date.UTC(2026, 7, 1, 4)
+  const rows = [1, 2, 3].map((d) => ({
+    ts: Date.UTC(2026, 7, 1 + d),
+    efficiency_w_ths_type_group_avg_aggr: { 'miner-wm-m63': 20 }
+  }))
+  const ctx = phaseCtx(async (key, method, payload) => {
+    if (method === 'getHistoricalLogs') return [{ ts: AUG_1_LOCAL, totalConsumptionMWh: 0.5 }]
+    if (method === 'tailLog') return payload.type === 'miner' ? rows : []
+    if (method === 'getWrkExtData') {
+      return [{ hashrateHistory: [{ ts: AUG_1_LOCAL, poolType: 'ocean', username: 'addr2', hashrate: 5e13 }] }]
+    }
+    return []
+  }, { ...PHASE_DCS_FEATURE, lockedTimezone: 'America/Campo_Grande' })
+
+  const res = await getEfficiency(ctx, {
+    query: { start: AUG_1_LOCAL, end: AUG_1_LOCAL + 3 * PHASE_DAY_MS - 1, groupBy: 'miner' }
+  })
+
+  t.is(res.log[0].efficiencyWThs.HBM, 500000 / 50, 'local 1 Aug lands on the row the UI shows as 1 Aug')
+  t.absent(res.log[1].efficiencyWThs.HBM)
+  t.absent(res.log[2].efficiencyWThs.HBM)
+})
+
+test('getEfficiency - groupBy is untouched without central DCS, phases or for racks', async (t) => {
+  const rows = groupedConsumptionRows('efficiency_w_ths_type_group_avg_aggr', { 'miner-wm-m63': 20 })
+  const query = { start: PHASE_START, end: PHASE_START + 2 * PHASE_DAY_MS - 1, groupBy: 'miner' }
+  let manualReads = 0
+  const jRequest = async (key, method) => {
+    if (method === 'getHistoricalLogs') {
+      manualReads++
+      return [{ ts: PHASE_START, totalConsumptionMWh: 1 }]
+    }
+    if (method === 'getWrkExtData') return [{ hashrateHistory: phaseHistorySamples() }]
+    return method === 'tailLog' ? rows : []
+  }
+  const keysOf = (res) => Object.keys(res.log[0].efficiencyWThs)
+
+  const noDcs = await getEfficiency(phaseCtx(jRequest), { query })
+  t.alike(keysOf(noDcs), ['miner-wm-m63'], 'the phase consumption needs central DCS')
+
+  const noPhases = await getEfficiency(phaseCtx(jRequest, { centralDCSSetup: { enabled: true } }), { query })
+  t.alike(keysOf(noPhases), ['miner-wm-m63'])
+
+  const rackRows = groupedConsumptionRows('efficiency_w_ths_pdu_rack_group_avg_aggr', { r1: 25 })
+  const racks = await getEfficiency(
     phaseCtx(async (key, method) => (method === 'tailLog' ? rackRows : []), PHASE_DCS_FEATURE),
     { query: { ...query, groupBy: 'rack' } }
   )

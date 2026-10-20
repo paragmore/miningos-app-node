@@ -4,6 +4,7 @@ const test = require('brittle')
 const {
   getStartOfDay,
   localDayStart,
+  nextLocalDayStart,
   localWeekStart,
   localMonthStartTs,
   zoneOffsetMs,
@@ -52,6 +53,28 @@ test('localDayStart - aligns to local midnight, not UTC midnight', (t) => {
   const nyDayStart = localDayStart(ts, 'America/New_York')
   t.is(utcDayStart, Date.UTC(2026, 0, 5), 'UTC day start is UTC midnight')
   t.is(nyDayStart, Date.UTC(2026, 0, 5, 5), 'NY day start is 05:00 UTC (local midnight)')
+  t.pass()
+})
+
+// ==================== nextLocalDayStart ====================
+
+test('nextLocalDayStart - is the next local midnight from anywhere in the day', (t) => {
+  const zone = 'America/New_York'
+  const dayStart = Date.UTC(2026, 0, 5, 5)
+  t.is(nextLocalDayStart(dayStart, zone), Date.UTC(2026, 0, 6, 5), 'from the day start')
+  t.is(nextLocalDayStart(dayStart + 86400000 - 1, zone), Date.UTC(2026, 0, 6, 5), 'from its last ms')
+  t.is(nextLocalDayStart(Date.UTC(2026, 0, 5, 12), 'UTC'), Date.UTC(2026, 0, 6))
+  t.pass()
+})
+
+test('nextLocalDayStart - spans the 23h and 25h days of a DST shift', (t) => {
+  const zone = 'America/New_York'
+  // 2026-03-08 springs forward (23h), 2026-11-01 falls back (25h).
+  const springDay = Date.UTC(2026, 2, 8, 5)
+  t.is(nextLocalDayStart(springDay, zone) - springDay, 23 * 3600000)
+  const fallDay = Date.UTC(2026, 10, 1, 4)
+  t.is(nextLocalDayStart(fallDay, zone) - fallDay, 25 * 3600000)
+  t.is(nextLocalDayStart(fallDay + 24.5 * 3600000, zone), Date.UTC(2026, 10, 2, 5), 'from the repeated hour')
   t.pass()
 })
 

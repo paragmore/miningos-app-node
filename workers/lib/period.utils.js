@@ -60,6 +60,14 @@ const localDayStart = (ts, timeZone) => {
   return settled === zoneOffsetMs(wallClock, zone) ? asTs : wallClock - settled
 }
 
+// First instant of the local day after the one containing `ts`. A local day is
+// 23-25h across a DST shift, so a day and a half past its start always lands
+// inside the next day, whichever way the clocks moved.
+const nextLocalDayStart = (ts, timeZone) => {
+  const zone = requireZone(timeZone, 'nextLocalDayStart')
+  return localDayStart(localDayStart(ts, zone) + 1.5 * 86400000, zone)
+}
+
 const convertMsToSeconds = (timestampMs) => {
   return Math.floor(timestampMs / 1000)
 }
@@ -218,6 +226,7 @@ module.exports = {
   zoneOffsetMs,
   isLocalHourStart,
   localDayStart,
+  nextLocalDayStart,
   localWeekStart,
   localMonthStartTs,
   convertMsToSeconds,
