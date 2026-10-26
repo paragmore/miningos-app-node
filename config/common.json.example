@@ -81,7 +81,7 @@
           "accounts": [
             { "poolType": "ocean", "username": "<acme-btc-address>" }
           ],
-          "rebateAddresses": ["<acme-rebate-receiver-address>"]
+          "rebateAddresses": ["<rebate-receiver-address>"]
         },
         "groups": { "minerType": "HBM", "container": "acme-container" }
       }
