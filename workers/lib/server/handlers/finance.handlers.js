@@ -400,6 +400,15 @@ async function getPoolRebates (ctx, start, end) {
   return await getCombinedPoolRebates(ctx, { start, end })
 }
 
+// Rebates land on a standalone receiver address, not a pool account, so a
+// phase claims them through pool.rebateAddresses. A rebate no phase claims
+// stays in the site total only, rather than leaking into every phase.
+function filterPhaseRebates (poolRebates, phase) {
+  const addresses = lPhases.getPhaseRebateAddresses(phase)
+  if (!addresses.size) return []
+  return poolRebates.filter((row) => addresses.has(row?.receiver))
+}
+
 function processForecastHistory (results, timezone) {
   const daily = {}
   for (const res of results) {
@@ -1079,7 +1088,7 @@ async function getRevenueSummary (ctx, req) {
   const currentBtcPrice = extractCurrentPrice(currentPriceResults)
   const { daily: dailyRevenue, missingPriceBuckets } = await priceDailyRevenue(ctx, {
     txEntries,
-    rebates: phase ? [] : poolRebates,
+    rebates: phase ? filterPhaseRebates(poolRebates, phase) : poolRebates,
     dailyPrices,
     currentBtcPrice,
     timezone,

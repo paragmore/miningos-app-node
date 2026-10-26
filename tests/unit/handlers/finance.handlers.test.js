@@ -715,6 +715,89 @@ test('getRevenueSummary - phase rows divide the phase consumption by the phase n
   t.ok(Number.isFinite(totalRow.downtimeMWh), 'and the downtime energy')
 })
 
+test('getRevenueSummary - a phase claims only the rebates addressed to it', async (t) => {
+  // Unique month so the daily-series month cache cannot leak across tests.
+  const dayTs = Date.UTC(2019, 9, 15)
+  const ctx = withDataProxy({
+    conf: {
+      orks: [{ rpcPublicKey: 'key1' }],
+      featureConfig: {
+        centralDCSSetup: { enabled: true },
+        phases: [{
+          id: 'phase1_5',
+          label: 'Phase 1.5',
+          minerTelemetry: false,
+          consumption: { source: 'manual' },
+          pool: {
+            accounts: [{ poolType: 'ocean', username: 'acme-addr' }],
+            rebateAddresses: ['rebate-addr']
+          }
+        }, {
+          id: 'phase2',
+          label: 'Phase 2',
+          minerTelemetry: false,
+          consumption: { source: 'manual' },
+          pool: { accounts: [{ poolType: 'ocean', username: 'other-addr' }] }
+        }]
+      }
+    },
+    net_r0: {
+      jRequest: async (_key, method, payload) => {
+        if (method === 'getHistoricalLogs') {
+          return Array.from({ length: 24 }, (_, h) => ({ ts: dayTs + h * 3600000, totalConsumptionMWh: 0.6 }))
+        }
+        if (method === 'tailLog') {
+          return [{ ts: dayTs, site_power_w: 10_000_000, hashrate_mhs_5m_sum_aggr: 1e9 }]
+        }
+        if (method === 'getWrkExtData') {
+          const key = payload.query && payload.query.key
+          if (key === 'transactions') {
+            return [{
+              ts: dayTs,
+              transactions: [
+                { ts: dayTs, satoshis_net_earned: 100000000, username: 'site-addr' },
+                { ts: dayTs, satoshis_net_earned: 50000000, username: 'acme-addr' }
+              ]
+            }]
+          }
+          if (key === 'HISTORICAL_PRICES') return [{ ts: dayTs, priceUSD: 100000 }]
+          if (key === 'current_price') return [{ currentPrice: 100000 }]
+          return []
+        }
+        if (method === 'getGlobalConfig') {
+          return {
+            nominalPowerAvailability_MW: 10,
+            phaseNominals: { phase1_5: { nominalPower_MW: 1.2 }, phase2: { nominalPower_MW: 1 } }
+          }
+        }
+        return {}
+      }
+    },
+    globalDataLib: {
+      getGlobalData: async () => [
+        { ts: dayTs + 7200000, amountBTC: 0.02, txid: 'r1', receiver: 'rebate-addr', priceUSD: 100000 },
+        { ts: dayTs + 7200000, amountBTC: 0.01, txid: 'r2', receiver: 'treasury-addr', priceUSD: 100000 }
+      ]
+    }
+  })
+
+  const query = { start: dayTs - 1000, end: dayTs + 86400000, overwriteCache: true }
+
+  const phased = await getRevenueSummary(ctx, { query: { ...query, phase: 'phase1_5' } }, {})
+  t.ok(Math.abs(phased.summary.totalRebateBTC - 0.02) < 1e-9, 'the mapped rebate lands on the phase')
+  t.ok(Math.abs(phased.summary.totalPayoutBTC - 0.5) < 1e-9, 'payouts stay scoped to the phase account')
+  t.ok(Math.abs(phased.summary.totalRevenueBTC - 0.52) < 1e-9, 'phase revenue carries its rebate')
+  const phaseRow = phased.log.find(e => e.rebateBTC > 0)
+  t.ok(phaseRow && Math.abs(phaseRow.rebateBTC - 0.02) < 1e-9, 'the day row carries the rebate')
+
+  const unmapped = await getRevenueSummary(ctx, { query: { ...query, phase: 'phase2' } }, {})
+  t.is(unmapped.summary.totalRebateBTC, 0, 'a phase without rebateAddresses claims nothing')
+
+  const total = await getRevenueSummary(ctx, { query }, {})
+  t.ok(Math.abs(total.summary.totalRebateBTC - 0.03) < 1e-9, 'the site total keeps every rebate, mapped or not')
+  t.ok(Math.abs(total.summary.totalRevenueBTC - 1.53) < 1e-9, 'site revenue is payouts plus all rebates')
+})
+
 // A manual-source phase whose ACME entries cover only `hours` of the day.
 function makePhaseCoverageCtx (dayTs, hours) {
   return withDataProxy({

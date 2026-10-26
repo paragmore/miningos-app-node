@@ -5,6 +5,7 @@ const {
   resolvePhase,
   getPhaseAccountKeys,
   getPhaseUsernames,
+  getPhaseRebateAddresses,
   hasMinerTelemetry,
   getPoolOnlyPhases,
   getPhaseNominals
@@ -21,7 +22,10 @@ const PHASES = [
   {
     id: 'phase1_5',
     label: 'Phase 1.5',
-    pool: { accounts: [{ poolType: 'ocean', username: 'addr2' }] },
+    pool: {
+      accounts: [{ poolType: 'ocean', username: 'addr2' }],
+      rebateAddresses: ['rebate-addr']
+    },
     consumption: { source: 'manual' },
     minerTelemetry: false,
     groups: { minerType: 'HBM', container: 'acme-container' }
@@ -57,6 +61,10 @@ test('account helpers and pool-only selection', (t) => {
   t.alike([...getPhaseUsernames(phase)], ['addr2'])
   t.is(getPhaseAccountKeys(PHASES[0]).size, 0, 'a phase without accounts is scoped to nothing')
   t.is(getPhaseUsernames(PHASES[0]).size, 0)
+
+  t.alike([...getPhaseRebateAddresses(phase)], ['rebate-addr'])
+  t.is(getPhaseRebateAddresses(PHASES[1]).size, 0, 'a phase without the list claims no rebates')
+  t.is(getPhaseRebateAddresses({ pool: { rebateAddresses: [null, '', 42] } }).size, 0, 'junk entries are dropped')
 
   t.is(hasMinerTelemetry(null), true, 'no phase means the site series')
   t.is(hasMinerTelemetry(PHASES[1]), true)

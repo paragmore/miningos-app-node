@@ -74,6 +74,23 @@ function getPhaseUsernames (phase) {
   return names
 }
 
+/**
+ * Receiver addresses whose pool rebates belong to a phase
+ * (`pool.rebateAddresses`). Rebates are paid to a standalone address rather
+ * than a pool account, so they need their own list; a phase without one
+ * claims no rebates.
+ */
+function getPhaseRebateAddresses (phase) {
+  const addresses = new Set()
+  const configured = phase?.pool?.rebateAddresses
+  if (Array.isArray(configured)) {
+    for (const addr of configured) {
+      if (typeof addr === 'string' && addr) addresses.add(addr)
+    }
+  }
+  return addresses
+}
+
 function hasMinerTelemetry (phase) {
   return !phase || phase.minerTelemetry !== false
 }
@@ -162,6 +179,7 @@ module.exports = {
   resolvePhase,
   getPhaseAccountKeys,
   getPhaseUsernames,
+  getPhaseRebateAddresses,
   hasMinerTelemetry,
   getPoolOnlyPhases,
   getPoolOnlyAccountKeys,
