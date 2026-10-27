@@ -2966,6 +2966,16 @@ function indexForecastDecisionsByHour (forecastResults) {
   return byHour
 }
 
+// Hourly {ts, timeRange, powerW} rows from the tail-log aggregation the site
+// path reads.
+function toHourlyPower (entries) {
+  return entries.map(val => {
+    const ts = parseEntryTs(val.ts)
+    const timeRange = parseEntryTimeRange(val.ts)
+    return { ts, ...(timeRange && { timeRange }), powerW: Number(val[AGGR_FIELDS.SITE_POWER]) || 0 }
+  })
+}
+
 // Splits each hour's downtime into three buckets: curtailment is the energy
 // that was never available (nominal minus the power-production input, as a
 // share of nominal), energy sold is the available energy routed to the grid
@@ -2976,18 +2986,22 @@ function indexForecastDecisionsByHour (forecastResults) {
 // available. Hours without a forecast entry count as 'mine' at full
 // availability, so an unexplained shortfall surfaces as an operational issue
 // rather than being hidden as curtailment.
-function buildHourlyDowntime (entries, nominalPowerW, decisionByHour) {
-  return entries.map(val => {
-    const ts = parseEntryTs(val.ts)
-    const timeRange = parseEntryTimeRange(val.ts)
-    const powerW = Number(val[AGGR_FIELDS.SITE_POWER]) || 0
-
+//
+// The forecast behind the split is site-level, so a phase request passes
+// decisionByHour: null and carries the downtime rate alone — attributing a
+// phase's shortfall to curtailment or sales would be an assumption, not data.
+function buildHourlyDowntime (rows, nominalPowerW, decisionByHour) {
+  return rows.map(({ ts, timeRange, powerW }) => {
     let downtimeRate = null
     let curtailmentRate = null
     let energySoldRate = null
     let operationalIssuesRate = null
     if (nominalPowerW) {
-      downtimeRate = Math.max(0, nominalPowerW - powerW) / nominalPowerW
+      // min(1): a remainder phase hour can read negative when the manual
+      // entries overshoot the meter; that is a data problem, not >100% downtime.
+      downtimeRate = Math.min(1, Math.max(0, nominalPowerW - powerW) / nominalPowerW)
+    }
+    if (nominalPowerW && decisionByHour) {
       const hourTs = Math.floor(ts / HOUR_MS) * HOUR_MS
       const hour = decisionByHour.get(hourTs)
       const availableW = hour?.availableW ?? nominalPowerW
@@ -3081,11 +3095,38 @@ function downtimeUsesTimezone (req) {
   return resolveDowntimeInterval(Number(start), Number(end), interval) === '1d'
 }
 
-async function getDowntime (ctx, req) {
-  if (req.query.phase && req.query.phase !== lPhases.PHASE_TOTAL) throw lPhases.phaseError('ERR_PHASE_NOT_SUPPORTED')
+// A phase divides by its own nominal, not the site's; a phase missing from
+// the ork global config's phaseNominals map fails loudly instead of silently
+// reporting downtime against the whole site.
+function resolvePhaseNominalPowerW (globalConfigResults, phase) {
+  const powerMw = lPhases.getPhaseNominals(globalConfigResults, phase.id)?.powerMw
+  if (!Number.isFinite(powerMw) || powerMw <= 0) throw lPhases.phaseError('ERR_PHASE_NOMINAL_MISSING')
+  return powerMw * 1e6
+}
 
+async function getDowntime (ctx, req) {
+  const phase = lPhases.resolvePhase(ctx, req)
   const { start, end, timezone } = resolveStartEnd(ctx, req)
   const interval = resolveDowntimeInterval(start, end, req.query.interval)
+
+  // A phase runs the same per-hour formula over its own consumption series
+  // (manual entries, or its meter minus them) and its own nominal. The
+  // curtailment / energy-sold / op-issues split stays null: the forecast it
+  // comes from is site-level and says nothing about whose power it was.
+  // Hours the series has no entry for are absent, not zero, so a coverage gap
+  // reads as unknown rather than 100% downtime — same as a site meter gap.
+  if (phase) {
+    const [{ log: hourlyRows }, globalConfigRes] = await Promise.all([
+      getConsumption(ctx, { ...req, query: { ...req.query, interval: '1h' } }),
+      ctx.dataProxy.requestDataMap(RPC_METHODS.GLOBAL_CONFIG, {
+        fields: { phaseNominals: 1 }
+      })
+    ])
+    const nominalPowerW = resolvePhaseNominalPowerW(globalConfigRes, phase)
+    const hourly = buildHourlyDowntime(hourlyRows, nominalPowerW, null)
+    const log = interval === '1d' ? aggregateDowntimeDaily(hourly, timezone) : hourly
+    return { log, summary: calculateDowntimeSummary(log, nominalPowerW, false) }
+  }
 
   // Attribution is decided per forecast hour, so power is always fetched at
   // hourly resolution and rolled up to days afterwards when interval=1d.
@@ -3127,7 +3168,7 @@ async function getDowntime (ctx, req) {
   const nominalPowerW = nominalMW > 0 ? nominalMW * 1000000 : null
 
   const decisionByHour = indexForecastDecisionsByHour(forecastRes)
-  const hourly = buildHourlyDowntime(firstOrkEntries(powerRes), nominalPowerW, decisionByHour)
+  const hourly = buildHourlyDowntime(toHourlyPower(firstOrkEntries(powerRes)), nominalPowerW, decisionByHour)
   const log = interval === '1d' ? aggregateDowntimeDaily(hourly, timezone) : hourly
   const summary = calculateDowntimeSummary(log, nominalPowerW, decisionByHour.size > 0)
 
@@ -3278,6 +3319,7 @@ module.exports = {
   calculateCoolingSummary,
   getDowntime,
   indexForecastDecisionsByHour,
+  toHourlyPower,
   buildHourlyDowntime,
   aggregateDowntimeDaily,
   calculateDowntimeSummary,

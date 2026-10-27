@@ -48,6 +48,7 @@ const {
   computeInstalledCapacity,
   getDowntime,
   indexForecastDecisionsByHour,
+  toHourlyPower,
   buildHourlyDowntime,
   aggregateDowntimeDaily,
   calculateDowntimeSummary,
@@ -5147,7 +5148,7 @@ test('calculateDowntimeSummary - averages skip null-rate entries', (t) => {
 
 test('buildHourlyDowntime + aggregateDowntimeDaily - numeric ts entries fall back to no timeRange', (t) => {
   const hourly = buildHourlyDowntime(
-    [{ ts: DOWNTIME_DAY_TS, site_power_w: 5000000 }],
+    toHourlyPower([{ ts: DOWNTIME_DAY_TS, site_power_w: 5000000 }]),
     10000000,
     new Map()
   )
@@ -5168,7 +5169,7 @@ test('aggregateDowntimeDaily - buckets on local days in the given zone', (t) => 
   // America/Campo_Grande is UTC-04:00 year-round, so local midnight is 04:00Z.
   const sep1 = Date.UTC(2026, 8, 1, 4)
   const hours = [sep1, sep1 + 19 * DOWNTIME_HOUR_MS, sep1 + 20 * DOWNTIME_HOUR_MS, sep1 + 24 * DOWNTIME_HOUR_MS]
-  const hourly = buildHourlyDowntime(hours.map(ts => ({ ts, site_power_w: 5000000 })), 10000000, new Map())
+  const hourly = buildHourlyDowntime(toHourlyPower(hours.map(ts => ({ ts, site_power_w: 5000000 }))), 10000000, new Map())
 
   const daily = aggregateDowntimeDaily(hourly, 'America/Campo_Grande')
   t.alike(daily.map(d => d.ts), [sep1, sep1 + 24 * DOWNTIME_HOUR_MS],
@@ -6459,11 +6460,13 @@ test('getEfficiency - groupBy is untouched without central DCS, phases or for ra
   t.is(manualReads, 0, 'the manual store is not read when nothing is injected')
 })
 
-test('getConsumption/getDowntime - total stays the site view, downtime still rejects a phase', async (t) => {
+test('getConsumption/getDowntime - total stays the site view, a phase needs its consumption source', async (t) => {
   const ctx = phaseCtx(async () => [])
   const query = { start: PHASE_START, end: PHASE_START + PHASE_HOUR_MS, phase: 'phase1_5' }
 
-  await t.exception(() => getDowntime(ctx, { query: { ...query, interval: '1h' } }), /ERR_PHASE_NOT_SUPPORTED/)
+  // Phase downtime rides the phase consumption series, so it fails the same
+  // way consumption does on a site without central DCS.
+  await t.exception(() => getDowntime(ctx, { query: { ...query, interval: '1h' } }), /ERR_PHASE_CONSUMPTION_REQUIRES_CENTRAL_DCS/)
 
   const total = await getConsumption(ctx, { query: { ...query, phase: 'total' } })
   t.ok(total.log, 'phase=total passes through as the site view')
@@ -6926,4 +6929,93 @@ test('getConsumption - a write landing mid-fetch is not masked by the fetch re-s
   t.is(manualReads, 2, 'the post-write request reads fresh instead of riding the pre-write fetch')
   t.is(phaseHourlyCache.size, 1, 'only the post-write rows are stored over the invalidation')
   t.pass()
+})
+
+// ==================== Phase Downtime Tests ====================
+
+// Manual log, by-meter rollup and global config for the phase downtime tests;
+// `meter` doubles as the site tail-log rows for phase=total.
+function phaseDowntimeCtx ({ manual = [], meter = [], globalConfig } = {}) {
+  return phaseCtx(async (key, method, payload) => {
+    if (method === 'getGlobalConfig') {
+      return globalConfig ?? {
+        nominalPowerAvailability_MW: 10,
+        phaseNominals: { phase1: { nominalPower_MW: 10 }, phase1_5: { nominalPower_MW: 1.2 } }
+      }
+    }
+    if (method === 'getHistoricalLogs') return manual
+    if (method === 'tailLog') return meter
+    return []
+  }, PHASE_DCS_FEATURE)
+}
+
+test('getDowntime - a phase runs the site formula over its own series and nominal, rate only', async (t) => {
+  const H = PHASE_HOUR_MS
+  const ctx = phaseDowntimeCtx({
+    manual: [
+      { ts: PHASE_START, totalConsumptionMWh: 0.6 },
+      { ts: PHASE_START + H, totalConsumptionMWh: 1.2 }
+      // third hour: no entry
+    ]
+  })
+  const query = { start: PHASE_START, end: PHASE_START + 3 * H - 1, phase: 'phase1_5' }
+
+  const res = await getDowntime(ctx, { query: { ...query, interval: '1h' } })
+
+  t.is(res.log.length, 2, 'an uncovered hour is unknown, not 100% downtime')
+  t.is(res.log[0].powerW, 600000)
+  t.is(res.log[0].nominalPowerW, 1200000, 'the phase nominal, not the site one')
+  t.is(res.log[0].downtimeRate, 0.5, '0.6 MW short of the 1.2 MW nominal')
+  t.is(res.log[1].downtimeRate, 0)
+  t.is(res.log[0].curtailmentRate, null, 'the site-level forecast split is not attributed to a phase')
+  t.is(res.log[0].energySoldRate, null)
+  t.is(res.log[0].operationalIssuesRate, null)
+  t.is(res.summary.avgDowntimeRate, 0.25)
+  t.is(res.summary.avgCurtailmentRate, null)
+  t.is(res.summary.nominalPowerW, 1200000)
+  t.is(res.summary.hasForecastData, false)
+
+  const daily = await getDowntime(ctx, { query: { ...query, interval: '1d', timezone: 'UTC' } })
+  t.is(daily.log.length, 1)
+  t.is(daily.log[0].downtimeRate, 0.25, 'the day is the mean of its covered hours')
+  t.is(daily.log[0].curtailmentRate, null)
+})
+
+test('getDowntime - a remainder phase measures its meter minus the manual hours', async (t) => {
+  const ctx = phaseDowntimeCtx({
+    meter: [{ ts: PHASE_START, by_meter_power_w: { 'site-pm': 5000000 } }],
+    manual: [{ ts: PHASE_START, totalConsumptionMWh: 1 }]
+  })
+
+  const res = await getDowntime(ctx, {
+    query: { start: PHASE_START, end: PHASE_START + PHASE_HOUR_MS - 1, interval: '1h', phase: 'phase1' }
+  })
+
+  t.is(res.log[0].powerW, 4000000, '5 MW metered minus the 1 MWh logged')
+  t.is(res.log[0].downtimeRate, 0.6, 'against the phase nominal of 10 MW')
+  t.is(res.log[0].curtailmentRate, null)
+})
+
+test('getDowntime - a phase without a nominal fails loudly', async (t) => {
+  const ctx = phaseDowntimeCtx({
+    manual: [{ ts: PHASE_START, totalConsumptionMWh: 0.6 }],
+    globalConfig: { nominalPowerAvailability_MW: 10 }
+  })
+
+  await t.exception(() => getDowntime(ctx, {
+    query: { start: PHASE_START, end: PHASE_START + PHASE_HOUR_MS - 1, interval: '1h', phase: 'phase1_5' }
+  }), /ERR_PHASE_NOMINAL_MISSING/)
+})
+
+test('getDowntime - phase=total and no phase serve the site series', async (t) => {
+  const siteRow = { ts: `${PHASE_START}-${PHASE_START + PHASE_HOUR_MS - 1}`, site_power_w: 6000000 }
+  const query = { start: PHASE_START, end: PHASE_START + PHASE_HOUR_MS - 1, interval: '1h' }
+
+  for (const q of [query, { ...query, phase: 'total' }]) {
+    const res = await getDowntime(phaseDowntimeCtx({ meter: [siteRow] }), { query: q })
+    t.is(res.log[0].powerW, 6000000)
+    t.is(res.log[0].nominalPowerW, 10000000, 'the site nominal')
+    t.is(res.log[0].downtimeRate, 0.4)
+    t.is(res.log[0].operationalIssuesRate, 0.4, 'the site keeps its split')
+  }
 })
