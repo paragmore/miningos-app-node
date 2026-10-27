@@ -27,16 +27,33 @@ async function getAutoPoolRebates (ctx, { start, end } = {}) {
     .map((row) => ({ ...row, source: POOL_REBATE_SOURCES.AUTO }))
 }
 
-// A manual row with the same txid is a user correction and wins; auto rows
-// repeated across workers/orks collapse to one.
+// A transaction paying several configured rebate addresses is synced as one
+// row per (txid, receiver) - each site phase's share on its own row - so rows
+// collapse on that pair, not on the txid alone, which would drop every
+// address's share but one.
+const rebateRowKey = (row) => `${row.txid}:${row.receiver ?? ''}`
+
+// A manual row is a user correction and wins over the synced row it
+// addresses: the same (txid, receiver) pair, or - for a manual row without a
+// receiver - every row of its txid. Auto rows repeated across workers/orks
+// collapse to one.
 function combinePoolRebates (manual, auto) {
-  const manualTxids = new Set(manual.map((row) => row?.txid).filter(Boolean))
+  const manualKeys = new Set()
+  const manualTxids = new Set()
+  for (const row of manual) {
+    if (!row?.txid) continue
+    if (row.receiver) manualKeys.add(rebateRowKey(row))
+    else manualTxids.add(row.txid)
+  }
+
   const combined = [...manual]
   const seenAuto = new Set()
 
   for (const row of auto) {
-    if (!row?.txid || manualTxids.has(row.txid) || seenAuto.has(row.txid)) continue
-    seenAuto.add(row.txid)
+    if (!row?.txid || manualTxids.has(row.txid)) continue
+    const key = rebateRowKey(row)
+    if (manualKeys.has(key) || seenAuto.has(key)) continue
+    seenAuto.add(key)
     combined.push(row)
   }
 

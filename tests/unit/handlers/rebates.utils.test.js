@@ -89,6 +89,29 @@ test('combinePoolRebates keeps manual winners and collapses repeated auto rows',
   t.is(combined.filter((r) => r.txid === TXID_B).length, 1)
 })
 
+test('combinePoolRebates keeps every per-address row of one transaction', (t) => {
+  // A tx paying both phases' rebate addresses syncs as one row per receiver.
+  const auto = [
+    { ts: 3, txid: TXID_A, amountBTC: 0.5, receiver: 'addr-phase1', source: 'auto' },
+    { ts: 3, txid: TXID_A, amountBTC: 0.3, receiver: 'addr-phase15', source: 'auto' },
+    { ts: 3, txid: TXID_A, amountBTC: 0.3, receiver: 'addr-phase15', source: 'auto' }
+  ]
+
+  const combined = combinePoolRebates([], auto)
+
+  t.alike(combined.map((r) => [r.receiver, r.amountBTC]),
+    [['addr-phase1', 0.5], ['addr-phase15', 0.3]],
+    'rows collapse per (txid, receiver), not per txid')
+
+  const corrected = combinePoolRebates(
+    [{ ts: 3, txid: TXID_A, amountBTC: 0.25, receiver: 'addr-phase15', source: 'manual' }],
+    auto
+  )
+  t.alike(corrected.map((r) => [r.receiver, r.amountBTC, r.source]),
+    [['addr-phase15', 0.25, 'manual'], ['addr-phase1', 0.5, 'auto']],
+    'a manual correction replaces only the half it addresses')
+})
+
 test('getCombinedPoolRebates degrades to manual-only when the worker fails', async (t) => {
   const manual = [{ ts: 1, txid: TXID_A, source: 'manual' }]
   const c = ctx({ manual, autoResults: new Error('ERR_NET') })
