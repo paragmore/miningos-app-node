@@ -595,6 +595,7 @@ test('GlobalDataLib - setCostParametersData rejects invalid values', async funct
   const cases = [
     [{ minerAmortizationUsd: -1 }, 'ERR_INVALID_AMORTIZATION'],
     [{ infraAmortizationUsd: 'free' }, 'ERR_INVALID_AMORTIZATION'],
+    [{ fixedCostsUsd: -1 }, 'ERR_INVALID_AMORTIZATION'],
     [{ marginPct: 101 }, 'ERR_INVALID_MARGIN'],
     [{ marginPct: -1 }, 'ERR_INVALID_MARGIN'],
     [{ commissionedAt: 1.5 }, 'ERR_INVALID_COMMISSIONED_AT'],
@@ -807,6 +808,7 @@ test('GlobalDataLib - override payloads are validated like the base payload', as
 
   await t.exception(() => set({ year: 2026, month: 8, marginPct: 200 }), /ERR_INVALID_MARGIN/, 'margin out of range')
   await t.exception(() => set({ year: 2026, month: 8, minerAmortizationUsd: -1 }), /ERR_INVALID_AMORTIZATION/, 'negative amortization')
+  await t.exception(() => set({ year: 2026, month: 8, fixedCostsUsd: 'lots' }), /ERR_INVALID_AMORTIZATION/, 'non-numeric fixed costs')
   await t.exception(() => set({ year: 2026, month: 8, lcoe: { source: 'nope' } }), /ERR_INVALID_LCOE_SOURCE/, 'unknown lcoe source')
   await t.exception(() => set({ year: 2026, month: 8, lcoe: { source: 'custom' } }), /ERR_LCOE_COST_REQUIRED/, 'custom source needs a value')
 

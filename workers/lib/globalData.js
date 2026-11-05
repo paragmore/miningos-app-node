@@ -22,7 +22,7 @@ function omitCapexFields (data) {
 }
 
 function validateCostParameterFields (data) {
-  const amounts = ['minerAmortizationUsd', 'infraAmortizationUsd']
+  const amounts = ['minerAmortizationUsd', 'infraAmortizationUsd', 'fixedCostsUsd']
   for (const field of amounts) {
     if (!isValidAmount(data[field])) throw new Error('ERR_INVALID_AMORTIZATION')
   }
