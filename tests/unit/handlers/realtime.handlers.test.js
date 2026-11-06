@@ -19,15 +19,15 @@ function dcsCtx (requestData) {
 
 test('toConsumptionWindows unwraps ork arrays and keeps gaps as null', (t) => {
   const res = [[
-    { ts: 20000, site_power_w_avg: [], site_power_w_min: [], site_power_w_max: [] },
-    { ts: 10000, site_power_w_avg: [9.5e6], site_power_w_min: [7.1e6], site_power_w_max: [9.6e6] },
-    { ts: 30000, site_power_w_avg: [0], site_power_w_min: [0], site_power_w_max: [0] }
+    { ts: 20000, site_power_w_avg: [] },
+    { ts: 10000, site_power_w_avg: [9.5e6] },
+    { ts: 30000, site_power_w_avg: [0] }
   ]]
 
   t.alike(toConsumptionWindows(res), [
-    { ts: 10000, avg: 9.5e6, min: 7.1e6, max: 9.6e6 },
-    { ts: 20000, avg: null, min: null, max: null },
-    { ts: 30000, avg: 0, min: 0, max: 0 }
+    { ts: 10000, avg: 9.5e6 },
+    { ts: 20000, avg: null },
+    { ts: 30000, avg: 0 }
   ])
   t.alike(toConsumptionWindows(null), [])
 })
@@ -57,7 +57,7 @@ test('getLiveConsumption reads the dcs power-10s log with an explicit limit', as
   const reqs = []
   const ctx = dcsCtx(async (method, req) => {
     reqs.push({ method, req })
-    return [[{ ts: req.end - 5000, site_power_w_avg: [1], site_power_w_min: [1], site_power_w_max: [1] }]]
+    return [[{ ts: req.end - 5000, site_power_w_avg: [1] }]]
   })
 
   const res = await getLiveConsumption(ctx, { query: { lookbackHours: 1 } })
@@ -70,14 +70,14 @@ test('getLiveConsumption reads the dcs power-10s log with an explicit limit', as
   t.is(reqs[0].req.tag, 't-dcs-siemens')
   t.is(reqs[0].req.key, 'power-10s')
   t.is(reqs[0].req.limit, Math.ceil((reqs[0].req.end - reqs[0].req.start) / 10000) + 2)
-  t.alike(reqs[0].req.aggrFields, { site_power_w_avg: 1, site_power_w_min: 1, site_power_w_max: 1 })
+  t.alike(reqs[0].req.aggrFields, { site_power_w_avg: 1 })
 })
 
 test('getLiveConsumption serves later polls from memory and honours since', async (t) => {
   let calls = 0
   const ctx = dcsCtx(async (method, req) => {
     calls++
-    return [[{ ts: req.end - 1000, site_power_w_avg: [1], site_power_w_min: [1], site_power_w_max: [1] }]]
+    return [[{ ts: req.end - 1000, site_power_w_avg: [1] }]]
   })
 
   const first = await getLiveConsumption(ctx, { query: { lookbackHours: 72 } })
@@ -90,7 +90,7 @@ test('getLiveConsumption serves later polls from memory and honours since', asyn
 
 test('getLiveConsumption trims to the requested lookback', async (t) => {
   const ctx = dcsCtx(async (method, req) => [[
-    { ts: req.end - 1000, site_power_w_avg: [1], site_power_w_min: [1], site_power_w_max: [1] }
+    { ts: req.end - 1000, site_power_w_avg: [1] }
   ]])
 
   const res = await getLiveConsumption(ctx, { query: { lookbackHours: 6 } })

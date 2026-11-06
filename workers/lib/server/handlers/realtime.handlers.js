@@ -11,7 +11,7 @@ const { isCentralDCSEnabled, getDCSTag } = require('../../dcs.utils')
 const { parseEntryTs } = require('../../metrics.utils')
 const { RealtimeSeries } = require('../lib/realtimeSeries')
 
-const WINDOW_FIELDS = ['site_power_w_avg', 'site_power_w_min', 'site_power_w_max']
+const WINDOW_FIELD = 'site_power_w_avg'
 
 function sumWindowValues (values) {
   if (!Array.isArray(values)) return Number.isFinite(values) ? values : null
@@ -23,15 +23,7 @@ function toConsumptionWindows (res) {
   const orkRows = Array.isArray(res?.[0]) ? res[0] : []
 
   return orkRows
-    .map(row => {
-      const avg = sumWindowValues(row.site_power_w_avg)
-      return {
-        ts: parseEntryTs(row.ts),
-        avg,
-        min: avg === null ? null : sumWindowValues(row.site_power_w_min),
-        max: avg === null ? null : sumWindowValues(row.site_power_w_max)
-      }
-    })
+    .map(row => ({ ts: parseEntryTs(row.ts), avg: sumWindowValues(row[WINDOW_FIELD]) }))
     .filter(row => Number.isFinite(row.ts))
     .sort((a, b) => a.ts - b.ts)
 }
@@ -82,8 +74,8 @@ function consumptionSeries (ctx) {
         start,
         end,
         limit: Math.ceil((end - start) / WINDOW_MS) + 2,
-        fields: Object.fromEntries(WINDOW_FIELDS.map(field => [field, 1])),
-        aggrFields: Object.fromEntries(WINDOW_FIELDS.map(field => [field, 1]))
+        fields: { [WINDOW_FIELD]: 1 },
+        aggrFields: { [WINDOW_FIELD]: 1 }
       })
     )
   }))

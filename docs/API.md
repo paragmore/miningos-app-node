@@ -1242,7 +1242,7 @@ High-resolution series for the dashboard's RT charts. Both take a look-back inst
 
 #### `GET /auth/metrics/consumption/live`
 
-Site consumption from the central DCS site meter in 10 s windows.
+Site consumption from the central DCS site meter, averaged over 10 s windows.
 
 **Auth Required:** Yes (any logged-in user)  
 **Query Parameters:**
@@ -1252,9 +1252,9 @@ Site consumption from the central DCS site meter in 10 s windows.
 | `lookbackHours` | integer | Yes | 1-72 |
 | `since` | integer | No | Only rows with `ts` greater than this (ms) |
 
-**Response:** `log` ascending by window start `ts`; `avg`/`min`/`max` are watts over the window's ~1 s meter reads. A window where every read failed is `null` (not `0`); a window with no row at all (worker down) is simply absent, so consumers should treat a jump of more than one `windowMs` as a gap. Sites without `featureConfig.centralDCSSetup.enabled` get an empty `log`.
+**Response:** `log` ascending by window start `ts`; `avg` is the mean in watts of the window's ~1 s meter reads. A window where every read failed is `null` (not `0`); a window with no row at all (worker down) is simply absent, so consumers should treat a jump of more than one `windowMs` as a gap. Sites without `featureConfig.centralDCSSetup.enabled` get an empty `log`.
 ```json
-{ "windowMs": 10000, "log": [{ "ts": 1793876520000, "avg": 9566000, "min": 7100000, "max": 9670000 }] }
+{ "windowMs": 10000, "log": [{ "ts": 1793876520000, "avg": 9566000 }] }
 ```
 
 #### `GET /auth/metrics/pool-hashrate/live`
