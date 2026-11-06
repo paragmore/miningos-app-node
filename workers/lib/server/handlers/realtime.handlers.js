@@ -23,7 +23,10 @@ function toConsumptionWindows (res) {
   const orkRows = Array.isArray(res?.[0]) ? res[0] : []
 
   return orkRows
-    .map(row => ({ ts: parseEntryTs(row.ts), avg: sumWindowValues(row[WINDOW_FIELD]) }))
+    .map(row => {
+      const avg = sumWindowValues(row[WINDOW_FIELD])
+      return { ts: parseEntryTs(row.ts), avg: avg === null ? null : Math.round(avg) }
+    })
     .filter(row => Number.isFinite(row.ts))
     .sort((a, b) => a.ts - b.ts)
 }
@@ -107,24 +110,38 @@ function getWindowStart (req, now) {
   return now - req.query.lookbackHours * REALTIME_CHARTS.HOUR_MS
 }
 
-async function getLiveConsumption (ctx, req) {
-  if (!isCentralDCSEnabled(ctx)) {
-    return { windowMs: REALTIME_CHARTS.WINDOW_MS, log: [] }
-  }
-
-  const now = Date.now()
-  const since = Math.max(req.query.since ?? 0, getWindowStart(req, now))
-  const log = await consumptionSeries(ctx).read(since, now)
-
-  return { windowMs: REALTIME_CHARTS.WINDOW_MS, log }
+function isFullWindow (req) {
+  return req.query.since === undefined && req.query.lookbackHours === REALTIME_CHARTS.MAX_LOOKBACK_HOURS
 }
 
-async function getLivePoolHashrate (ctx, req) {
+async function readLive (series, req, rep, envelope) {
   const now = Date.now()
-  const since = Math.max(req.query.since ?? 0, getWindowStart(req, now))
-  const log = await poolHashrateSeries(ctx).read(since, now)
 
-  return { intervalMs: REALTIME_CHARTS.HASHRATE_INTERVAL_MS, poolType: REALTIME_CHARTS.POOL_TYPE, log }
+  if (isFullWindow(req)) {
+    const body = await series.readSerialized(log => ({ ...envelope, log }), now)
+    rep?.header('content-type', 'application/json; charset=utf-8')
+    return body
+  }
+
+  const since = Math.max(req.query.since ?? 0, getWindowStart(req, now))
+  return { ...envelope, log: await series.read(since, now) }
+}
+
+async function getLiveConsumption (ctx, req, rep) {
+  const envelope = { windowMs: REALTIME_CHARTS.WINDOW_MS }
+
+  if (!isCentralDCSEnabled(ctx)) {
+    return { ...envelope, log: [] }
+  }
+
+  return readLive(consumptionSeries(ctx), req, rep, envelope)
+}
+
+async function getLivePoolHashrate (ctx, req, rep) {
+  return readLive(poolHashrateSeries(ctx), req, rep, {
+    intervalMs: REALTIME_CHARTS.HASHRATE_INTERVAL_MS,
+    poolType: REALTIME_CHARTS.POOL_TYPE
+  })
 }
 
 module.exports = {

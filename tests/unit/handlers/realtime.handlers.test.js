@@ -20,7 +20,7 @@ function dcsCtx (requestData) {
 test('toConsumptionWindows unwraps ork arrays and keeps gaps as null', (t) => {
   const res = [[
     { ts: 20000, site_power_w_avg: [] },
-    { ts: 10000, site_power_w_avg: [9.5e6] },
+    { ts: 10000, site_power_w_avg: [9.5e6 + 0.4] },
     { ts: 30000, site_power_w_avg: [0] }
   ]]
 
@@ -80,7 +80,7 @@ test('getLiveConsumption serves later polls from memory and honours since', asyn
     return [[{ ts: req.end - 1000, site_power_w_avg: [1] }]]
   })
 
-  const first = await getLiveConsumption(ctx, { query: { lookbackHours: 72 } })
+  const first = JSON.parse(await getLiveConsumption(ctx, { query: { lookbackHours: 72 } }))
   const lastTs = first.log.at(-1).ts
   const next = await getLiveConsumption(ctx, { query: { lookbackHours: 72, since: lastTs } })
 
@@ -116,7 +116,7 @@ test('getLivePoolHashrate reads hashrate-1m from every ork', async (t) => {
     }
   }
 
-  const res = await getLivePoolHashrate(ctx, { query: { lookbackHours: 72 } })
+  const res = JSON.parse(await getLivePoolHashrate(ctx, { query: { lookbackHours: 72 } }))
 
   t.is(res.intervalMs, 60000)
   t.is(res.poolType, 'ocean')
@@ -126,4 +126,38 @@ test('getLivePoolHashrate reads hashrate-1m from every ork', async (t) => {
   t.is(reqs[0].method, 'getWrkExtData')
   t.is(reqs[0].req.type, 'minerpool')
   t.is(reqs[0].req.query.key, 'hashrate-1m')
+})
+
+test('getLiveConsumption serializes the full window once and reuses it until data changes', async (t) => {
+  let extra = []
+  const ctx = dcsCtx(async (method, req) => [[
+    { ts: req.end - 1000, site_power_w_avg: [9_500_000.6] },
+    ...extra.filter(row => row.ts >= req.start && row.ts <= req.end)
+  ]])
+  const headers = {}
+  const rep = { header: (key, value) => { headers[key] = value } }
+  const req = { query: { lookbackHours: 72 } }
+
+  const first = await getLiveConsumption(ctx, req, rep)
+  const second = await getLiveConsumption(ctx, req, rep)
+
+  t.is(typeof first, 'string')
+  t.is(first, second)
+  t.is(headers['content-type'], 'application/json; charset=utf-8')
+  t.is(JSON.parse(first).log.at(-1).avg, 9_500_001)
+
+  ctx._realtimeSeries.consumption.refreshedAt = 0
+  extra = [{ ts: Date.now() + 5000, site_power_w_avg: [1] }]
+  ctx._realtimeSeries.consumption.fetch = async () => [{ ts: Date.now() + 5000, avg: 1 }]
+  const third = await getLiveConsumption(ctx, req, rep)
+  t.not(third, first)
+  t.is(JSON.parse(third).log.at(-1).avg, 1)
+})
+
+test('getLiveConsumption still answers since polls with fresh objects', async (t) => {
+  const ctx = dcsCtx(async (method, req) => [[{ ts: req.end - 1000, site_power_w_avg: [1] }]])
+  const res = await getLiveConsumption(ctx, { query: { lookbackHours: 72, since: 0 } }, { header () { t.fail('no header for polls') } })
+
+  t.is(typeof res, 'object')
+  t.ok(res.log.length > 0)
 })

@@ -119,3 +119,20 @@ test('RealtimeSeries surfaces a failed first load', async (t) => {
 
   await t.exception(() => series.read(null, 10), /ERR_ORK_DOWN/)
 })
+
+test('RealtimeSeries readSerialized builds once per data version', async (t) => {
+  const rows = [{ ts: 1 * SEC }]
+  const src = sourceOf(rows)
+  const series = new RealtimeSeries({ retentionMs: HOUR, refreshMs: SEC, chunkMs: HOUR, fetch: src.fetch })
+  let builds = 0
+  const build = (entries) => { builds++; return { log: entries } }
+
+  const first = await series.readSerialized(build, 2 * SEC)
+  const unchanged = await series.readSerialized(build, 4 * SEC)
+  rows.push({ ts: 5 * SEC })
+  const changed = await series.readSerialized(build, 6 * SEC)
+
+  t.is(first, unchanged)
+  t.is(builds, 2)
+  t.alike(JSON.parse(changed).log, [{ ts: 1 * SEC }, { ts: 5 * SEC }])
+})

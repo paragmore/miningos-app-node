@@ -11,19 +11,34 @@ class RealtimeSeries {
     this.loadedFrom = null
     this.refreshedAt = 0
     this.inflight = null
+    this.version = 0
+    this.serializedCache = null
+  }
+
+  async ensureFresh (now = Date.now()) {
+    if (this.loadedFrom !== null && now - this.refreshedAt < this.refreshMs) return
+
+    try {
+      await this.refresh(now)
+    } catch (err) {
+      if (!this.entries.length) throw err
+    }
   }
 
   async read (since, now = Date.now()) {
-    if (this.loadedFrom === null || now - this.refreshedAt >= this.refreshMs) {
-      try {
-        await this.refresh(now)
-      } catch (err) {
-        if (!this.entries.length) throw err
-      }
-    }
+    await this.ensureFresh(now)
 
     const from = Math.max(since ?? -Infinity, now - this.retentionMs)
     return this.entries.filter(entry => entry.ts > from)
+  }
+
+  async readSerialized (build, now = Date.now()) {
+    await this.ensureFresh(now)
+
+    if (this.serializedCache?.version !== this.version) {
+      this.serializedCache = { version: this.version, body: JSON.stringify(build(this.entries)) }
+    }
+    return this.serializedCache.body
   }
 
   refresh (now = Date.now()) {
@@ -58,7 +73,9 @@ class RealtimeSeries {
 
     if (appendable) {
       const firstKept = this.entries.findIndex(entry => entry.ts > oldest)
+      if (firstKept === 0 && !valid.length) return
       this.entries = (firstKept === -1 ? [] : this.entries.slice(firstKept)).concat(valid)
+      this.version++
       return
     }
 
@@ -68,6 +85,7 @@ class RealtimeSeries {
     }
     for (const entry of valid) byTs.set(entry.ts, entry)
     this.entries = [...byTs.values()].sort((a, b) => a.ts - b.ts)
+    this.version++
   }
 }
 
