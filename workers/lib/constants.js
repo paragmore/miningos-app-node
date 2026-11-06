@@ -193,6 +193,8 @@ const ENDPOINTS = {
   // Metrics endpoints
   METRICS_HASHRATE: '/auth/metrics/hashrate',
   METRICS_POOL_HASHRATE: '/auth/metrics/pool-hashrate',
+  METRICS_POOL_HASHRATE_LIVE: '/auth/metrics/pool-hashrate/live',
+  METRICS_CONSUMPTION_LIVE: '/auth/metrics/consumption/live',
   METRICS_CONSUMPTION: '/auth/metrics/consumption',
   METRICS_EFFICIENCY: '/auth/metrics/efficiency',
   METRICS_MINER_STATUS: '/auth/metrics/miner-status',
@@ -494,7 +496,8 @@ const LOG_KEYS = {
   STAT_30M: 'stat-30m',
   STAT_1D: 'stat-1D',
   STAT_POSITION_1D: 'stat-position-1D',
-  ENERGY_1H: 'energy-1h'
+  ENERGY_1H: 'energy-1h',
+  POWER_10S: 'power-10s'
 }
 
 const WORKER_TAGS = {
@@ -809,7 +812,8 @@ const MINERPOOL_EXT_DATA_KEYS = {
   TRANSACTIONS: 'transactions',
   STATS: 'stats',
   STATS_HISTORY: 'stats-history',
-  HASHRATE_HISTORY: 'hashrate-history'
+  HASHRATE_HISTORY: 'hashrate-history',
+  HASHRATE_1M: 'hashrate-1m'
 }
 
 const MEMPOOL_EXT_DATA_KEYS = {
@@ -830,6 +834,20 @@ const POOL_HASHRATE_INTERVALS_MS = {
   '30m': 30 * 60 * 1000,
   '1h': 60 * 60 * 1000,
   '3h': 3 * 60 * 60 * 1000
+}
+
+const REALTIME_CHARTS = {
+  HOUR_MS: 60 * 60 * 1000,
+  MAX_LOOKBACK_HOURS: 72,
+  RETENTION_MS: 72 * 60 * 60 * 1000,
+  WINDOW_MS: 10 * 1000,
+  CONSUMPTION_REFRESH_MS: 5 * 1000,
+  CONSUMPTION_CHUNK_MS: 6 * 60 * 60 * 1000,
+  HASHRATE_INTERVAL_MS: 60 * 1000,
+  HASHRATE_REFRESH_MS: 15 * 1000,
+  HASHRATE_CHUNK_MS: 24 * 60 * 60 * 1000,
+  HASHRATE_REFETCH_MS: 3 * 60 * 1000,
+  POOL_TYPE: 'ocean'
 }
 
 const ELECTRICITY_EXT_DATA_KEYS = {
@@ -924,7 +942,8 @@ const TAIL_LOG_BUCKET_MS = {
   'stat-3h': 3 * 60 * 60 * 1000,
   'stat-1D': 24 * 60 * 60 * 1000,
   'stat-position-1D': 24 * 60 * 60 * 1000,
-  'energy-1h': 60 * 60 * 1000
+  'energy-1h': 60 * 60 * 1000,
+  'power-10s': 10 * 1000
 }
 
 // The one stat key with no fixed bucket width: stat-rtd holds the latest sample
@@ -1518,6 +1537,7 @@ module.exports = {
   PRICE_BUCKET_MS,
   POOL_REBATE_SOURCES,
   POOL_HASHRATE_INTERVALS_MS,
+  REALTIME_CHARTS,
   NON_METRIC_KEYS,
   BTC_SATS,
   RANGE_BUCKETS,

@@ -43,6 +43,10 @@
     "isOneMinItvEnabled": false,
     "powerModeTimeline": false,
     "totalSystemConsumptionChart": false,
+    "realtimeCharts": {
+      "hashrate": false,
+      "consumption": false
+    },
     "exportHistKpiDashboard": false,
     "showMinerConsumptionDashboard": false,
     "totalSystemConsumptionHeader": false,

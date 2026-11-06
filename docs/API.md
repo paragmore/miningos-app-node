@@ -28,6 +28,7 @@ These routes reject it with `400 ERR_TIMEZONE_UNSUPPORTED`:
 
 - `/auth/metrics/hashrate` (any request other than the 1M rollup above)
 - `/auth/metrics/consumption`, `/auth/metrics/efficiency`, `/auth/metrics/miner-status`, `/auth/metrics/pool-hashrate`
+- `/auth/metrics/consumption/live`, `/auth/metrics/pool-hashrate/live`
 - `/auth/metrics/revenue/hourly`, `/auth/metrics/power-mode`, `/auth/metrics/power-mode/timeline`
 - `/auth/metrics/temperature`, `/auth/metrics/cooling`, `/auth/metrics/containers/:id/history`
 - `/auth/tail-log`, `/auth/tail-log/multi`, `/auth/history-log`
@@ -1235,6 +1236,39 @@ curl -X POST -H "Authorization:Bearer TOKEN" -H "Content-Type: application/json"
 | `ERR_CONSUMPTION_INVALID` | A value is not a number or `null` |
 | `ERR_CONSUMPTION_SAVE_FAILED` | No DCS worker confirmed the write (worker unreachable or not yet upgraded) |
 | `ERR_TIMEZONE_UNSUPPORTED` | A `timezone` query parameter was sent |
+### Realtime Chart Endpoints
+
+High-resolution series for the dashboard's RT charts. Both take a look-back instead of `start`/`end` and are not route-cached: each app-node process keeps the last 72 hours of each series in memory, loads it once, and tops it up from the workers at most every 5 s (consumption) or 15 s (hashrate) however many clients poll. Poll with `since` set to the last `ts` you hold to get only newer rows. History starts when the workers that record these series are deployed.
+
+#### `GET /auth/metrics/consumption/live`
+
+Site consumption from the central DCS site meter in 10 s windows.
+
+**Auth Required:** Yes (any logged-in user)  
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `lookbackHours` | integer | Yes | 1-72 |
+| `since` | integer | No | Only rows with `ts` greater than this (ms) |
+
+**Response:** `log` ascending by window start `ts`; `avg`/`min`/`max` are watts over the window's ~1 s meter reads. A window where every read failed is `null` (not `0`); a window with no row at all (worker down) is simply absent, so consumers should treat a jump of more than one `windowMs` as a gap. Sites without `featureConfig.centralDCSSetup.enabled` get an empty `log`.
+```json
+{ "windowMs": 10000, "log": [{ "ts": 1793876520000, "avg": 9566000, "min": 7100000, "max": 9670000 }] }
+```
+
+#### `GET /auth/metrics/pool-hashrate/live`
+
+Ocean pool hashrate (the pool's own 60 s figure) per minute, summed over every configured Ocean account.
+
+**Auth Required:** Yes (`minerpool:r` or `pool_config:r`)  
+**Query Parameters:** same as above.
+
+**Response:** `hashrate` in H/s. A minute where any account's sample is missing is `null` so a partial sum never shows as a dip; minutes the worker could not reach Ocean at all are absent. Rows from the last 3 minutes can still be completed by a later poll, so re-request with `since` a few minutes behind your last `ts` and replace rows by `ts`.
+```json
+{ "intervalMs": 60000, "poolType": "ocean", "log": [{ "ts": 1793876520000, "hashrate": 609000000000000000 }] }
+```
+
 ### Site Phases (per-phase metrics)
 
 A deployment can split its reporting into phases via `featureConfig.phases` in `config/common.json` — a list of `{ id, label, pool.accounts[], consumption.{source,logType,meterKey}, minerTelemetry, groups.{minerType,container} }`. The `total` id is reserved and means "no filtering". Without the key, nothing changes anywhere.

@@ -27,7 +27,8 @@ const {
 } = require('../handlers/metrics.handlers')
 const { getSiteLiveStatus } = require('../handlers/site.handlers')
 const { getRevenueHourly } = require('../handlers/finance.handlers')
-const { createCachedAuthRoute, rejectTimezone, AUTH_ONLY } = require('../lib/routeHelpers')
+const { createCachedAuthRoute, createAuthRoute, rejectTimezone, AUTH_ONLY } = require('../lib/routeHelpers')
+const { getLiveConsumption, getLivePoolHashrate } = require('../handlers/realtime.handlers')
 
 module.exports = (ctx) => {
   const schemas = require('../schemas/metrics.schemas.js')
@@ -81,6 +82,28 @@ module.exports = (ctx) => {
         // pool_manager holds pool_config but not minerpool, and needs this chart.
         [AUTH_PERMISSIONS.MINERPOOL, AUTH_PERMISSIONS.POOL_CONFIG]
       )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.METRICS_POOL_HASHRATE_LIVE,
+      schema: {
+        querystring: schemas.query.live
+      },
+      preValidation: rejectTimezone(),
+      ...createAuthRoute(
+        ctx,
+        getLivePoolHashrate,
+        [AUTH_PERMISSIONS.MINERPOOL, AUTH_PERMISSIONS.POOL_CONFIG]
+      )
+    },
+    {
+      method: HTTP_METHODS.GET,
+      url: ENDPOINTS.METRICS_CONSUMPTION_LIVE,
+      schema: {
+        querystring: schemas.query.live
+      },
+      preValidation: rejectTimezone(),
+      ...createAuthRoute(ctx, getLiveConsumption, AUTH_ONLY)
     },
     {
       method: HTTP_METHODS.GET,

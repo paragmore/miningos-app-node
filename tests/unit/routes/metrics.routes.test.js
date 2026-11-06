@@ -28,6 +28,8 @@ test('metrics routes - route definitions', (t) => {
   t.ok(routeUrls.includes('/auth/metrics/miners/by-type'), 'should have miners by-type route')
   t.ok(routeUrls.includes('/auth/metrics/inventory/miner-distribution'), 'should have miner distribution route')
   t.ok(routeUrls.includes('/auth/metrics/downtime'), 'should have downtime route')
+  t.ok(routeUrls.includes('/auth/metrics/pool-hashrate/live'), 'should have live pool-hashrate route')
+  t.ok(routeUrls.includes('/auth/metrics/consumption/live'), 'should have live consumption route')
 
   t.pass()
 })
@@ -68,7 +70,9 @@ test('metrics routes - timezone is declared only where it is used', (t) => {
   const routes = createRoutesForTest(ROUTES_PATH)
   const rejecting = [
     '/auth/metrics/pool-hashrate',
+    '/auth/metrics/pool-hashrate/live',
     '/auth/metrics/consumption',
+    '/auth/metrics/consumption/live',
     '/auth/metrics/efficiency',
     '/auth/metrics/miner-status',
     '/auth/metrics/revenue/hourly',
@@ -151,4 +155,35 @@ test('metrics routes - pool-hashrate accepts minerpool or pool_config', async (t
   await route.onRequest(req, rep)
 
   t.alike(checks, [{ write: false, perms: ['minerpool', 'pool_config'] }])
+})
+
+test('metrics routes - live pool-hashrate accepts minerpool or pool_config', async (t) => {
+  const checks = []
+  const ctx = {
+    conf: { ttl: 3600 },
+    authLib: {
+      resolveToken: async () => ({ userId: 'u1' }),
+      tokenHasPerms: async (token, write, perms) => {
+        checks.push({ write, perms })
+        return true
+      }
+    }
+  }
+  const route = require(ROUTES_PATH)(ctx).find(r => r.url === '/auth/metrics/pool-hashrate/live')
+  const req = { method: 'GET', headers: { authorization: 'Bearer token' }, ip: '127.0.0.1', query: {} }
+  const rep = { status: () => { t.fail('should not be denied'); return rep }, send: () => rep }
+  await route.onRequest(req, rep)
+
+  t.alike(checks, [{ write: false, perms: ['minerpool', 'pool_config'] }])
+})
+
+test('metrics routes - live endpoints bound lookback and take no start/end', (t) => {
+  const routes = createRoutesForTest(ROUTES_PATH)
+  for (const url of ['/auth/metrics/pool-hashrate/live', '/auth/metrics/consumption/live']) {
+    const schema = routes.find(r => r.url === url).schema.querystring
+    t.is(schema.properties.lookbackHours.maximum, 72)
+    t.alike(schema.required, ['lookbackHours'])
+    t.absent(schema.properties.start)
+    t.absent(schema.properties.overwriteCache)
+  }
 })

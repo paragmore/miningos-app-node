@@ -1,6 +1,6 @@
 'use strict'
 
-const { POOL_HASHRATE_INTERVALS_MS } = require('../../constants')
+const { POOL_HASHRATE_INTERVALS_MS, REALTIME_CHARTS } = require('../../constants')
 
 // 1M is a 30-day month. Distinct from 1m (one minute) used by
 // powerModeTimeline / containerHistory.
@@ -130,6 +130,14 @@ const schemas = {
         overwriteCache: { type: 'boolean' }
       },
       required: ['interval', 'lookbackDays']
+    },
+    live: {
+      type: 'object',
+      properties: {
+        lookbackHours: { type: 'integer', minimum: 1, maximum: REALTIME_CHARTS.MAX_LOOKBACK_HOURS },
+        since: { type: 'integer', minimum: 0 }
+      },
+      required: ['lookbackHours']
     },
     powerModeTimeline: {
       type: 'object',
