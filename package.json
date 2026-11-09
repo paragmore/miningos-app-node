@@ -54,7 +54,7 @@
     "@tetherto/svc-facs-auth": "^1.1.2",
     "@tetherto/svc-facs-httpd": "^2.0.1",
     "@tetherto/svc-facs-httpd-oauth2": "^1.0.1",
-    "@tetherto/tether-wrk-base": "^2.0.1",
+    "@tetherto/tether-wrk-base": "^2.1.1",
     "async": "3.2.6",
     "debug": "4.4.1",
     "mingo": "6.4.6"

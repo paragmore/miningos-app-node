@@ -47,7 +47,6 @@ class WrkServerHttp extends TetherWrkBase {
     this._loadOptionalConfig()
 
     this.setInitFacs([
-      ['fac', '@bitfinex/bfx-facs-interval', '0', '0', {}, -10],
       // 8s sits just under the miner surfaces' 10s poll cadence so each of
       // their polls gets a fresh entry; surfaces still polling at 5s simply
       // read entries that are at most 8s old
